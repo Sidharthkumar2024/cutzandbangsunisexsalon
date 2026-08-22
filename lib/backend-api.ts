@@ -129,6 +129,7 @@ export type BackendAttendance = {
   checkOutAt?: string | null;
   lateMinutes: number;
   overtimeMin: number;
+  source?: string;
   selfieUrl?: string | null;
   staff: {
     id: string;
@@ -140,6 +141,7 @@ export type BackendAttendance = {
 export type BackendPayrollRow = {
   staffId: string;
   displayName: string;
+  designation?: string;
   presentDays: number;
   workedMinutes: number;
   lateMinutes: number;
@@ -147,9 +149,16 @@ export type BackendPayrollRow = {
   serviceRevenueMinor: number;
   productRevenueMinor: number;
   commissionRateBps: number;
+  commissionThresholdMinor?: number;
   serviceCommissionMinor: number;
   productCommissionMinor: number;
   commissionMinor: number;
+  baseSalaryMinor?: number;
+  lateDays?: number;
+  halfDays?: number;
+  lateDeductionMinor?: number;
+  overtimePaid?: boolean;
+  estimatedPayMinor?: number;
 };
 export type BackendVendor = {
   id: string;
@@ -209,7 +218,7 @@ export type BackendConversation = {
 };
 export type BackendChannel = {
   id: string;
-  type: "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL" | "EMAIL" | "SMS";
+  type: "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL" | "EMAIL" | "SMS" | "WEB_CHAT";
   label: string;
   isActive: boolean;
   _count?: { conversations: number; templates: number };
@@ -270,12 +279,50 @@ export type BackendCampaign = {
   createdAt: string;
   _count: { recipients: number };
 };
+export type BackendShift = {
+  id?: string;
+  weekday: number;
+  startMin: number;
+  endMin: number;
+  breakStartMin?: number | null;
+  breakEndMin?: number | null;
+};
+export type BackendLeave = {
+  id: string;
+  staffId: string;
+  startDate: string;
+  endDate: string;
+  reason: string;
+  approved: boolean;
+  createdAt: string;
+  staff?: { id: string; displayName: string; designation?: string };
+};
+export type BackendBiometricDevice = {
+  id: string;
+  branchId: string;
+  name: string;
+  provider: string;
+  isActive: boolean;
+  lastSeenAt?: string | null;
+  createdAt: string;
+};
 export type BackendStaff = {
   id: string;
   displayName: string;
   branchId: string;
   phone?: string | null;
+  designation?: string;
+  baseSalaryMinor?: number;
   commissionRate?: number;
+  commissionThresholdMinor?: number;
+  lateGraceMinutes?: number;
+  lateDeductionMinor?: number;
+  halfDayAfterMinutes?: number;
+  overtimePaid?: boolean;
+  biometricCode?: string | null;
+  weeklyOff?: number[];
+  shifts?: BackendShift[];
+  leaves?: BackendLeave[];
   user?: { id: string; email?: string | null; role: string; isActive: boolean } | null;
 };
 export type BackendCashSession = {
@@ -283,14 +330,28 @@ export type BackendCashSession = {
   branchId: string;
   businessDate: string;
   openingCashMinor: number;
+  openingBreakdown?: Record<string, number> | null;
   closingCashMinor?: number | null;
+  closingBreakdown?: Record<string, number> | null;
   expectedCashMinor: number;
   varianceMinor?: number | null;
   status: "OPEN" | "CLOSED";
   openedAt: string;
   closedAt?: string | null;
   cashSalesMinor: number;
+  upiSalesMinor: number;
+  cardSalesMinor: number;
+  paymentTotalsMinor: Record<string, number>;
   cashExpensesMinor: number;
+};
+
+export type CashBreakdown = Record<string, number>;
+export type WebsiteChatMessage = {
+  id: string;
+  direction: "in" | "out";
+  body?: string | null;
+  status?: string | null;
+  createdAt: string;
 };
 export type BackendExpense = {
   id: string;
@@ -598,9 +659,12 @@ export type StaffPortalDay = {
     serviceRevenueMinor: number;
     productRevenueMinor: number;
     commissionRateBps: number;
+    commissionThresholdMinor?: number;
     serviceCommissionMinor: number;
     productCommissionMinor: number;
     estimatedCommissionMinor: number;
+    membershipsSold?: number;
+    packagesSold?: number;
   };
 };
 
@@ -636,6 +700,8 @@ export type BackendSnapshot = {
   expenses: BackendExpense[];
   teamAccounts: BackendStaff[];
   notifications: BackendNotification[];
+  leaves: BackendLeave[];
+  biometricDevices: BackendBiometricDevice[];
 };
 
 const emptySnapshot: BackendSnapshot = {
@@ -670,6 +736,8 @@ const emptySnapshot: BackendSnapshot = {
   expenses: [],
   teamAccounts: [],
   notifications: [],
+  leaves: [],
+  biometricDevices: [],
 };
 
 async function request<T>(
@@ -699,6 +767,10 @@ async function request<T>(
 export const backendApi = {
   health: () => request<{ status: string }>("/health"),
   publicCatalog: () => request<PublicCatalog>("/services?branchId=main"),
+  websiteChat: (payload: { branchId: string; threadId: string; name: string; phone: string; message: string }) =>
+    request<{ threadId: string; conversationId: string; message: WebsiteChatMessage }>("/public/chat", { method: "POST", body: JSON.stringify(payload) }),
+  websiteChatThread: (threadId: string) =>
+    request<{ externalThreadId: string; customer?: { name: string } | null; messages: WebsiteChatMessage[] }>(`/public/chat/${encodeURIComponent(threadId)}`),
   multiAvailability: (payload: {
     branchId: string;
     date: string;
@@ -777,6 +849,8 @@ export const backendApi = {
       ["/expenses?branchId=main&take=100", "expenses"],
       ["/team-accounts", "teamAccounts"],
       ["/notifications", "notifications"],
+      ["/leaves?branchId=main", "leaves"],
+      ["/biometric/devices?branchId=main", "biometricDevices"],
     ] as const;
     const [user, ...results] = await Promise.all([
       request<BackendUser>("/auth/me", {}, token),
@@ -808,6 +882,10 @@ export const backendApi = {
       { method: "POST", body: JSON.stringify(payload) },
       token,
     ),
+  appointments: (token: string, from: string, to: string, branchId = "main") =>
+    request<BackendAppointment[]>(`/appointments?branchId=${encodeURIComponent(branchId)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, {}, token),
+  rangeReport: (token: string, from: string, to: string, branchId = "main", filters?: { staffId?: string; serviceId?: string }) =>
+    request<BackendRangeReport>(`/reports/range?branchId=${encodeURIComponent(branchId)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${filters?.staffId ? `&staffId=${encodeURIComponent(filters.staffId)}` : ""}${filters?.serviceId ? `&serviceId=${encodeURIComponent(filters.serviceId)}` : ""}`, {}, token),
   createCustomer: (
     token: string,
     payload: {
@@ -868,7 +946,7 @@ export const backendApi = {
     ),
   createServiceCategory: (
     token: string,
-    payload: { name: string; gender?: "Male" | "Female" | "Unisex" | null; sortOrder?: number },
+    payload: { name: string; gender?: "Male" | "Female" | "Unisex" | "Kids - Unisex" | "Boys" | "Girls" | "Baby Boy" | "Baby Girl" | null; sortOrder?: number },
   ) =>
     request<BackendCategory>(
       "/service-categories",
@@ -896,7 +974,17 @@ export const backendApi = {
       branchId: string;
       displayName: string;
       phone?: string;
+      designation?: string;
+      baseSalaryMinor?: number;
       commissionRate?: number;
+      commissionThresholdMinor?: number;
+      lateGraceMinutes?: number;
+      lateDeductionMinor?: number;
+      halfDayAfterMinutes?: number;
+      overtimePaid?: boolean;
+      biometricCode?: string;
+      weeklyOff?: number[];
+      shifts?: Array<{ weekday: number; startMin: number; endMin: number }>;
       serviceIds: string[];
     },
   ) =>
@@ -911,9 +999,21 @@ export const backendApi = {
       { method: "POST", body: JSON.stringify(payload) },
       token,
     ),
+  updateStaffProfile: (token: string, staffId: string, payload: Partial<Omit<BackendStaff, "id" | "branchId" | "user" | "leaves">> & { shifts?: BackendShift[] }) =>
+    request<BackendStaff>(
+      `/staff/${encodeURIComponent(staffId)}/profile`,
+      { method: "PATCH", body: JSON.stringify(payload) },
+      token,
+    ),
+  createLeave: (token: string, payload: { staffId?: string; startDate: string; endDate: string; reason: string; approved?: boolean }) =>
+    request<BackendLeave>("/leaves", { method: "POST", body: JSON.stringify(payload) }, token),
+  reviewLeave: (token: string, leaveId: string, approved: boolean) =>
+    request<BackendLeave>(`/leaves/${encodeURIComponent(leaveId)}`, { method: "PATCH", body: JSON.stringify({ approved }) }, token),
+  createBiometricDevice: (token: string, payload: { branchId: string; name: string; provider?: string }) =>
+    request<BackendBiometricDevice & { secret: string; webhookPath: string }>("/biometric/devices", { method: "POST", body: JSON.stringify(payload) }, token),
   enrollMembership: (
     token: string,
-    payload: { customerId: string; planId: string },
+    payload: { customerId: string; planId: string; soldByStaffId?: string },
   ) =>
     request<{ id: string; balanceMinor: number }>(
       "/memberships",
@@ -953,7 +1053,7 @@ export const backendApi = {
     ),
   enrollServicePackage: (
     token: string,
-    payload: { customerId: string; packageId: string },
+    payload: { customerId: string; packageId: string; soldByStaffId?: string },
   ) =>
     request<BackendCustomerServicePackage>(
       "/customer-packages",
@@ -1047,7 +1147,7 @@ export const backendApi = {
     token: string,
     mode: "check-in" | "check-out",
     payload: {
-      staffId: string;
+      staffId?: string;
       lat: number;
       lng: number;
       selfieKey: string;
@@ -1137,9 +1237,9 @@ export const backendApi = {
       { method: "POST", body: "{}" },
       token,
     ),
-  openCashSession: (token: string, payload: { branchId: string; openingCashMinor: number; openingNote?: string }) =>
+  openCashSession: (token: string, payload: { branchId: string; openingCashMinor: number; openingBreakdown: CashBreakdown; openingNote?: string }) =>
     request<BackendCashSession>("/cash-sessions/open", { method: "POST", body: JSON.stringify(payload) }, token),
-  closeCashSession: (token: string, cashSessionId: string, payload: { closingCashMinor: number; closingNote?: string }) =>
+  closeCashSession: (token: string, cashSessionId: string, payload: { closingCashMinor: number; closingBreakdown: CashBreakdown; closingNote?: string }) =>
     request<BackendCashSession>(`/cash-sessions/${encodeURIComponent(cashSessionId)}/close`, { method: "POST", body: JSON.stringify(payload) }, token),
   createExpense: (token: string, payload: { branchId: string; category: string; description: string; amountMinor: number; paymentMethod: "CASH" | "UPI" | "CARD"; vendorName?: string; occurredAt?: string }) =>
     request<BackendExpense>("/expenses", { method: "POST", body: JSON.stringify(payload) }, token),

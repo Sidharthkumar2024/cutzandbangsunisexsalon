@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { backendApi, type StaffPortalDay } from "../../lib/backend-api";
+import BrandLogo from "../components/BrandLogo";
 
 const money = (minor: number) =>
   `₹${Math.round(minor / 100).toLocaleString("en-IN")}`;
@@ -15,6 +16,11 @@ export default function StaffPortal() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [rangeDays, setRangeDays] = useState(1);
+  const [attendanceSelfie, setAttendanceSelfie] = useState<File | null>(null);
+  const [attendanceConsent, setAttendanceConsent] = useState(false);
+  const [leaveFrom, setLeaveFrom] = useState(new Date().toISOString().slice(0, 10));
+  const [leaveTo, setLeaveTo] = useState(new Date().toISOString().slice(0, 10));
+  const [leaveReason, setLeaveReason] = useState("");
   const signIn = async () => {
     setBusy(true);
     setMessage("");
@@ -82,13 +88,39 @@ export default function StaffPortal() {
       setBusy(false);
     }
   };
+  const recordAttendance = async (mode: "check-in" | "check-out") => {
+    if (!token || !attendanceSelfie || !attendanceConsent) return;
+    setBusy(true); setMessage("");
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15_000 }));
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+        reader.onerror = reject;
+        reader.readAsDataURL(attendanceSelfie);
+      });
+      const upload = await backendApi.uploadMedia(token, { purpose: "attendance-selfie", contentType: attendanceSelfie.type, base64, consent: true });
+      const result = await backendApi.attendance(token, mode, { lat: position.coords.latitude, lng: position.coords.longitude, selfieKey: upload.key, consent: true });
+      setAttendanceSelfie(null); setAttendanceConsent(false);
+      setMessage(`${mode === "check-in" ? "Check-in" : "Check-out"} saved inside the ${Math.round(result.distanceMeters ?? 0)}m salon geofence.`);
+      setData(await backendApi.staffMyDay(token));
+    } catch (cause) { setMessage(cause instanceof Error ? cause.message.replaceAll("_", " ") : "Attendance could not be saved."); }
+    finally { setBusy(false); }
+  };
+  const requestLeave = async () => {
+    if (!token || !leaveReason.trim()) return;
+    setBusy(true); setMessage("");
+    try {
+      await backendApi.createLeave(token, { startDate: leaveFrom, endDate: leaveTo, reason: leaveReason });
+      setLeaveReason(""); setMessage("Leave request sent to the manager for approval."); setData(await backendApi.staffMyDay(token));
+    } catch (cause) { setMessage(cause instanceof Error ? cause.message.replaceAll("_", " ") : "Leave request failed."); }
+    finally { setBusy(false); }
+  };
   if (!data)
     return (
       <main className="portal-auth-shell staff-auth">
         <Link className="wordmark" href="/">
-          <span>CUTZ</span>
-          <i>&</i>
-          <span>BANGS</span>
+          <BrandLogo priority />
         </Link>
         <section className="portal-auth-card">
           <p className="eyebrow">Staff portal</p>
@@ -141,9 +173,7 @@ export default function StaffPortal() {
     <main className="staff-portal-shell">
       <aside className="staff-sidebar">
         <Link className="wordmark" href="/">
-          <span>CUTZ</span>
-          <i>&</i>
-          <span>BANGS</span>
+          <BrandLogo />
         </Link>
         <nav>
           <a className="active" href="#day">
@@ -218,7 +248,9 @@ export default function StaffPortal() {
                   : "—"}
               </strong>
             </p>
-            <Link href="/admin/login">Open attendance</Link>
+            <label className="staff-selfie-button">Add live selfie<input type="file" accept="image/jpeg,image/png,image/webp" capture="user" onChange={(event) => setAttendanceSelfie(event.target.files?.[0] ?? null)} /></label>
+            <label className="staff-consent"><input type="checkbox" checked={attendanceConsent} onChange={(event) => setAttendanceConsent(event.target.checked)} /> Location + selfie consent</label>
+            <button disabled={busy || !attendanceSelfie || !attendanceConsent} onClick={() => void recordAttendance(checkedIn ? "check-out" : "check-in")}>{checkedIn ? "Check out" : "Check in"}</button>
           </div>
         </header>
         <div className="staff-kpis">
@@ -242,7 +274,26 @@ export default function StaffPortal() {
             <strong>{completed}</strong>
             <p>{data.appointments.length - completed} remaining</p>
           </article>
+          <article>
+            <span>MB</span>
+            <small>Plans sold</small>
+            <strong>{(data.performance.membershipsSold ?? 0) + (data.performance.packagesSold ?? 0)}</strong>
+            <p>{data.performance.membershipsSold ?? 0} memberships · {data.performance.packagesSold ?? 0} packages</p>
+          </article>
         </div>
+        <section className="staff-work-policy">
+          <article>
+            <p className="eyebrow">Work policy</p>
+            <h2>{data.staff.designation ?? "Stylist"}</h2>
+            <div className="staff-policy-facts"><span><small>Base salary</small><strong>{money(data.staff.baseSalaryMinor ?? 0)}</strong></span><span><small>Service commission</small><strong>{(data.performance.commissionRateBps ?? 0) / 100}%</strong></span><span><small>Starts after sales</small><strong>{money(data.performance.commissionThresholdMinor ?? 0)}</strong></span><span><small>Weekly off</small><strong>{(data.staff.weeklyOff ?? []).map((day) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ") || "Not set"}</strong></span></div>
+            <div className="staff-shift-list">{(data.staff.shifts ?? []).map((shift) => <span key={`${shift.weekday}-${shift.startMin}`}><b>{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][shift.weekday]}</b>{String(Math.floor(shift.startMin / 60)).padStart(2, "0")}:{String(shift.startMin % 60).padStart(2, "0")}–{String(Math.floor(shift.endMin / 60)).padStart(2, "0")}:{String(shift.endMin % 60).padStart(2, "0")}</span>)}</div>
+          </article>
+          <article>
+            <p className="eyebrow">Leave request</p><h2>Plan time away</h2>
+            <div className="staff-leave-form"><label>From<input type="date" value={leaveFrom} onChange={(event) => setLeaveFrom(event.target.value)} /></label><label>To<input type="date" min={leaveFrom} value={leaveTo} onChange={(event) => setLeaveTo(event.target.value)} /></label><label>Reason<input value={leaveReason} onChange={(event) => setLeaveReason(event.target.value)} placeholder="Reason for leave" /></label><button disabled={busy || !leaveReason.trim() || leaveTo < leaveFrom} onClick={() => void requestLeave()}>Send request</button></div>
+            <div className="staff-leave-history">{(data.staff.leaves ?? []).slice(0, 5).map((leave) => <span key={leave.id}><strong>{new Date(leave.startDate).toLocaleDateString("en-IN")} → {new Date(leave.endDate).toLocaleDateString("en-IN")}</strong><small>{leave.reason} · {leave.approved ? "Approved" : "Pending"}</small></span>)}{!data.staff.leaves?.length && <small>No leave requests yet.</small>}</div>
+          </article>
+        </section>
         <section className="staff-schedule" id="day">
           <div className="section-heading">
             <div>

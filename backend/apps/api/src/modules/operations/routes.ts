@@ -5,6 +5,15 @@ import { authorize } from "../../plugins/auth.js";
 import { audit } from "../../lib/audit.js";
 
 const OPERATIONS = ["OWNER", "ADMIN", "MANAGER", "RECEPTION"] as const;
+const DRAWER_DENOMINATIONS = new Set(["1", "2", "5", "10", "20", "50", "100", "200", "500"]);
+const cashBreakdownSchema = z.record(z.string(), z.number().int().nonnegative()).refine(
+  (value) => Object.keys(value).every((key) => DRAWER_DENOMINATIONS.has(key)),
+  "unsupported_cash_denomination",
+);
+
+function breakdownTotalMinor(value: Record<string, number>) {
+  return Object.entries(value).reduce((sum, [denomination, count]) => sum + Number(denomination) * count * 100, 0);
+}
 
 function branchAllowed(role: string, userBranchId: string | null | undefined, branchId: string) {
   return ["OWNER", "ADMIN"].includes(role) || userBranchId === branchId;
@@ -21,9 +30,9 @@ function businessDate(date: Date, timeZone: string) {
 
 async function cashTotals(session: { id: string; branchId: string; openedAt: Date; openingCashMinor: number }) {
   const [payments, expenses] = await Promise.all([
-    prisma.payment.aggregate({
+    prisma.payment.groupBy({
+      by: ["method"],
       where: {
-        method: "CASH",
         createdAt: { gte: session.openedAt },
         invoice: { branchId: session.branchId, status: { not: "VOID" } },
       },
@@ -34,10 +43,14 @@ async function cashTotals(session: { id: string; branchId: string; openedAt: Dat
       _sum: { amountMinor: true },
     }),
   ]);
-  const cashSalesMinor = payments._sum.amountMinor ?? 0;
+  const paymentTotalsMinor = Object.fromEntries(payments.map((row) => [row.method, row._sum.amountMinor ?? 0]));
+  const cashSalesMinor = paymentTotalsMinor.CASH ?? 0;
   const cashExpensesMinor = expenses._sum.amountMinor ?? 0;
   return {
+    paymentTotalsMinor,
     cashSalesMinor,
+    upiSalesMinor: paymentTotalsMinor.UPI ?? 0,
+    cardSalesMinor: paymentTotalsMinor.CARD ?? 0,
     cashExpensesMinor,
     expectedCashMinor: session.openingCashMinor + cashSalesMinor - cashExpensesMinor,
   };
@@ -68,11 +81,16 @@ export default async function operationsRoutes(app: FastifyInstance) {
     const body = z.object({
       branchId: z.string(),
       openingCashMinor: z.number().int().nonnegative(),
+      openingBreakdown: cashBreakdownSchema,
       openingNote: z.string().trim().max(500).optional(),
     }).parse(req.body);
     if (!branchAllowed(req.user!.role, req.user?.branchId, body.branchId)) return reply.code(403).send({ error: "forbidden" });
     const branch = await prisma.branch.findUnique({ where: { id: body.branchId }, select: { id: true, timezone: true } });
     if (!branch) return reply.code(404).send({ error: "branch_not_found" });
+    const countedMinor = breakdownTotalMinor(body.openingBreakdown);
+    if (countedMinor !== body.openingCashMinor) {
+      return reply.code(409).send({ error: "cash_count_mismatch", countedMinor, declaredMinor: body.openingCashMinor });
+    }
     const today = businessDate(new Date(), branch.timezone);
     const open = await prisma.cashSession.findFirst({ where: { branchId: body.branchId, status: "OPEN" } });
     if (open) return reply.code(409).send({ error: "cash_session_already_open", sessionId: open.id });
@@ -81,7 +99,7 @@ export default async function operationsRoutes(app: FastifyInstance) {
         data: { ...body, businessDate: today, openedByUserId: req.user!.id },
       });
       await audit("cash_session.open", "CashSession", session.id, { actorUserId: req.user?.id, after: body, ip: req.ip });
-      return reply.code(201).send({ ...session, cashSalesMinor: 0, cashExpensesMinor: 0, expectedCashMinor: body.openingCashMinor });
+      return reply.code(201).send({ ...session, paymentTotalsMinor: {}, cashSalesMinor: 0, upiSalesMinor: 0, cardSalesMinor: 0, cashExpensesMinor: 0, expectedCashMinor: body.openingCashMinor });
     } catch (error) {
       if ((error as { code?: string }).code === "P2002") return reply.code(409).send({ error: "cash_session_exists_for_business_date" });
       throw error;
@@ -90,19 +108,31 @@ export default async function operationsRoutes(app: FastifyInstance) {
 
   app.post("/cash-sessions/:id/close", { preHandler: authorize(...OPERATIONS) }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const body = z.object({ closingCashMinor: z.number().int().nonnegative(), closingNote: z.string().trim().max(500).optional() }).parse(req.body);
+    const body = z.object({ closingCashMinor: z.number().int().nonnegative(), closingBreakdown: cashBreakdownSchema, closingNote: z.string().trim().max(500).optional() }).parse(req.body);
     const session = await prisma.cashSession.findUnique({ where: { id } });
     if (!session) return reply.code(404).send({ error: "cash_session_not_found" });
     if (!branchAllowed(req.user!.role, req.user?.branchId, session.branchId)) return reply.code(403).send({ error: "forbidden" });
     if (session.status !== "OPEN") return reply.code(409).send({ error: "cash_session_already_closed" });
+    const countedMinor = breakdownTotalMinor(body.closingBreakdown);
+    if (countedMinor !== body.closingCashMinor) {
+      return reply.code(409).send({ error: "cash_count_mismatch", countedMinor, declaredMinor: body.closingCashMinor });
+    }
     const totals = await cashTotals(session);
+    if (body.closingCashMinor !== totals.expectedCashMinor) {
+      return reply.code(409).send({
+        error: "cash_drawer_mismatch",
+        expectedCashMinor: totals.expectedCashMinor,
+        countedCashMinor: body.closingCashMinor,
+        varianceMinor: body.closingCashMinor - totals.expectedCashMinor,
+      });
+    }
     const updated = await prisma.cashSession.update({
       where: { id },
       data: {
         closingCashMinor: body.closingCashMinor,
         closingNote: body.closingNote,
         expectedCashMinor: totals.expectedCashMinor,
-        varianceMinor: body.closingCashMinor - totals.expectedCashMinor,
+        varianceMinor: 0,
         closedByUserId: req.user!.id,
         closedAt: new Date(),
         status: "CLOSED",
@@ -111,7 +141,7 @@ export default async function operationsRoutes(app: FastifyInstance) {
     await audit("cash_session.close", "CashSession", id, {
       actorUserId: req.user?.id,
       before: { status: session.status },
-      after: { ...body, ...totals, varianceMinor: body.closingCashMinor - totals.expectedCashMinor },
+      after: { ...body, ...totals, varianceMinor: 0 },
       ip: req.ip,
     });
     return { ...updated, ...totals };

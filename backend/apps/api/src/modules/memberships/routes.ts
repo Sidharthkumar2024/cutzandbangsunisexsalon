@@ -32,14 +32,16 @@ export default async function membershipRoutes(app: FastifyInstance) {
 
   // Enroll a customer -> creates membership and grants credit in one tx.
   app.post("/memberships", { preHandler: authorize(...ADMIN, "RECEPTION") }, async (req, reply) => {
-    const { customerId, planId } = z.object({ customerId: z.string(), planId: z.string() }).parse(req.body);
-    const [plan, customer, duplicate] = await Promise.all([
+    const { customerId, planId, soldByStaffId } = z.object({ customerId: z.string(), planId: z.string(), soldByStaffId: z.string().optional() }).parse(req.body);
+    const [plan, customer, duplicate, salesperson] = await Promise.all([
       prisma.membershipPlan.findUnique({ where: { id: planId } }),
       prisma.customer.findUnique({ where: { id: customerId }, select: { branchId: true } }),
       prisma.membership.findFirst({ where: { customerId, planId, isActive: true }, select: { id: true } }),
+      soldByStaffId ? prisma.staff.findFirst({ where: { id: soldByStaffId, isActive: true, deletedAt: null } }) : null,
     ]);
     if (!plan) return reply.code(404).send({ error: "plan_not_found" });
     if (!customer) return reply.code(404).send({ error: "customer_not_found" });
+    if (soldByStaffId && (!salesperson || salesperson.branchId !== customer.branchId)) return reply.code(400).send({ error: "salesperson_not_found" });
     if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user!.branchId !== customer.branchId) return reply.code(403).send({ error: "forbidden" });
     if (duplicate) return reply.code(409).send({ error: "active_membership_exists", membershipId: duplicate.id });
 
@@ -48,12 +50,13 @@ export default async function membershipRoutes(app: FastifyInstance) {
         data: {
           planId,
           customerId,
+          soldByStaffId,
           balanceMinor: 0,
           expiresAt: plan.validityDays ? new Date(Date.now() + plan.validityDays * 86_400_000) : null,
         },
       });
       await grant(tx, m.id, plan.creditMinor, req.user?.id);
-      await audit("membership.enroll", "Membership", m.id, { actorUserId: req.user?.id, after: { customerId, planId, creditMinor: plan.creditMinor }, ip: req.ip }, tx);
+      await audit("membership.enroll", "Membership", m.id, { actorUserId: req.user?.id, after: { customerId, planId, soldByStaffId, creditMinor: plan.creditMinor }, ip: req.ip }, tx);
       return tx.membership.findUnique({ where: { id: m.id }, include: { ledger: true } });
     });
     return reply.code(201).send(membership);

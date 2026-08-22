@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import BrandLogo from "../components/BrandLogo";
 import { backendApi, type CustomerPortalOverview } from "../../lib/backend-api";
 
 const money = (minor: number) =>
@@ -65,9 +66,7 @@ export default function CustomerPortal() {
     return (
       <main className="portal-auth-shell">
         <Link className="wordmark" href="/">
-          <span>CUTZ</span>
-          <i>&</i>
-          <span>BANGS</span>
+          <BrandLogo priority />
         </Link>
         <section className="portal-auth-card">
           <p className="eyebrow">Customer portal</p>
@@ -169,9 +168,7 @@ export default function CustomerPortal() {
     <main className="portal-shell customer-portal">
       <header className="portal-header">
         <Link className="wordmark" href="/">
-          <span>CUTZ</span>
-          <i>&</i>
-          <span>BANGS</span>
+          <BrandLogo />
         </Link>
         <nav>
           <a className="active" href="#overview">

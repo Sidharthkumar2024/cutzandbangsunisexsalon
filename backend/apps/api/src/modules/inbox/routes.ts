@@ -27,6 +27,11 @@ async function ensureChannels() {
       create: { id: "channel-email", type: "EMAIL", label: "Email" },
       update: {},
     }),
+    prisma.channel.upsert({
+      where: { id: "channel-web-chat" },
+      create: { id: "channel-web-chat", type: "WEB_CHAT", label: "Website chat", isActive: true },
+      update: {},
+    }),
   ]);
 }
 
@@ -82,13 +87,53 @@ async function markLatestCampaignReply(customerId: string | undefined) {
 }
 
 export default async function inboxRoutes(app: FastifyInstance) {
+  app.post("/public/chat", { config: { rateLimit: { max: 20, timeWindow: "1 hour" } } }, async (req, reply) => {
+    const body = z.object({
+      branchId: z.string().default("main"),
+      threadId: z.string().uuid(),
+      name: z.string().trim().min(2).max(120),
+      phone: z.string().trim().min(8).max(30),
+      message: z.string().trim().min(1).max(2_000),
+    }).parse(req.body);
+    const branch = await prisma.branch.findFirst({ where: { id: body.branchId, deletedAt: null }, select: { id: true } });
+    if (!branch) return reply.code(404).send({ error: "branch_not_found" });
+    await ensureChannels();
+    const digits = body.phone.replace(/\D/gu, "");
+    const normalizedPhone = digits.length === 10 ? `+91${digits}` : `+${digits}`;
+    let customer = await prisma.customer.findFirst({ where: { branchId: body.branchId, phone: normalizedPhone, deletedAt: null } });
+    if (!customer) {
+      customer = await prisma.customer.create({ data: { branchId: body.branchId, name: body.name, phone: normalizedPhone, source: "Website chat" } });
+    }
+    const channel = await prisma.channel.findUniqueOrThrow({ where: { id: "channel-web-chat" } });
+    const existing = await prisma.conversation.findUnique({ where: { externalThreadId: body.threadId } });
+    if (existing && existing.customerId !== customer.id) return reply.code(409).send({ error: "chat_thread_conflict" });
+    const conversation = existing ?? await prisma.conversation.create({ data: { channelId: channel.id, customerId: customer.id, externalThreadId: body.threadId, unread: true } });
+    const message = await prisma.message.create({ data: { conversationId: conversation.id, direction: "in", body: body.message, status: "received" } });
+    await prisma.conversation.update({ where: { id: conversation.id }, data: { unread: true, lastMessageAt: message.createdAt } });
+    return reply.code(201).send({ threadId: body.threadId, conversationId: conversation.id, message: { id: message.id, direction: message.direction, body: message.body, status: message.status, createdAt: message.createdAt } });
+  });
+
+  app.get("/public/chat/:threadId", { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async (req, reply) => {
+    const { threadId } = z.object({ threadId: z.string().uuid() }).parse(req.params);
+    const conversation = await prisma.conversation.findUnique({
+      where: { externalThreadId: threadId },
+      select: {
+        externalThreadId: true,
+        customer: { select: { name: true } },
+        messages: { where: { direction: { in: ["in", "out"] } }, orderBy: { createdAt: "asc" }, take: 200, select: { id: true, direction: true, body: true, status: true, createdAt: true } },
+      },
+    });
+    if (!conversation) return reply.code(404).send({ error: "chat_not_found" });
+    return conversation;
+  });
+
   app.get("/channels", { preHandler: authorize(...STAFF) }, async () => {
     await ensureChannels();
     return prisma.channel.findMany({ orderBy: { label: "asc" }, include: { _count: { select: { conversations: true, templates: true } } } });
   });
 
   app.patch("/channels/:type", { preHandler: authorize("OWNER", "ADMIN") }, async (req, reply) => {
-    const { type } = z.object({ type: z.enum(["WHATSAPP_OFFICIAL", "WHATSAPP_UNOFFICIAL", "EMAIL", "SMS"]) }).parse(req.params);
+    const { type } = z.object({ type: z.enum(["WHATSAPP_OFFICIAL", "WHATSAPP_UNOFFICIAL", "EMAIL", "SMS", "WEB_CHAT"]) }).parse(req.params);
     const body = z.object({ isActive: z.boolean(), label: z.string().trim().min(2).optional() }).parse(req.body);
     await ensureChannels();
     const channel = await prisma.channel.findFirst({ where: { type } });
@@ -247,22 +292,25 @@ export default async function inboxRoutes(app: FastifyInstance) {
     let externalId: string | undefined;
     let status = "internal";
     if (!body.internal) {
-      if (!conversation.customer?.phone || !WHATSAPP_CHANNELS.includes(conversation.channel.type as typeof WHATSAPP_CHANNELS[number])) {
+      if (conversation.channel.type === "WEB_CHAT") {
+        status = "sent";
+      } else if (!conversation.customer?.phone || !WHATSAPP_CHANNELS.includes(conversation.channel.type as typeof WHATSAPP_CHANNELS[number])) {
         return reply.code(422).send({ error: "channel_cannot_send" });
+      } else {
+        await applyProviderSettings(conversation.customer.branchId);
+        const result = await providers.whatsapp(conversation.channel.type as typeof WHATSAPP_CHANNELS[number]).send({
+          to: conversation.customer.phone,
+          body: body.body,
+          templateName: body.templateName,
+          templateLanguage: body.templateLanguage,
+          mediaUrl: body.mediaUrl,
+          mediaType: body.mediaType,
+          location: body.location,
+        });
+        externalId = result.externalId || undefined;
+        status = result.status;
+        if (result.status === "failed") return reply.code(422).send({ error: result.error ?? "send_failed" });
       }
-      await applyProviderSettings(conversation.customer.branchId);
-      const result = await providers.whatsapp(conversation.channel.type as typeof WHATSAPP_CHANNELS[number]).send({
-        to: conversation.customer.phone,
-        body: body.body,
-        templateName: body.templateName,
-        templateLanguage: body.templateLanguage,
-        mediaUrl: body.mediaUrl,
-        mediaType: body.mediaType,
-        location: body.location,
-      });
-      externalId = result.externalId || undefined;
-      status = result.status;
-      if (result.status === "failed") return reply.code(422).send({ error: result.error ?? "send_failed" });
     }
 
     const message = await prisma.message.create({

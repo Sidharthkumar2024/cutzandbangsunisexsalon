@@ -69,7 +69,11 @@ export default async function platformRoutes(app: FastifyInstance) {
     prisma.staff.findMany({
       where: { deletedAt: null, ...(req.user?.role === "MANAGER" ? { branchId: req.user.branchId ?? "__none__" } : {}) },
       orderBy: { displayName: "asc" },
-      include: { user: { select: { id: true, email: true, role: true, isActive: true } } },
+      include: {
+        user: { select: { id: true, email: true, role: true, isActive: true } },
+        shifts: { orderBy: [{ weekday: "asc" }, { startMin: "asc" }] },
+        leaves: { orderBy: { startDate: "desc" }, take: 20 },
+      },
     }),
   );
 
@@ -182,21 +186,23 @@ export default async function platformRoutes(app: FastifyInstance) {
     const { from, to } = req.query as Record<string, string>;
     const start = from ? new Date(from) : new Date(new Date().setUTCHours(0, 0, 0, 0));
     const end = to ? new Date(to) : new Date(start.getTime() + 86_400_000);
-    const staff = await prisma.staff.findUnique({ where: { userId: req.user!.id } });
+    const staff = await prisma.staff.findUnique({ where: { userId: req.user!.id }, include: { shifts: { orderBy: [{ weekday: "asc" }, { startMin: "asc" }] }, leaves: { orderBy: { startDate: "desc" }, take: 30 } } });
     if (!staff) return reply.code(404).send({ error: "staff_profile_not_found" });
-    const [appointments, attendance, invoiceItems, notifications] = await Promise.all([
+    const [appointments, attendance, invoiceItems, notifications, membershipsSold, packagesSold] = await Promise.all([
       prisma.appointment.findMany({ where: { deletedAt: null, startAt: { gte: start, lt: end }, items: { some: { staffId: staff.id } } }, orderBy: { startAt: "asc" }, include: { customer: { select: { id: true, name: true, phone: true, notes: true, tags: true } }, items: { where: { staffId: staff.id }, include: { service: true } } } }),
       prisma.attendance.findMany({ where: { staffId: staff.id, createdAt: { gte: start, lt: end } }, orderBy: { createdAt: "desc" } }),
       prisma.invoiceItem.findMany({ where: { staffId: staff.id, invoice: { createdAt: { gte: start, lt: end }, status: { not: "VOID" } } } }),
       prisma.notification.findMany({ where: { userId: req.user!.id, readAt: null }, orderBy: { createdAt: "desc" }, take: 50 }),
+      prisma.membership.count({ where: { soldByStaffId: staff.id, createdAt: { gte: start, lt: end } } }),
+      prisma.customerServicePackage.count({ where: { soldByStaffId: staff.id, createdAt: { gte: start, lt: end } } }),
     ]);
     const serviceRevenueMinor = invoiceItems.filter(item => item.kind === "service").reduce((sum, item) => sum + item.lineTotalMinor, 0);
     const productItems = invoiceItems.filter(item => item.kind === "product" && item.productId);
     const products = await prisma.product.findMany({ where: { id: { in: productItems.map(item => item.productId!) } }, select: { id: true, commissionBps: true } });
     const productCommission = new Map(products.map(product => [product.id, product.commissionBps]));
     const productRevenueMinor = productItems.reduce((sum, item) => sum + item.lineTotalMinor, 0);
-    const serviceCommissionMinor = Math.round(serviceRevenueMinor * staff.commissionRate / 10_000);
+    const serviceCommissionMinor = serviceRevenueMinor >= staff.commissionThresholdMinor ? Math.round(serviceRevenueMinor * staff.commissionRate / 10_000) : 0;
     const productCommissionMinor = productItems.reduce((sum, item) => sum + Math.round(item.lineTotalMinor * (productCommission.get(item.productId!) ?? 0) / 10_000), 0);
-    return { staff, appointments, attendance, notifications, performance: { serviceRevenueMinor, productRevenueMinor, commissionRateBps: staff.commissionRate, serviceCommissionMinor, productCommissionMinor, estimatedCommissionMinor: serviceCommissionMinor + productCommissionMinor } };
+    return { staff, appointments, attendance, notifications, performance: { serviceRevenueMinor, productRevenueMinor, commissionRateBps: staff.commissionRate, commissionThresholdMinor: staff.commissionThresholdMinor, serviceCommissionMinor, productCommissionMinor, estimatedCommissionMinor: serviceCommissionMinor + productCommissionMinor, membershipsSold, packagesSold } };
   });
 }

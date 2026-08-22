@@ -42,16 +42,21 @@ export default async function reportRoutes(app: FastifyInstance) {
   // Range report: sales, payment mix, new vs repeat, top services/staff.
   app.get("/reports/range", { preHandler: authorize(...ADMIN) }, async (req) => {
     const parsed = z
-      .object({ from: z.string(), to: z.string(), branchId: z.string().optional() })
+      .object({ from: z.string(), to: z.string(), branchId: z.string().optional(), staffId: z.string().optional(), serviceId: z.string().optional() })
       .parse(req.query);
     const { from, to } = parsed;
     const gte = new Date(from);
-    const lte = new Date(to);
+    const lt = new Date(to);
     const branchId = ["OWNER", "ADMIN"].includes(req.user!.role) ? parsed.branchId : req.user!.branchId ?? undefined;
     const branchWhere = branchId ? { branchId } : {};
 
     const invoices = await prisma.invoice.findMany({
-      where: { ...branchWhere, createdAt: { gte, lte }, status: { not: "VOID" } },
+      where: {
+        ...branchWhere,
+        createdAt: { gte, lt },
+        status: { not: "VOID" },
+        ...(parsed.staffId || parsed.serviceId ? { items: { some: { ...(parsed.staffId ? { staffId: parsed.staffId } : {}), ...(parsed.serviceId ? { serviceId: parsed.serviceId } : {}) } } } : {}),
+      },
       include: { payments: true, items: true },
     });
 

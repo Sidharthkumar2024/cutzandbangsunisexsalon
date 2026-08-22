@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import BrandLogo from "../../components/BrandLogo";
 import { useRouter } from "next/navigation";
 import { backendApi } from "../../../lib/backend-api";
 import { SESSION_MARKER } from "../../../lib/use-backend-integration";
@@ -79,7 +80,7 @@ export default function AdminLoginPage() {
   return (
     <main className="portal-auth-shell admin-login-shell">
       <Link className="wordmark" href="/" aria-label="Back to Cutz and Bangs home">
-        <span>CUTZ</span><i>&</i><span>BANGS</span>
+        <BrandLogo priority />
       </Link>
       <form
         className="portal-auth-card admin-login-card"

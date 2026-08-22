@@ -42,37 +42,38 @@ model Branch {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  users        User[]
-  staff        Staff[]
-  customers    Customer[]
-  appointments Appointment[]
-  invoices     Invoice[]
-  coupons      Coupon[]
-  campaigns    Campaign[]
-  cashSessions CashSession[]
-  expenses     Expense[]
+  users            User[]
+  staff            Staff[]
+  customers        Customer[]
+  appointments     Appointment[]
+  invoices         Invoice[]
+  coupons          Coupon[]
+  campaigns        Campaign[]
+  cashSessions     CashSession[]
+  expenses         Expense[]
+  biometricDevices BiometricDevice[]
 }
 
 model User {
-  id           String    @id @default(cuid())
-  email        String?   @unique
-  phone        String?   @unique
-  passwordHash String?
-  role         RoleName  @default(CUSTOMER)
-  twoFaSecret        String?   // encrypted at rest by the app layer
+  id                 String    @id @default(cuid())
+  email              String?   @unique
+  phone              String?   @unique
+  passwordHash       String?
+  role               RoleName  @default(CUSTOMER)
+  twoFaSecret        String? // encrypted at rest by the app layer
   twoFaEnabledAt     DateTime?
   twoFaRecoveryCodes String[]  @default([]) // SHA-256 hashes, plaintext is shown once
-  isActive     Boolean   @default(true)
-  branchId     String?
-  branch       Branch?   @relation(fields: [branchId], references: [id])
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  deletedAt    DateTime?
+  isActive           Boolean   @default(true)
+  branchId           String?
+  branch             Branch?   @relation(fields: [branchId], references: [id])
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  deletedAt          DateTime?
 
-  staff     Staff?
-  customer  Customer?
-  auditLogs AuditLog[]
-  sessions  Session[]
+  staff               Staff?
+  customer            Customer?
+  auditLogs           AuditLog[]
+  sessions            Session[]
   passwordResetTokens PasswordResetToken[]
 
   @@index([role])
@@ -114,19 +115,27 @@ model Permission {
 // ---------------------------------------------------------------------------
 
 model Staff {
-  id             String    @id @default(cuid())
-  userId         String?   @unique
-  user           User?     @relation(fields: [userId], references: [id])
-  branchId       String
-  branch         Branch    @relation(fields: [branchId], references: [id])
-  displayName    String
-  phone          String?
-  commissionRate Int       @default(0) // basis points, e.g. 1000 = 10%
-  weeklyOff      Int[]     @default([]) // 0=Sun..6=Sat
-  isActive       Boolean   @default(true)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  deletedAt      DateTime?
+  id                       String    @id @default(cuid())
+  userId                   String?   @unique
+  user                     User?     @relation(fields: [userId], references: [id])
+  branchId                 String
+  branch                   Branch    @relation(fields: [branchId], references: [id])
+  displayName              String
+  phone                    String?
+  designation              String    @default("Stylist")
+  baseSalaryMinor          Int       @default(0)
+  commissionRate           Int       @default(0) // basis points, e.g. 1000 = 10%
+  commissionThresholdMinor Int       @default(0) // daily service-sales threshold before commission starts
+  lateGraceMinutes         Int       @default(10)
+  lateDeductionMinor       Int       @default(0)
+  halfDayAfterMinutes      Int       @default(240)
+  overtimePaid             Boolean   @default(false)
+  biometricCode            String?   @unique
+  weeklyOff                Int[]     @default([]) // 0=Sun..6=Sat
+  isActive                 Boolean   @default(true)
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+  deletedAt                DateTime?
 
   skills           StaffSkill[]
   shifts           Shift[]
@@ -135,6 +144,8 @@ model Staff {
   serviceStaff     ServiceStaff[]
   appointmentItems AppointmentItem[]
   invoiceItems     InvoiceItem[]
+  soldMemberships  Membership[]             @relation("MembershipSales")
+  soldPackages     CustomerServicePackage[] @relation("PackageSales")
 
   @@index([branchId])
 }
@@ -170,14 +181,15 @@ model Leave {
   endDate   DateTime
   reason    String?
   approved  Boolean  @default(false)
+  createdAt DateTime @default(now())
 
   @@index([staffId])
 }
 
 model Attendance {
-  id                String    @id @default(cuid())
+  id                String           @id @default(cuid())
   staffId           String
-  staff             Staff     @relation(fields: [staffId], references: [id])
+  staff             Staff            @relation(fields: [staffId], references: [id])
   checkInAt         DateTime?
   checkOutAt        DateTime?
   checkInLat        Float?
@@ -187,11 +199,30 @@ model Attendance {
   selfieUrl         String? // signed storage key; consent required
   checkOutSelfieUrl String?
   consentAt         DateTime?
-  lateMinutes       Int       @default(0)
-  overtimeMin       Int       @default(0)
-  createdAt         DateTime  @default(now())
+  lateMinutes       Int              @default(0)
+  overtimeMin       Int              @default(0)
+  source            String           @default("WEB")
+  externalEventId   String?          @unique
+  biometricDeviceId String?
+  biometricDevice   BiometricDevice? @relation(fields: [biometricDeviceId], references: [id])
+  createdAt         DateTime         @default(now())
 
   @@index([staffId, createdAt])
+}
+
+model BiometricDevice {
+  id         String       @id @default(cuid())
+  branchId   String
+  branch     Branch       @relation(fields: [branchId], references: [id])
+  name       String
+  provider   String       @default("GENERIC_WEBHOOK")
+  secretHash String
+  isActive   Boolean      @default(true)
+  lastSeenAt DateTime?
+  createdAt  DateTime     @default(now())
+  attendance Attendance[]
+
+  @@index([branchId, isActive])
 }
 
 // ---------------------------------------------------------------------------
@@ -249,17 +280,17 @@ model Customer {
 }
 
 model CustomerHistoryEntry {
-  id           String   @id @default(cuid())
-  customerId   String
-  customer     Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  visitedAt    DateTime
-  serviceName  String
-  amountMinor  Int      @default(0)
-  staffName    String?
-  notes        String?
-  source       String   @default("historical_import")
-  actorUserId  String?
-  createdAt    DateTime @default(now())
+  id          String   @id @default(cuid())
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  visitedAt   DateTime
+  serviceName String
+  amountMinor Int      @default(0)
+  staffName   String?
+  notes       String?
+  source      String   @default("historical_import")
+  actorUserId String?
+  createdAt   DateTime @default(now())
 
   @@index([customerId, visitedAt])
 }
@@ -530,16 +561,18 @@ model MembershipPlan {
 }
 
 model Membership {
-  id           String         @id @default(cuid())
-  planId       String
-  plan         MembershipPlan @relation(fields: [planId], references: [id])
-  customerId   String
-  customer     Customer       @relation(fields: [customerId], references: [id])
-  balanceMinor Int            @default(0) // denormalized cache = SUM(ledger.deltaMinor)
-  startAt      DateTime       @default(now())
-  expiresAt    DateTime?
-  isActive     Boolean        @default(true)
-  createdAt    DateTime       @default(now())
+  id            String         @id @default(cuid())
+  planId        String
+  plan          MembershipPlan @relation(fields: [planId], references: [id])
+  customerId    String
+  customer      Customer       @relation(fields: [customerId], references: [id])
+  soldByStaffId String?
+  soldByStaff   Staff?         @relation("MembershipSales", fields: [soldByStaffId], references: [id])
+  balanceMinor  Int            @default(0) // denormalized cache = SUM(ledger.deltaMinor)
+  startAt       DateTime       @default(now())
+  expiresAt     DateTime?
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now())
 
   ledger MembershipLedger[]
 
@@ -599,15 +632,17 @@ model ServicePackageItem {
 }
 
 model CustomerServicePackage {
-  id         String             @id @default(cuid())
-  packageId  String
-  package    ServicePackagePlan @relation(fields: [packageId], references: [id])
-  customerId String
-  customer   Customer           @relation(fields: [customerId], references: [id])
-  startAt    DateTime           @default(now())
-  expiresAt  DateTime?
-  isActive   Boolean            @default(true)
-  createdAt  DateTime           @default(now())
+  id            String             @id @default(cuid())
+  packageId     String
+  package       ServicePackagePlan @relation(fields: [packageId], references: [id])
+  customerId    String
+  customer      Customer           @relation(fields: [customerId], references: [id])
+  soldByStaffId String?
+  soldByStaff   Staff?             @relation("PackageSales", fields: [soldByStaffId], references: [id])
+  startAt       DateTime           @default(now())
+  expiresAt     DateTime?
+  isActive      Boolean            @default(true)
+  createdAt     DateTime           @default(now())
 
   ledger ServicePackageLedger[]
 
@@ -818,25 +853,27 @@ model InventoryMovement {
 // ---------------------------------------------------------------------------
 
 model CashSession {
-  id                 String   @id @default(cuid())
-  branchId           String
-  branch             Branch   @relation(fields: [branchId], references: [id])
-  businessDate       String
-  openingCashMinor   Int
-  closingCashMinor   Int?
-  expectedCashMinor  Int?
-  varianceMinor      Int?
-  status             String   @default("OPEN")
-  openingNote        String?
-  closingNote        String?
-  openedByUserId     String
-  closedByUserId     String?
-  openedAt           DateTime @default(now())
-  closedAt           DateTime?
-  expenses           Expense[]
+  id                String    @id @default(cuid())
+  branchId          String
+  branch            Branch    @relation(fields: [branchId], references: [id])
+  businessDate      String
+  openingCashMinor  Int
+  openingBreakdown  Json?
+  closingCashMinor  Int?
+  closingBreakdown  Json?
+  expectedCashMinor Int?
+  varianceMinor     Int?
+  status            String    @default("OPEN")
+  openingNote       String?
+  closingNote       String?
+  openedByUserId    String
+  closedByUserId    String?
+  openedAt          DateTime  @default(now())
+  closedAt          DateTime?
+  expenses          Expense[]
 
-  @@index([branchId, openedAt])
   @@unique([branchId, businessDate])
+  @@index([branchId, openedAt])
 }
 
 model Expense {
@@ -844,7 +881,7 @@ model Expense {
   branchId        String
   branch          Branch        @relation(fields: [branchId], references: [id])
   cashSessionId   String?
-  cashSession     CashSession?   @relation(fields: [cashSessionId], references: [id])
+  cashSession     CashSession?  @relation(fields: [cashSessionId], references: [id])
   category        String
   description     String
   amountMinor     Int
@@ -868,6 +905,7 @@ enum ChannelType {
   WHATSAPP_UNOFFICIAL
   EMAIL
   SMS
+  WEB_CHAT
 }
 
 model Channel {
@@ -882,16 +920,17 @@ model Channel {
 }
 
 model Conversation {
-  id            String    @id @default(cuid())
-  channelId     String
-  channel       Channel   @relation(fields: [channelId], references: [id])
-  customerId    String?
-  customer      Customer? @relation(fields: [customerId], references: [id])
-  assignedTo    String?
-  tags          String[]  @default([])
-  unread        Boolean   @default(true)
-  lastMessageAt DateTime?
-  createdAt     DateTime  @default(now())
+  id               String    @id @default(cuid())
+  channelId        String
+  channel          Channel   @relation(fields: [channelId], references: [id])
+  customerId       String?
+  customer         Customer? @relation(fields: [customerId], references: [id])
+  externalThreadId String?   @unique
+  assignedTo       String?
+  tags             String[]  @default([])
+  unread           Boolean   @default(true)
+  lastMessageAt    DateTime?
+  createdAt        DateTime  @default(now())
 
   messages Message[]
 
@@ -944,23 +983,23 @@ enum CampaignStatus {
 }
 
 model Campaign {
-  id          String           @id @default(cuid())
-  branchId    String           @default("main")
-  branch      Branch           @relation(fields: [branchId], references: [id])
-  name        String
-  channel     ChannelType
-  segment     CustomerSegment?
-  content     String
-  mediaKey    String?
-  mediaType   String?
-  couponCode  String?
-  status      CampaignStatus   @default(DRAFT)
-  scheduledAt DateTime?
-  approvedBy  String?
+  id              String           @id @default(cuid())
+  branchId        String           @default("main")
+  branch          Branch           @relation(fields: [branchId], references: [id])
+  name            String
+  channel         ChannelType
+  segment         CustomerSegment?
+  content         String
+  mediaKey        String?
+  mediaType       String?
+  couponCode      String?
+  status          CampaignStatus   @default(DRAFT)
+  scheduledAt     DateTime?
+  approvedBy      String?
   intervalSeconds Int?
-  dailyCap     Int?
-  riskLevel    String?
-  createdAt   DateTime         @default(now())
+  dailyCap        Int?
+  riskLevel       String?
+  createdAt       DateTime         @default(now())
 
   recipients CampaignRecipient[]
 
@@ -968,19 +1007,19 @@ model Campaign {
 }
 
 model CampaignRecipient {
-  id         String    @id @default(cuid())
-  campaignId String
-  campaign   Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  customerId String
-  status     String    @default("queued") // queued, sent, delivered, failed
+  id           String    @id @default(cuid())
+  campaignId   String
+  campaign     Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  customerId   String
+  status       String    @default("queued") // queued, sent, delivered, failed
   scheduledFor DateTime?
-  sentAt     DateTime?
-  deliveredAt DateTime?
-  readAt     DateTime?
-  repliedAt  DateTime?
-  externalId String?   @unique
-  error      String?
-  bookedAt   DateTime? // attribution
+  sentAt       DateTime?
+  deliveredAt  DateTime?
+  readAt       DateTime?
+  repliedAt    DateTime?
+  externalId   String?   @unique
+  error        String?
+  bookedAt     DateTime? // attribution
 
   @@unique([campaignId, customerId])
   @@index([scheduledFor, status])

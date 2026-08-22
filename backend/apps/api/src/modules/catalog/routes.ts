@@ -155,7 +155,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
   });
 
   app.post("/service-categories", { preHandler: authorize(...ADMIN) }, async (req, reply) => {
-    const body = z.object({ name: z.string().trim().min(2).max(80), gender: z.enum(["Male", "Female", "Unisex"]).nullable().optional(), sortOrder: z.number().int().min(0).default(0) }).parse(req.body);
+    const body = z.object({ name: z.string().trim().min(2).max(80), gender: z.enum(["Male", "Female", "Unisex", "Kids - Unisex", "Boys", "Girls", "Baby Boy", "Baby Girl"]).nullable().optional(), sortOrder: z.number().int().min(0).default(0) }).parse(req.body);
     const category = await prisma.serviceCategory.create({ data: body });
     await audit("service_category.create", "ServiceCategory", category.id, { actorUserId: req.user?.id, after: body, ip: req.ip });
     return reply.code(201).send(category);
@@ -163,7 +163,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
 
   app.patch("/service-categories/:id", { preHandler: authorize(...ADMIN) }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const body = z.object({ name: z.string().trim().min(2).max(80).optional(), gender: z.enum(["Male", "Female", "Unisex"]).nullable().optional(), sortOrder: z.number().int().min(0).optional() }).parse(req.body);
+    const body = z.object({ name: z.string().trim().min(2).max(80).optional(), gender: z.enum(["Male", "Female", "Unisex", "Kids - Unisex", "Boys", "Girls", "Baby Boy", "Baby Girl"]).nullable().optional(), sortOrder: z.number().int().min(0).optional() }).parse(req.body);
     const before = await prisma.serviceCategory.findUnique({ where: { id } });
     if (!before) return reply.code(404).send({ error: "category_not_found" });
     const category = await prisma.serviceCategory.update({ where: { id }, data: body });
@@ -233,9 +233,19 @@ export default async function catalogRoutes(app: FastifyInstance) {
     const body = z
       .object({
         branchId: z.string(),
-        displayName: z.string(),
+        displayName: z.string().trim().min(2).max(120),
         phone: z.string().optional(),
+        designation: z.string().trim().min(2).max(100).default("Stylist"),
+        baseSalaryMinor: z.number().int().nonnegative().default(0),
         commissionRate: z.number().int().nonnegative().default(0),
+        commissionThresholdMinor: z.number().int().nonnegative().default(0),
+        lateGraceMinutes: z.number().int().min(0).max(180).default(10),
+        lateDeductionMinor: z.number().int().nonnegative().default(0),
+        halfDayAfterMinutes: z.number().int().min(30).max(720).default(240),
+        overtimePaid: z.boolean().default(false),
+        biometricCode: z.string().trim().min(1).max(80).optional(),
+        weeklyOff: z.array(z.number().int().min(0).max(6)).max(7).default([]),
+        shifts: z.array(z.object({ weekday: z.number().int().min(0).max(6), startMin: z.number().int().min(0).max(1439), endMin: z.number().int().min(1).max(1440) }).refine((shift) => shift.endMin > shift.startMin)).default([]),
         serviceIds: z.array(z.string()).default([]),
       })
       .parse(req.body);
@@ -244,14 +254,24 @@ export default async function catalogRoutes(app: FastifyInstance) {
         branchId: body.branchId,
         displayName: body.displayName,
         phone: body.phone,
+        designation: body.designation,
+        baseSalaryMinor: body.baseSalaryMinor,
         commissionRate: body.commissionRate,
+        commissionThresholdMinor: body.commissionThresholdMinor,
+        lateGraceMinutes: body.lateGraceMinutes,
+        lateDeductionMinor: body.lateDeductionMinor,
+        halfDayAfterMinutes: body.halfDayAfterMinutes,
+        overtimePaid: body.overtimePaid,
+        biometricCode: body.biometricCode,
+        weeklyOff: body.weeklyOff,
+        shifts: { create: body.shifts },
         skills: { create: body.serviceIds.map((serviceId) => ({ serviceId })) },
         serviceStaff: { create: body.serviceIds.map((serviceId) => ({ serviceId })) },
       },
     });
     await audit("staff.create", "Staff", staff.id, {
       actorUserId: req.user?.id,
-      after: { branchId: body.branchId, displayName: body.displayName, phone: body.phone, commissionRate: body.commissionRate, serviceIds: body.serviceIds },
+      after: { ...body },
       ip: req.ip,
     });
     return reply.code(201).send(staff);

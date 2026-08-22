@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import BrandLogo from "../components/BrandLogo";
 import type {
   FeaturedService,
   MembershipPlan,
@@ -12,6 +13,7 @@ import type {
 import { useBackendIntegration } from "../../lib/use-backend-integration";
 import {
   backendApi,
+  type CashBreakdown,
   type BackendAppointment,
   type BackendCustomerDetail,
   type BackendProviderConfig,
@@ -59,6 +61,33 @@ type SaleService = {
 
 const money = (minor: number) =>
   `₹${Math.round(minor / 100).toLocaleString("en-IN")}`;
+const CASH_DENOMINATIONS = [
+  { value: 1, kind: "Coin" },
+  { value: 2, kind: "Coin" },
+  { value: 5, kind: "Coin" },
+  { value: 10, kind: "Note / coin" },
+  { value: 20, kind: "Note" },
+  { value: 50, kind: "Note" },
+  { value: 100, kind: "Note" },
+  { value: 200, kind: "Note" },
+  { value: 500, kind: "Note" },
+] as const;
+const emptyCashBreakdown = (): CashBreakdown => Object.fromEntries(CASH_DENOMINATIONS.map(({ value }) => [String(value), 0]));
+const cashBreakdownTotalMinor = (breakdown: CashBreakdown) => CASH_DENOMINATIONS.reduce((sum, item) => sum + item.value * Math.max(0, breakdown[String(item.value)] ?? 0) * 100, 0);
+
+function CashDenominationCounter({ value, onChange, expectedMinor, title = "Count physical cash" }: { value: CashBreakdown; onChange: (next: CashBreakdown) => void; expectedMinor?: number; title?: string }) {
+  const total = cashBreakdownTotalMinor(value);
+  const matches = expectedMinor === undefined || total === expectedMinor;
+  return (
+    <div className="cash-denomination-counter">
+      <header><div><strong>{title}</strong><small>Enter how many coins or notes are physically in the drawer.</small></div><span className={matches ? "matches" : "mismatch"}>{expectedMinor === undefined ? "Counted" : matches ? "Matched" : "Mismatch"}<b>{money(total)}</b></span></header>
+      <div className="cash-denomination-grid">
+        {CASH_DENOMINATIONS.map((item) => <label key={item.value}><span><strong>₹{item.value}</strong><small>{item.kind}</small></span><input aria-label={`Number of ₹${item.value} ${item.kind.toLowerCase()}s`} type="number" min="0" step="1" value={value[String(item.value)] ?? 0} onChange={(event) => onChange({ ...value, [String(item.value)]: Math.max(0, Math.floor(Number(event.target.value) || 0)) })} /></label>)}
+      </div>
+      {expectedMinor !== undefined && <p className={matches ? "cash-match-message" : "cash-mismatch-message"}>{matches ? `✓ Physical count exactly matches expected drawer cash (${money(expectedMinor)}).` : `Counted ${money(total)} · expected ${money(expectedMinor)} · fix the count or record the missing expense before closing.`}</p>}
+    </div>
+  );
+}
 const prettyStatus = (value: string) =>
   value
     .toLowerCase()
@@ -83,6 +112,10 @@ const shiftDateKey = (value: string, days: number) => {
   date.setDate(date.getDate() + days);
   return localDateKey(date);
 };
+const dateRangeIso = (fromKey: string, toKey: string) => ({
+  from: new Date(`${fromKey}T00:00:00`).toISOString(),
+  to: new Date(`${shiftDateKey(toKey, 1)}T00:00:00`).toISOString(),
+});
 const parseCsv = (text: string) => {
   const rows: string[][] = [];
   let row: string[] = [];
@@ -307,9 +340,7 @@ export default function AdminPage() {
       <aside className={`admin-sidebar ${mobileNav ? "open" : ""}`}>
         <div className="admin-brand">
           <Link className="wordmark" href="/">
-            <span>CUTZ</span>
-            <i>&</i>
-            <span>BANGS</span>
+            <BrandLogo priority />
           </Link>
           <button className="mobile-close" onClick={() => setMobileNav(false)}>
             ×
@@ -517,7 +548,7 @@ export default function AdminPage() {
               onRefresh={() => void backend.refresh()}
             />
           )}
-          {view === "reports" && <Reports report={backend.data.range} />}
+          {view === "reports" && <Reports token={backend.token} data={backend.data} />}
           {view === "staff" && (
             <Staff
               token={backend.token}
@@ -583,7 +614,7 @@ function AdminAccessGate({
   const offline = status === "offline";
   return (
     <main className="portal-auth-shell admin-access-gate">
-      <Link className="wordmark" href="/"><span>CUTZ</span><i>&</i><span>BANGS</span></Link>
+      <Link className="wordmark brand-image-link" href="/"><BrandLogo priority /></Link>
       <section className="portal-auth-card">
         <p className="eyebrow">Protected admin workspace</p>
         <h1>{checking ? <>Checking your<br /><em>secure session.</em></> : offline ? <>Backend is<br /><em>not reachable.</em></> : status === "forbidden" ? <>Access is<br /><em>not authorised.</em></> : <>Team login<br /><em>required.</em></>}</h1>
@@ -1631,6 +1662,11 @@ function Calendar({
   onRefresh: () => void;
 }) {
   const [selectedDate, setSelectedDate] = useState(() => localDateKey(new Date()));
+  const [rangeStart, setRangeStart] = useState(() => localDateKey(new Date()));
+  const [rangeEnd, setRangeEnd] = useState(() => localDateKey(new Date()));
+  const [rangeActive, setRangeActive] = useState(false);
+  const [calendarAppointments, setCalendarAppointments] = useState<BackendAppointment[]>(data.appointments);
+  const [calendarLoading, setCalendarLoading] = useState(false);
   const [rescheduleId, setRescheduleId] = useState("");
   const [nextStart, setNextStart] = useState("");
   const [override, setOverride] = useState(false);
@@ -1644,8 +1680,45 @@ function Calendar({
       .flatMap((category) => category.services)
       .map((service) => [service.id, service.name]),
   );
-  const selectedAppointments = data.appointments.filter(
-    (appointment) => localDateKey(appointment.startAt) === selectedDate,
+  useEffect(() => {
+    if (!token) return;
+    const monthStart = `${selectedDate.slice(0, 7)}-01`;
+    const monthDate = new Date(`${monthStart}T12:00:00`);
+    monthDate.setMonth(monthDate.getMonth() + 1);
+    const monthEnd = shiftDateKey(localDateKey(monthDate), -1);
+    const fromKey = rangeActive && rangeStart < monthStart ? rangeStart : monthStart;
+    const toKey = rangeActive && rangeEnd > monthEnd ? rangeEnd : monthEnd;
+    const window = dateRangeIso(fromKey, toKey);
+    let cancelled = false;
+    const loadMonth = async () => {
+      await Promise.resolve();
+      if (!cancelled) setCalendarLoading(true);
+      try {
+        const rows = await backendApi.appointments(token, window.from, window.to);
+        if (!cancelled) setCalendarAppointments(rows);
+      } catch {
+        if (!cancelled) setCalendarAppointments(data.appointments);
+      } finally {
+        if (!cancelled) setCalendarLoading(false);
+      }
+    };
+    void loadMonth();
+    return () => { cancelled = true; };
+  }, [token, selectedDate, rangeActive, rangeStart, rangeEnd, data.appointments]);
+  const selectedAppointments = calendarAppointments.filter((appointment) => {
+    const key = localDateKey(appointment.startAt);
+    return rangeActive ? key >= rangeStart && key <= rangeEnd : key === selectedDate;
+  });
+  const dateControls = (
+    <CalendarDateControls
+      value={selectedDate}
+      onChange={(value) => { setSelectedDate(value); setRangeActive(false); }}
+      rangeStart={rangeStart}
+      rangeEnd={rangeEnd}
+      rangeActive={rangeActive}
+      onRangeChange={(from, to) => { setRangeStart(from); setRangeEnd(to < from ? from : to); }}
+      onRangeActive={setRangeActive}
+    />
   );
 
   const reschedule = async () => {
@@ -1718,10 +1791,10 @@ function Calendar({
           <div className="view-switch">
             <span className="active">Day agenda</span>
           </div>
-          <CalendarDateControls value={selectedDate} onChange={setSelectedDate} />
-          <span className="filter-button">No appointments on this date</span>
+          {dateControls}
+          <span className="filter-button">{calendarLoading ? "Loading calendar…" : `No appointments ${rangeActive ? "in this range" : "on this date"}`}</span>
         </div>
-        <div className="calendar-date-summary"><strong>{new Date(`${selectedDate}T12:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</strong><span>Use Previous / Next or choose any past or future date.</span></div>
+        <div className="calendar-date-summary"><strong>{rangeActive ? `${new Date(`${rangeStart}T12:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })} — ${new Date(`${rangeEnd}T12:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}` : new Date(`${selectedDate}T12:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</strong><span>Month, year, day and cross-month ranges are available above.</span></div>
         <WalkInCreator key={selectedDate} token={token} data={data} selectedDate={selectedDate} onRefresh={onRefresh} />
         <div className="admin-card waitlist-empty">
           This date is clear. Add a walk-in or move backward/forward to another day.
@@ -1736,12 +1809,12 @@ function Calendar({
           <div className="view-switch">
             <span className="active">Day agenda</span>
           </div>
-          <CalendarDateControls value={selectedDate} onChange={setSelectedDate} />
+          {dateControls}
           <span className="filter-button">
-            {selectedAppointments.length} appointment{selectedAppointments.length === 1 ? "" : "s"}
+            {calendarLoading ? "Loading…" : `${selectedAppointments.length} appointment${selectedAppointments.length === 1 ? "" : "s"}`}
           </span>
         </div>
-        <div className="calendar-date-summary"><strong>{new Date(`${selectedDate}T12:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</strong><span>{selectedAppointments.filter((item) => item.isWalkIn).length} walk-ins · backend calendar</span></div>
+        <div className="calendar-date-summary"><strong>{rangeActive ? `${new Date(`${rangeStart}T12:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })} — ${new Date(`${rangeEnd}T12:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}` : new Date(`${selectedDate}T12:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</strong><span>{selectedAppointments.filter((item) => item.isWalkIn).length} walk-ins · live backend calendar</span></div>
         <WalkInCreator key={selectedDate} token={token} data={data} selectedDate={selectedDate} onRefresh={onRefresh} />
         {message && (
           <div
@@ -1919,14 +1992,70 @@ function Calendar({
   return null;
 }
 
-function CalendarDateControls({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+function CalendarDateControls({
+  value,
+  onChange,
+  rangeStart,
+  rangeEnd,
+  rangeActive,
+  onRangeChange,
+  onRangeActive,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  rangeStart: string;
+  rangeEnd: string;
+  rangeActive: boolean;
+  onRangeChange: (from: string, to: string) => void;
+  onRangeActive: (value: boolean) => void;
+}) {
   const today = localDateKey(new Date());
+  const selected = new Date(`${value}T12:00:00`);
+  const year = selected.getFullYear();
+  const month = selected.getMonth();
+  const day = selected.getDate();
+  const firstWeekday = new Date(year, month, 1).getDay();
+  const days = new Date(year, month + 1, 0).getDate();
+  const setMonthYear = (nextYear: number, nextMonth: number) => {
+    const nextDay = Math.min(day, new Date(nextYear, nextMonth + 1, 0).getDate());
+    onChange(localDateKey(new Date(nextYear, nextMonth, nextDay, 12)));
+  };
+  const yearOptions = Array.from({ length: 12 }, (_, index) => new Date().getFullYear() - 8 + index);
   return (
-    <div className="calendar-date-controls" aria-label="Calendar date navigation">
-      <button onClick={() => onChange(shiftDateKey(value, -1))} aria-label="Previous date">← Previous</button>
-      <button className={value === today ? "active" : ""} onClick={() => onChange(today)}>Today</button>
-      <input type="date" value={value} onChange={(event) => onChange(event.target.value || today)} aria-label="Choose calendar date" />
-      <button onClick={() => onChange(shiftDateKey(value, 1))} aria-label="Next date">Next →</button>
+    <div className="calendar-date-suite" aria-label="Calendar date navigation">
+      <div className="calendar-date-controls">
+        <button onClick={() => onChange(shiftDateKey(value, -1))} aria-label="Previous date">← Previous</button>
+        <button className={value === today && !rangeActive ? "active" : ""} onClick={() => onChange(today)}>Today</button>
+        <select aria-label="Calendar month" value={month} onChange={(event) => setMonthYear(year, Number(event.target.value))}>
+          {Array.from({ length: 12 }, (_, index) => <option key={index} value={index}>{new Date(2024, index, 1).toLocaleDateString("en-IN", { month: "long" })}</option>)}
+        </select>
+        <select aria-label="Calendar year" value={year} onChange={(event) => setMonthYear(Number(event.target.value), month)}>
+          {yearOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+        </select>
+        <input type="date" value={value} onChange={(event) => onChange(event.target.value || today)} aria-label="Choose calendar date" />
+        <button onClick={() => onChange(shiftDateKey(value, 1))} aria-label="Next date">Next →</button>
+        <button className={rangeActive ? "active" : ""} onClick={() => onRangeActive(!rangeActive)}>Date range</button>
+      </div>
+      <div className="calendar-picker-panel">
+        <div className="mini-calendar">
+          <header>{new Date(year, month, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" })}</header>
+          <div className="mini-calendar-week"><span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span></div>
+          <div className="mini-calendar-days">
+            {Array.from({ length: firstWeekday }, (_, index) => <i key={`blank-${index}`} />)}
+            {Array.from({ length: days }, (_, index) => {
+              const key = localDateKey(new Date(year, month, index + 1, 12));
+              return <button key={key} className={`${key === value && !rangeActive ? "selected" : ""} ${rangeActive && key >= rangeStart && key <= rangeEnd ? "in-range" : ""}`} onClick={() => onChange(key)}>{index + 1}</button>;
+            })}
+          </div>
+        </div>
+        <div className={`calendar-range-fields ${rangeActive ? "active" : ""}`}>
+          <strong>Custom date range</strong>
+          <label>From<input type="date" value={rangeStart} onChange={(event) => onRangeChange(event.target.value || today, rangeEnd)} /></label>
+          <label>To<input type="date" min={rangeStart} value={rangeEnd} onChange={(event) => onRangeChange(rangeStart, event.target.value || rangeStart)} /></label>
+          <button className="button admin-primary" onClick={() => onRangeActive(true)}>Apply range</button>
+          <small>Ranges can cross month and year boundaries.</small>
+        </div>
+      </div>
     </div>
   );
 }
@@ -2124,9 +2253,13 @@ function POS({
     "CASH" | "UPI" | "CARD" | "SPLIT"
   >("UPI");
   const [deliveryMessage, setDeliveryMessage] = useState("");
-  const [openingCash, setOpeningCash] = useState(0);
+  const [openingBreakdown, setOpeningBreakdown] = useState<CashBreakdown>(emptyCashBreakdown);
+  const [openingConfirmation, setOpeningConfirmation] = useState(0);
+  const [openingCountAcknowledged, setOpeningCountAcknowledged] = useState(false);
   const [openingNote, setOpeningNote] = useState("");
   const [openingBusy, setOpeningBusy] = useState(false);
+  const openingCashMinor = cashBreakdownTotalMinor(openingBreakdown);
+  const openingCountConfirmed = openingCountAcknowledged && Math.round(openingConfirmation * 100) === openingCashMinor;
   const customer = data.customers.find((item) => item.id === customerId);
   const serviceCategory = new Map(
     data.categories.flatMap((category) =>
@@ -2421,9 +2554,13 @@ function POS({
     try {
       await backendApi.openCashSession(token, {
         branchId: "main",
-        openingCashMinor: Math.round(openingCash * 100),
+        openingCashMinor,
+        openingBreakdown,
         openingNote: openingNote.trim() || undefined,
       });
+      setOpeningBreakdown(emptyCashBreakdown());
+      setOpeningConfirmation(0);
+      setOpeningCountAcknowledged(false);
       setOpeningNote("");
       onRefresh();
     } catch (cause) {
@@ -2442,9 +2579,12 @@ function POS({
           <p>Record the physical cash already in the drawer before services, products or payments can be added in POS. Closing cash and variance are completed at end of day.</p>
         </div>
         <div className="pos-day-gate-form">
-          <label>Opening cash in drawer (₹)<input type="number" min="0" step="1" value={openingCash} onChange={(event) => setOpeningCash(Math.max(0, Number(event.target.value)))} /></label>
+          <CashDenominationCounter value={openingBreakdown} onChange={setOpeningBreakdown} title="Opening coins and notes" />
+          <label>Re-enter counted total to confirm (₹)<input type="number" min="0" step="1" value={openingConfirmation} onChange={(event) => setOpeningConfirmation(Math.max(0, Number(event.target.value)))} /></label>
+          <label className="consent-box"><input type="checkbox" checked={openingCountAcknowledged} onChange={(event) => setOpeningCountAcknowledged(event.target.checked)} /><span>I physically counted every coin and note</span></label>
+          {!openingCountConfirmed && <p className="cash-mismatch-message">The confirmation amount must equal the denomination total ({money(openingCashMinor)}).</p>}
           <label>Opening note (optional)<input value={openingNote} onChange={(event) => setOpeningNote(event.target.value)} placeholder="Float counted by reception" /></label>
-          <button className="button admin-primary" disabled={openingBusy || !token} onClick={() => void openBusinessDay()}>{openingBusy ? "Opening drawer…" : "Open drawer & start POS"}</button>
+          <button className="button admin-primary" disabled={openingBusy || !token || !openingCountConfirmed} onClick={() => void openBusinessDay()}>{openingBusy ? "Opening drawer…" : "Open drawer & start POS"}</button>
           <button onClick={onOpenCashbook}>View previous cash sessions</button>
         </div>
         {checkoutError && <p className="checkout-error">{checkoutError}</p>}
@@ -2458,6 +2598,8 @@ function POS({
         <span><small>Opened</small><strong>{new Date(data.currentCash.openedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</strong></span>
         <span><small>Opening drawer</small><strong>{money(data.currentCash.openingCashMinor)}</strong></span>
         <span><small>Cash sales</small><strong>{money(data.currentCash.cashSalesMinor ?? 0)}</strong></span>
+        <span><small>UPI sales</small><strong>{money(data.currentCash.upiSalesMinor ?? 0)}</strong></span>
+        <span><small>Card sales</small><strong>{money(data.currentCash.cardSalesMinor ?? 0)}</strong></span>
         <span><small>Expected cash</small><strong>{money(data.currentCash.expectedCashMinor ?? data.currentCash.openingCashMinor)}</strong></span>
         <button onClick={onOpenCashbook}>Expenses / close drawer →</button>
       </div>
@@ -3200,6 +3342,7 @@ function Memberships({
   const [packageValidity, setPackageValidity] = useState(90);
   const [packageItems, setPackageItems] = useState<Record<string, number>>({});
   const [packageId, setPackageId] = useState("");
+  const [soldByStaffId, setSoldByStaffId] = useState("");
   const services = data.categories.flatMap((category) => category.services);
   const enroll = async () => {
     if (!token || !customerId || !planId) return;
@@ -3209,6 +3352,7 @@ function Memberships({
       const membership = await backendApi.enrollMembership(token, {
         customerId,
         planId,
+        soldByStaffId: soldByStaffId || undefined,
       });
       setMessage(
         `Membership enrolled with ${money(membership.balanceMinor)} opening credit.`,
@@ -3273,7 +3417,7 @@ function Memberships({
     setBusy(true);
     setMessage("");
     try {
-      await backendApi.enrollServicePackage(token, { customerId, packageId });
+      await backendApi.enrollServicePackage(token, { customerId, packageId, soldByStaffId: soldByStaffId || undefined });
       setMessage("Service package assigned; every included service was added to its immutable ledger.");
       onRefresh();
     } catch (cause) {
@@ -3359,6 +3503,7 @@ function Memberships({
               ))}
           </select>
         </label>
+        <label>Sold by<select value={soldByStaffId} onChange={(event) => setSoldByStaffId(event.target.value)}><option value="">Front desk / no staff attribution</option>{data.staff.map((staff) => <option key={staff.id} value={staff.id}>{staff.displayName} · {staff.designation ?? "Staff"}</option>)}</select></label>
         <button
           className="button admin-primary"
           disabled={busy || !token || !customerId || !planId}
@@ -3561,7 +3706,7 @@ function Services({
 }) {
   const [categoryId, setCategoryId] = useState("");
   const [categoryName, setCategoryName] = useState("");
-  const [categoryGender, setCategoryGender] = useState<"Male" | "Female" | "Unisex">("Unisex");
+  const [categoryGender, setCategoryGender] = useState("Unisex");
   const [name, setName] = useState("");
   const [duration, setDuration] = useState(60);
   const [price, setPrice] = useState(799);
@@ -3624,7 +3769,7 @@ function Services({
       <section className="admin-card phase-one-form category-create">
         <div><p className="eyebrow">Category manager</p><h2>Create category</h2><small>Examples: Male, Female, Manicure, Pedicure or Colouring.</small></div>
         <label>Category name<input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="Pedicure" /></label>
-        <label>Audience<select value={categoryGender} onChange={(event) => setCategoryGender(event.target.value as "Male" | "Female" | "Unisex")}><option value="Unisex">Unisex</option><option value="Male">Male</option><option value="Female">Female</option></select></label>
+        <label>Audience<select value={categoryGender} onChange={(event) => setCategoryGender(event.target.value)}><option value="Unisex">Unisex</option><option value="Male">Male</option><option value="Female">Female</option><option value="Kids - Unisex">Kids · Unisex</option><option value="Boys">Boys</option><option value="Girls">Girls</option><option value="Baby Boy">Baby boy</option><option value="Baby Girl">Baby girl</option></select></label>
         <button className="button admin-primary" disabled={busy || !token || !categoryName.trim()} onClick={() => void createCategory()}>{busy ? "Creating…" : "Create category"}</button>
       </section>
       <section className="admin-card phase-one-form service-create">
@@ -3732,8 +3877,10 @@ function Services({
 }
 
 function Cashbook({ token, data, onRefresh }: { token: string; data: BackendSnapshot; onRefresh: () => void }) {
-  const [openingCash, setOpeningCash] = useState(0);
-  const [closingCash, setClosingCash] = useState(0);
+  const [openingBreakdown, setOpeningBreakdown] = useState<CashBreakdown>(emptyCashBreakdown);
+  const [closingBreakdown, setClosingBreakdown] = useState<CashBreakdown>(emptyCashBreakdown);
+  const [openingConfirmation, setOpeningConfirmation] = useState(0);
+  const [openingCountAcknowledged, setOpeningCountAcknowledged] = useState(false);
   const [category, setCategory] = useState("Refreshments");
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState(0);
@@ -3741,16 +3888,20 @@ function Cashbook({ token, data, onRefresh }: { token: string; data: BackendSnap
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const session = data.currentCash;
+  const openingCashMinor = cashBreakdownTotalMinor(openingBreakdown);
+  const closingCashMinor = cashBreakdownTotalMinor(closingBreakdown);
+  const openingCountConfirmed = openingCountAcknowledged && Math.round(openingConfirmation * 100) === openingCashMinor;
+  const closingCountMatches = Boolean(session && closingCashMinor === session.expectedCashMinor);
   const operate = async (action: "open" | "close" | "expense") => {
     if (!token) return;
     setBusy(true); setMessage("");
     try {
       if (action === "open") {
-        await backendApi.openCashSession(token, { branchId: "main", openingCashMinor: openingCash * 100 });
-        setOpeningCash(0); setMessage("Cash drawer opened. Every cash sale and expense now reconciles against it.");
+        await backendApi.openCashSession(token, { branchId: "main", openingCashMinor, openingBreakdown });
+        setOpeningBreakdown(emptyCashBreakdown()); setOpeningConfirmation(0); setOpeningCountAcknowledged(false); setMessage("Cash drawer opened. Every cash sale and expense now reconciles against it.");
       } else if (action === "close" && session) {
-        const result = await backendApi.closeCashSession(token, session.id, { closingCashMinor: closingCash * 100 });
-        setClosingCash(0); setMessage(`Drawer closed. Variance: ${money(result.varianceMinor ?? 0)}.`);
+        const result = await backendApi.closeCashSession(token, session.id, { closingCashMinor, closingBreakdown });
+        setClosingBreakdown(emptyCashBreakdown()); setMessage(`Drawer closed. Variance: ${money(result.varianceMinor ?? 0)}.`);
       } else if (action === "expense") {
         await backendApi.createExpense(token, { branchId: "main", category, description, amountMinor: amount * 100, paymentMethod });
         setDescription(""); setAmount(0); setMessage("Expense recorded in the audit trail.");
@@ -3765,14 +3916,16 @@ function Cashbook({ token, data, onRefresh }: { token: string; data: BackendSnap
     <section className="cashbook-kpis">
       <article><small>Opening cash</small><strong>{money(session?.openingCashMinor ?? 0)}</strong><span>{session ? `Opened ${new Date(session.openedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}` : "No open drawer"}</span></article>
       <article><small>Cash sales</small><strong>{money(session?.cashSalesMinor ?? 0)}</strong><span>Paid invoices since opening</span></article>
+      <article><small>UPI sales</small><strong>{money(session?.upiSalesMinor ?? 0)}</strong><span>Does not change drawer cash</span></article>
+      <article><small>Card sales</small><strong>{money(session?.cardSalesMinor ?? 0)}</strong><span>Does not change drawer cash</span></article>
       <article><small>Cash expenses</small><strong>{money(session?.cashExpensesMinor ?? 0)}</strong><span>Recorded against this drawer</span></article>
       <article className="expected"><small>Expected cash</small><strong>{money(session?.expectedCashMinor ?? 0)}</strong><span>Opening + sales − expenses</span></article>
     </section>
     <div className="cashbook-grid">
       <section className="admin-card phase-one-form">
         <div><p className="eyebrow">Daily register</p><h2>{session ? "Close cash drawer" : "Open cash drawer"}</h2><small>{session ? `Business date ${session.businessDate}` : "Enter the physical cash available before the first sale."}</small></div>
-        {!session ? <label>Opening cash (₹)<input type="number" min="0" value={openingCash} onChange={(event) => setOpeningCash(Number(event.target.value))} /></label> : <label>Physical closing cash (₹)<input type="number" min="0" value={closingCash} onChange={(event) => setClosingCash(Number(event.target.value))} /></label>}
-        <button className="button admin-primary" disabled={busy || !token} onClick={() => void operate(session ? "close" : "open")}>{busy ? "Saving…" : session ? "Close & reconcile" : "Open drawer"}</button>
+        {!session ? <><CashDenominationCounter value={openingBreakdown} onChange={setOpeningBreakdown} title="Opening coins and notes" /><label>Re-enter counted total to confirm (₹)<input type="number" min="0" value={openingConfirmation} onChange={(event) => setOpeningConfirmation(Math.max(0, Number(event.target.value)))} /></label><label className="consent-box"><input type="checkbox" checked={openingCountAcknowledged} onChange={(event) => setOpeningCountAcknowledged(event.target.checked)} /><span>I physically counted every coin and note</span></label>{!openingCountConfirmed && <p className="cash-mismatch-message">Enter {money(openingCashMinor)} and confirm the physical count.</p>}</> : <CashDenominationCounter value={closingBreakdown} onChange={setClosingBreakdown} expectedMinor={session.expectedCashMinor} title="Closing coins and notes" />}
+        <button className="button admin-primary" disabled={busy || !token || (session ? !closingCountMatches : !openingCountConfirmed)} onClick={() => void operate(session ? "close" : "open")}>{busy ? "Saving…" : session ? "Close & reconcile" : "Open drawer"}</button>
       </section>
       <section className="admin-card phase-one-form">
         <div><p className="eyebrow">Operating expense</p><h2>Add daily expense</h2><small>Milk, refreshments, supplies, travel and other salon expenses.</small></div>
@@ -4158,6 +4311,21 @@ function Inbox({
       setBusy(false);
     }
   };
+  useEffect(() => {
+    if (!token || !selected?.id) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const next = await backendApi.conversation(token, selected.id);
+        if (!cancelled) setDetail(next);
+      } catch {
+        // Keep the last successful thread visible while a provider reconnects.
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 8_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [selected?.id, token]);
   const send = async () => {
     if (!token || !selected || !body.trim()) return;
     setBusy(true);
@@ -4590,10 +4758,32 @@ function Campaigns({
   );
 }
 
-function Reports({ report }: { report: BackendRangeReport | null }) {
-  const repeatRate = report?.customers.total
-    ? Math.round((report.customers.repeat / report.customers.total) * 100)
-    : 0;
+function Reports({ token, data }: { token: string; data: BackendSnapshot }) {
+  const today = localDateKey(new Date());
+  const [from, setFrom] = useState(`${today.slice(0, 7)}-01`);
+  const [to, setTo] = useState(today);
+  const [staffId, setStaffId] = useState("");
+  const [serviceId, setServiceId] = useState("");
+  const [report, setReport] = useState<BackendRangeReport | null>(data.range);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const services = data.categories.flatMap((category) => category.services);
+  const load = async (nextFrom = from, nextTo = to) => {
+    if (!token || !nextFrom || !nextTo) return;
+    setBusy(true); setMessage("");
+    try {
+      const range = dateRangeIso(nextFrom, nextTo);
+      setReport(await backendApi.rangeReport(token, range.from, range.to, "main", { staffId: staffId || undefined, serviceId: serviceId || undefined }));
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Report could not be loaded.");
+    } finally { setBusy(false); }
+  };
+  const applyPreset = (days: number | "month" | "year") => {
+    const end = today;
+    const start = days === "month" ? `${today.slice(0, 7)}-01` : days === "year" ? `${today.slice(0, 4)}-01-01` : shiftDateKey(today, -(days - 1));
+    setFrom(start); setTo(end); void load(start, end);
+  };
+  const repeatRate = report?.customers.total ? Math.round((report.customers.repeat / report.customers.total) * 100) : 0;
   const top: Array<[string, number]> = report?.topServices ?? [];
   const max = Math.max(...top.map((item) => item[1]), 1);
   const exportCsv = () => {
@@ -4616,16 +4806,24 @@ function Reports({ report }: { report: BackendRangeReport | null }) {
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `cutz-bangs-report-${new Date().toISOString().slice(0, 10)}.csv`;
+    anchor.download = `cutz-bangs-report-${from}-to-${to}.csv`;
     anchor.click();
     URL.revokeObjectURL(url);
   };
   return (
-    <div>
+    <div className="reports-view">
+      {message && <div className="calendar-message">{message}</div>}
       <div className="report-filters">
-        <span className="filter-button">This month</span>
-        <span className="filter-button">All services</span>
-        <span className="filter-button">All staff</span>
+        <button onClick={() => applyPreset(1)}>Today</button>
+        <button onClick={() => applyPreset(7)}>7 days</button>
+        <button onClick={() => applyPreset(15)}>15 days</button>
+        <button onClick={() => applyPreset("month")}>This month</button>
+        <button onClick={() => applyPreset("year")}>This year</button>
+        <label>From<input type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
+        <label>To<input type="date" min={from} value={to} onChange={(event) => setTo(event.target.value)} /></label>
+        <label>Service<select value={serviceId} onChange={(event) => setServiceId(event.target.value)}><option value="">All services</option>{services.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}</select></label>
+        <label>Staff<select value={staffId} onChange={(event) => setStaffId(event.target.value)}><option value="">All staff</option>{data.staff.map((staff) => <option key={staff.id} value={staff.id}>{staff.displayName}</option>)}</select></label>
+        <button className="apply-report" disabled={busy || !from || !to || to < from} onClick={() => void load()}>{busy ? "Loading…" : "Apply filters"}</button>
         <button disabled={!report} onClick={exportCsv}>Export CSV</button>
         <button onClick={() => window.print()}>Print / save PDF</button>
       </div>
@@ -4709,6 +4907,13 @@ function Reports({ report }: { report: BackendRangeReport | null }) {
           </div>
         </article>
       </div>
+      <article className="admin-card report-staff-ranking">
+        <div className="card-head"><div><h2>Staff sales attribution</h2><p>Invoice lines assigned to each staff member in the selected range.</p></div><span className="filter-button">{from} → {to}</span></div>
+        <div className="report-staff-grid">
+          {(report?.topStaff ?? []).map(([id, value], index) => <span key={id}><i>{index + 1}</i><strong>{data.staff.find((staff) => staff.id === id)?.displayName ?? id}</strong><b>{money(value)}</b></span>)}
+          {!report?.topStaff.length && <p className="empty-cart">Staff-attributed sales will appear here.</p>}
+        </div>
+      </article>
     </div>
   );
 }
@@ -4723,9 +4928,21 @@ function Staff({
   onRefresh: () => void;
 }) {
   const [showCreate, setShowCreate] = useState(false);
+  const [editingStaffId, setEditingStaffId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [phone, setPhone] = useState("");
+  const [designation, setDesignation] = useState("Stylist");
+  const [baseSalary, setBaseSalary] = useState(0);
   const [commissionRate, setCommissionRate] = useState(0);
+  const [commissionThreshold, setCommissionThreshold] = useState(0);
+  const [shiftStart, setShiftStart] = useState("10:00");
+  const [shiftEnd, setShiftEnd] = useState("20:00");
+  const [weeklyOff, setWeeklyOff] = useState<number[]>([]);
+  const [lateGraceMinutes, setLateGraceMinutes] = useState(10);
+  const [lateDeduction, setLateDeduction] = useState(0);
+  const [halfDayAfterMinutes, setHalfDayAfterMinutes] = useState(240);
+  const [overtimePaid, setOvertimePaid] = useState(false);
+  const [biometricCode, setBiometricCode] = useState("");
   const [serviceIds, setServiceIds] = useState<string[]>([]);
   const [accountStaffId, setAccountStaffId] = useState("");
   const [accountEmail, setAccountEmail] = useState("");
@@ -4735,24 +4952,48 @@ function Staff({
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const services = data.categories.flatMap((category) => category.services);
+  const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const minutesFromClock = (clock: string) => {
+    const [hour = "0", minute = "0"] = clock.split(":");
+    return Number(hour) * 60 + Number(minute);
+  };
   const create = async () => {
     if (!token || !displayName) return;
     setBusy(true);
     setMessage("");
     try {
-      await backendApi.createStaff(token, {
-        branchId: "main",
+      const workforceProfile = {
         displayName,
         phone: phone || undefined,
+        designation,
+        baseSalaryMinor: Math.round(baseSalary * 100),
         commissionRate: Math.round(commissionRate * 100),
+        commissionThresholdMinor: Math.round(commissionThreshold * 100),
+        lateGraceMinutes,
+        lateDeductionMinor: Math.round(lateDeduction * 100),
+        halfDayAfterMinutes,
+        overtimePaid,
+        biometricCode: biometricCode || undefined,
+        weeklyOff,
+        shifts: weekdays.flatMap((_, weekday) => weeklyOff.includes(weekday) ? [] : [{ weekday, startMin: minutesFromClock(shiftStart), endMin: minutesFromClock(shiftEnd) }]),
+      };
+      if (editingStaffId) await backendApi.updateStaffProfile(token, editingStaffId, workforceProfile);
+      else await backendApi.createStaff(token, {
+        branchId: "main",
+        ...workforceProfile,
         serviceIds,
       });
       setDisplayName("");
       setPhone("");
+      setDesignation("Stylist");
+      setBaseSalary(0);
       setCommissionRate(0);
+      setCommissionThreshold(0);
+      setBiometricCode("");
       setServiceIds([]);
+      setEditingStaffId("");
       setShowCreate(false);
-      setMessage("Staff profile created with selected booking skills.");
+      setMessage(editingStaffId ? "Staff work policy, timing and payroll rules updated." : "Staff profile created with selected booking skills.");
       onRefresh();
     } catch (cause) {
       setMessage(
@@ -4781,7 +5022,7 @@ function Staff({
           .join("")
           .slice(0, 2),
         staff.displayName,
-        staff.user ? prettyStatus(staff.user.role) : "No login",
+        `${staff.designation ?? "Stylist"} · ${staff.user ? prettyStatus(staff.user.role) : "No login"}`,
         `${data.categories.flatMap((category) => category.services).filter((service) => service.serviceStaff.some((link) => link.staff.id === staff.id)).length} services`,
         money(data.range?.topStaff.find(([id]) => id === staff.id)?.[1] ?? 0),
       ]);
@@ -4790,7 +5031,7 @@ function Staff({
       {message && <div className="calendar-message">{message}</div>}
       <button
         className="button admin-primary staff-create-trigger"
-        onClick={() => setShowCreate((current) => !current)}
+        onClick={() => { setEditingStaffId(""); setDisplayName(""); setPhone(""); setShowCreate((current) => !current); }}
       >
         + Add staff
       </button>
@@ -4798,7 +5039,7 @@ function Staff({
         <section className="admin-card phase-one-form">
           <div>
             <p className="eyebrow">Team setup</p>
-            <h2>New staff profile</h2>
+            <h2>{editingStaffId ? "Edit staff work policy" : "New staff profile"}</h2>
           </div>
           <label>
             Name
@@ -4807,10 +5048,13 @@ function Staff({
               onChange={(event) => setDisplayName(event.target.value)}
             />
           </label>
+          <label>Designation<input value={designation} onChange={(event) => setDesignation(event.target.value)} placeholder="Senior stylist" /></label>
+          <label>Base salary (₹ / month)<input type="number" min="0" value={baseSalary} onChange={(event) => setBaseSalary(Math.max(0, Number(event.target.value)))} /></label>
           <label>
             Commission %
             <input type="number" min="0" max="100" step="0.25" value={commissionRate} onChange={(event) => setCommissionRate(Number(event.target.value))} />
           </label>
+          <label>Commission starts after daily sales (₹)<input type="number" min="0" value={commissionThreshold} onChange={(event) => setCommissionThreshold(Math.max(0, Number(event.target.value)))} /></label>
           <label>
             Phone
             <input
@@ -4818,6 +5062,14 @@ function Staff({
               onChange={(event) => setPhone(event.target.value)}
             />
           </label>
+          <label>Shift starts<input type="time" value={shiftStart} onChange={(event) => setShiftStart(event.target.value)} /></label>
+          <label>Shift ends<input type="time" value={shiftEnd} onChange={(event) => setShiftEnd(event.target.value)} /></label>
+          <label>Late grace (minutes)<input type="number" min="0" max="180" value={lateGraceMinutes} onChange={(event) => setLateGraceMinutes(Number(event.target.value))} /></label>
+          <label>Deduction for each late day (₹)<input type="number" min="0" value={lateDeduction} onChange={(event) => setLateDeduction(Math.max(0, Number(event.target.value)))} /></label>
+          <label>Half day below (worked minutes)<input type="number" min="30" max="720" value={halfDayAfterMinutes} onChange={(event) => setHalfDayAfterMinutes(Number(event.target.value))} /></label>
+          <label>Biometric employee code<input value={biometricCode} onChange={(event) => setBiometricCode(event.target.value)} placeholder="EMP-001" /></label>
+          <fieldset className="weekly-off-field"><legend>Weekly off</legend>{weekdays.map((day, index) => <label key={day}><input type="checkbox" checked={weeklyOff.includes(index)} onChange={(event) => setWeeklyOff((current) => event.target.checked ? [...current, index] : current.filter((value) => value !== index))} />{day}</label>)}</fieldset>
+          <label className="consent-box"><input type="checkbox" checked={overtimePaid} onChange={(event) => setOvertimePaid(event.target.checked)} /><span>Pay overtime (off by default)</span></label>
           <fieldset>
             <legend>Bookable skills</legend>
             {services.map((service) => (
@@ -4842,16 +5094,16 @@ function Staff({
             disabled={busy || !token || !displayName}
             onClick={() => void create()}
           >
-            {busy ? "Saving…" : "Create staff"}
+            {busy ? "Saving…" : editingStaffId ? "Save staff policy" : "Create staff"}
           </button>
         </section>
       )}
       <section className="admin-card phase-one-form team-access-form">
-        <div><p className="eyebrow">Role-based access</p><h2>Manager, reception & staff login</h2><small>Managers use the admin workspace, reception sees front-desk tools, and staff use their own daily portal.</small></div>
+        <div><p className="eyebrow">Role-based access</p><h2>Manager, reception & staff login</h2><small>Login IDs are visible below. For security, an existing password can never be viewed—enter a new temporary password here to create or reset it.</small></div>
         <label>Team member<select value={accountStaffId} onChange={(event) => { const id = event.target.value; setAccountStaffId(id); const member = team.find((item) => item.id === id); setAccountEmail(member?.user?.email ?? ""); setAccountRole((member?.user?.role as typeof accountRole) ?? "STAFF"); setAccountCommission((member?.commissionRate ?? 0) / 100); }}><option value="">Select team member</option>{team.map((member) => <option key={member.id} value={member.id}>{member.displayName} · {member.user ? prettyStatus(member.user.role) : "No login"}</option>)}</select></label>
         <label>Login role<select value={accountRole} onChange={(event) => setAccountRole(event.target.value as typeof accountRole)}><option value="MANAGER">Manager</option><option value="RECEPTION">Reception</option><option value="STAFF">Staff</option></select></label>
         <label>Email<input type="email" value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} /></label>
-        <label>New password<input type="password" minLength={10} value={accountPassword} onChange={(event) => setAccountPassword(event.target.value)} placeholder="Minimum 10 characters" /></label>
+        <label>New / reset password<input type="password" minLength={10} value={accountPassword} onChange={(event) => setAccountPassword(event.target.value)} placeholder="Minimum 10 characters" /><small>Share once, then ask the employee to change it.</small></label>
         <label>Commission %<input type="number" min="0" max="100" step="0.25" value={accountCommission} onChange={(event) => setAccountCommission(Number(event.target.value))} /></label>
         <button className="button admin-primary" disabled={busy || !accountStaffId || !accountEmail || accountPassword.length < 10} onClick={() => void setAccount()}>Save login & commission</button>
       </section>
@@ -4871,6 +5123,7 @@ function Staff({
                 <strong>{sales}</strong>
               </span>
             </div>
+            <p className="staff-policy-summary">{team[index]?.user?.email ?? "Login not created"} · {(team[index]?.commissionRate ?? 0) / 100}% after {money(team[index]?.commissionThresholdMinor ?? 0)}</p>
             <button
               onClick={() => {
                 const member = team[index];
@@ -4879,7 +5132,26 @@ function Staff({
                 setAccountEmail(member.user?.email ?? "");
                 setAccountRole((member.user?.role as typeof accountRole) ?? "STAFF");
                 setAccountCommission((member.commissionRate ?? 0) / 100);
-                document.querySelector(".team-access-form")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                setEditingStaffId(member.id);
+                setDisplayName(member.displayName);
+                setPhone(member.phone ?? "");
+                setDesignation(member.designation ?? "Stylist");
+                setBaseSalary((member.baseSalaryMinor ?? 0) / 100);
+                setCommissionRate((member.commissionRate ?? 0) / 100);
+                setCommissionThreshold((member.commissionThresholdMinor ?? 0) / 100);
+                setLateGraceMinutes(member.lateGraceMinutes ?? 10);
+                setLateDeduction((member.lateDeductionMinor ?? 0) / 100);
+                setHalfDayAfterMinutes(member.halfDayAfterMinutes ?? 240);
+                setOvertimePaid(Boolean(member.overtimePaid));
+                setBiometricCode(member.biometricCode ?? "");
+                setWeeklyOff(member.weeklyOff ?? []);
+                const firstShift = member.shifts?.[0];
+                if (firstShift) {
+                  setShiftStart(`${String(Math.floor(firstShift.startMin / 60)).padStart(2, "0")}:${String(firstShift.startMin % 60).padStart(2, "0")}`);
+                  setShiftEnd(`${String(Math.floor(firstShift.endMin / 60)).padStart(2, "0")}:${String(firstShift.endMin % 60).padStart(2, "0")}`);
+                }
+                setShowCreate(true);
+                window.setTimeout(() => document.querySelector(".staff-view .phase-one-form")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
               }}
             >
               Manage profile →
@@ -4906,6 +5178,12 @@ function Attendance({
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [leaveStaffId, setLeaveStaffId] = useState("");
+  const [leaveFrom, setLeaveFrom] = useState(localDateKey(new Date()));
+  const [leaveTo, setLeaveTo] = useState(localDateKey(new Date()));
+  const [leaveReason, setLeaveReason] = useState("");
+  const [deviceName, setDeviceName] = useState("");
+  const [deviceCredential, setDeviceCredential] = useState<{ secret: string; webhookPath: string } | null>(null);
   const record = async () => {
     if (!token || !staffId || !selfie || !consent) return;
     setBusy(true);
@@ -4952,6 +5230,31 @@ function Attendance({
     } finally {
       setBusy(false);
     }
+  };
+  const requestLeave = async () => {
+    if (!token || !leaveStaffId || !leaveReason.trim()) return;
+    setBusy(true); setMessage("");
+    try {
+      await backendApi.createLeave(token, { staffId: leaveStaffId, startDate: leaveFrom, endDate: leaveTo, reason: leaveReason, approved: true });
+      setLeaveReason(""); setMessage("Leave recorded and approved by the administrator."); onRefresh();
+    } catch (cause) { setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Leave could not be recorded."); }
+    finally { setBusy(false); }
+  };
+  const reviewLeave = async (leaveId: string, approved: boolean) => {
+    if (!token) return;
+    setBusy(true); setMessage("");
+    try { await backendApi.reviewLeave(token, leaveId, approved); setMessage(approved ? "Leave approved." : "Leave marked unapproved."); onRefresh(); }
+    catch (cause) { setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Leave could not be reviewed."); }
+    finally { setBusy(false); }
+  };
+  const createDevice = async () => {
+    if (!token || !deviceName.trim()) return;
+    setBusy(true); setMessage("");
+    try {
+      const device = await backendApi.createBiometricDevice(token, { branchId: "main", name: deviceName, provider: "GENERIC_WEBHOOK" });
+      setDeviceCredential({ secret: device.secret, webhookPath: device.webhookPath }); setDeviceName(""); setMessage("Biometric webhook created. Copy the secret now; it will not be shown again."); onRefresh();
+    } catch (cause) { setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Biometric device could not be added."); }
+    finally { setBusy(false); }
   };
   const rows = data.attendance.map((item) => {
         const minutes =
@@ -5043,6 +5346,24 @@ function Attendance({
           {busy ? "Verifying…" : "Verify & record"}
         </button>
       </section>
+      <div className="workforce-admin-grid">
+        <section className="admin-card phase-one-form leave-admin-card">
+          <div><p className="eyebrow">Leave calendar</p><h2>Add or review leave</h2><small>Approved dates are returned to the staff portal and can be used by scheduling.</small></div>
+          <label>Staff<select value={leaveStaffId} onChange={(event) => setLeaveStaffId(event.target.value)}><option value="">Select staff</option>{data.staff.map((staff) => <option key={staff.id} value={staff.id}>{staff.displayName}</option>)}</select></label>
+          <label>From<input type="date" value={leaveFrom} onChange={(event) => setLeaveFrom(event.target.value)} /></label>
+          <label>To<input type="date" min={leaveFrom} value={leaveTo} onChange={(event) => setLeaveTo(event.target.value)} /></label>
+          <label>Reason<input value={leaveReason} onChange={(event) => setLeaveReason(event.target.value)} placeholder="Weekly off / personal leave" /></label>
+          <button className="button admin-primary" disabled={busy || !leaveStaffId || !leaveReason.trim() || leaveTo < leaveFrom} onClick={() => void requestLeave()}>Save approved leave</button>
+          <div className="leave-list">{data.leaves.slice(0, 8).map((leave) => <div key={leave.id}><span><strong>{leave.staff?.displayName ?? data.staff.find((staff) => staff.id === leave.staffId)?.displayName ?? "Staff"}</strong><small>{new Date(leave.startDate).toLocaleDateString("en-IN")} → {new Date(leave.endDate).toLocaleDateString("en-IN")} · {leave.reason}</small></span><button className={leave.approved ? "approved" : "pending"} disabled={busy} onClick={() => void reviewLeave(leave.id, !leave.approved)}>{leave.approved ? "Approved" : "Approve"}</button></div>)}{!data.leaves.length && <p className="empty-cart">No leave requests yet.</p>}</div>
+        </section>
+        <section className="admin-card phase-one-form biometric-admin-card">
+          <div><p className="eyebrow">Biometric bridge</p><h2>Connect attendance device</h2><small>Use a device or middleware that can POST JSON webhooks. Match its employee code with each staff profile.</small></div>
+          <label>Device name<input value={deviceName} onChange={(event) => setDeviceName(event.target.value)} placeholder="Main entrance biometric" /></label>
+          <button className="button admin-primary" disabled={busy || !deviceName.trim()} onClick={() => void createDevice()}>Generate webhook credential</button>
+          {deviceCredential && <div className="one-time-secret"><strong>Copy once</strong><label>Webhook<input readOnly value={deviceCredential.webhookPath} onFocus={(event) => event.target.select()} /></label><label>Bearer secret<input readOnly value={deviceCredential.secret} onFocus={(event) => event.target.select()} /></label><small>Send eventId, employeeCode, action (CHECK_IN/CHECK_OUT) and occurredAt.</small></div>}
+          <div className="device-list">{data.biometricDevices.map((device) => <span key={device.id}><i className={device.isActive ? "ok" : "warn"}>{device.isActive ? "✓" : "!"}</i><strong>{device.name}</strong><small>{device.lastSeenAt ? `Last sync ${new Date(device.lastSeenAt).toLocaleString("en-IN")}` : "Waiting for first event"}</small></span>)}</div>
+        </section>
+      </div>
       <article className="admin-card attendance-card">
         <div className="card-head">
           <div>
@@ -5104,6 +5425,11 @@ function Payroll({ data }: { data: BackendSnapshot }) {
           <strong>{money(totalCommission)}</strong>
           <small>Service rate + product-specific retail commission</small>
         </article>
+        <article>
+          <span>Estimated payroll</span>
+          <strong>{money(data.payroll.reduce((sum, row) => sum + (row.estimatedPayMinor ?? row.commissionMinor), 0))}</strong>
+          <small>Base salary − late deductions + commission</small>
+        </article>
       </div>
       <article className="admin-card payroll-table">
         <header>
@@ -5111,8 +5437,10 @@ function Payroll({ data }: { data: BackendSnapshot }) {
           <span>Present days</span>
           <span>Worked</span>
           <span>Late</span>
+          <span>Salary / deduction</span>
           <span>Service / retail</span>
           <span>Commission</span>
+          <span>Estimated pay</span>
         </header>
         {data.payroll.map((row) => (
           <div key={row.staffId}>
@@ -5121,12 +5449,14 @@ function Payroll({ data }: { data: BackendSnapshot }) {
             <span>
               {Math.floor(row.workedMinutes / 60)}h {row.workedMinutes % 60}m
             </span>
-            <span>{row.lateMinutes}m</span>
+            <span>{row.lateMinutes}m · {row.lateDays ?? 0} days · {row.halfDays ?? 0} half</span>
+            <span>{money(row.baseSalaryMinor ?? 0)} / −{money(row.lateDeductionMinor ?? 0)}</span>
             <span>{money(row.serviceRevenueMinor)} / {money(row.productRevenueMinor ?? 0)}</span>
             <strong>
               {money(row.commissionMinor)}{" "}
               <small>({row.commissionRateBps / 100}% service · {money(row.productCommissionMinor ?? 0)} retail)</small>
             </strong>
+            <strong>{money(row.estimatedPayMinor ?? row.commissionMinor)}</strong>
           </div>
         ))}
         {!data.payroll.length && (

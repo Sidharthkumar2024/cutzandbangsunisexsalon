@@ -109,16 +109,18 @@ export default async function packageRoutes(app: FastifyInstance) {
     "/customer-packages",
     { preHandler: authorize(...ADMIN, "RECEPTION") },
     async (req, reply) => {
-      const body = z.object({ customerId: z.string(), packageId: z.string() }).parse(req.body);
-      const [customer, plan] = await Promise.all([
+      const body = z.object({ customerId: z.string(), packageId: z.string(), soldByStaffId: z.string().optional() }).parse(req.body);
+      const [customer, plan, salesperson] = await Promise.all([
         prisma.customer.findUnique({ where: { id: body.customerId }, select: { branchId: true } }),
         prisma.servicePackagePlan.findFirst({
           where: { id: body.packageId, isActive: true, deletedAt: null },
           include: { items: true },
         }),
+        body.soldByStaffId ? prisma.staff.findFirst({ where: { id: body.soldByStaffId, isActive: true, deletedAt: null } }) : null,
       ]);
       if (!customer) return reply.code(404).send({ error: "customer_not_found" });
       if (!plan) return reply.code(404).send({ error: "package_not_found" });
+      if (body.soldByStaffId && (!salesperson || salesperson.branchId !== customer.branchId)) return reply.code(400).send({ error: "salesperson_not_found" });
       if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user?.branchId !== customer.branchId) {
         return reply.code(403).send({ error: "forbidden" });
       }
@@ -127,6 +129,7 @@ export default async function packageRoutes(app: FastifyInstance) {
           data: {
             customerId: body.customerId,
             packageId: plan.id,
+            soldByStaffId: body.soldByStaffId,
             expiresAt: plan.validityDays
               ? new Date(Date.now() + plan.validityDays * 86_400_000)
               : null,

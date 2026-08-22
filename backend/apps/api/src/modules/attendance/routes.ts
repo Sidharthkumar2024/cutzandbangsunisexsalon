@@ -53,7 +53,7 @@ export default async function attendanceRoutes(app: FastifyInstance) {
     const hour = Number(localParts.find(part => part.type === "hour")?.value ?? 0) % 24;
     const minute = Number(localParts.find(part => part.type === "minute")?.value ?? 0);
     const shift = await prisma.shift.findFirst({ where: { staffId: staff.id, weekday }, orderBy: { startMin: "asc" } });
-    const lateMinutes = shift ? Math.max(0, hour * 60 + minute - shift.startMin) : 0;
+    const lateMinutes = shift ? Math.max(0, hour * 60 + minute - shift.startMin - staff.lateGraceMinutes) : 0;
     const attendance = await prisma.attendance.create({ data: { staffId: staff.id, checkInAt: now, checkInLat: body.lat, checkInLng: body.lng, selfieUrl: body.selfieKey, consentAt: now, lateMinutes } });
     await audit("attendance.check_in", "Attendance", attendance.id, { actorUserId: req.user?.id, after: { staffId: staff.id, distanceMeters: location.distanceMeters, lateMinutes }, ip: req.ip });
     return reply.code(201).send({ ...attendance, distanceMeters: location.distanceMeters });
@@ -69,7 +69,12 @@ export default async function attendanceRoutes(app: FastifyInstance) {
     if (!open?.checkInAt) return reply.code(409).send({ error: "not_checked_in" });
     const now = new Date();
     const workedMinutes = minutesBetween(open.checkInAt, now);
-    const attendance = await prisma.attendance.update({ where: { id: open.id }, data: { checkOutAt: now, checkOutLat: body.lat, checkOutLng: body.lng, checkOutSelfieUrl: body.selfieKey } });
+    const local = new Intl.DateTimeFormat("en-US", { timeZone: staff.branch.timezone, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);
+    const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(local.find((part) => part.type === "weekday")?.value ?? "Sun");
+    const minuteOfDay = (Number(local.find((part) => part.type === "hour")?.value ?? 0) % 24) * 60 + Number(local.find((part) => part.type === "minute")?.value ?? 0);
+    const shift = await prisma.shift.findFirst({ where: { staffId: staff.id, weekday }, orderBy: { startMin: "asc" } });
+    const overtimeMin = shift ? Math.max(0, minuteOfDay - shift.endMin) : 0;
+    const attendance = await prisma.attendance.update({ where: { id: open.id }, data: { checkOutAt: now, checkOutLat: body.lat, checkOutLng: body.lng, checkOutSelfieUrl: body.selfieKey, overtimeMin } });
     await audit("attendance.check_out", "Attendance", attendance.id, { actorUserId: req.user?.id, before: { checkOutAt: null }, after: { checkOutAt: now.toISOString(), workedMinutes, distanceMeters: location.distanceMeters }, ip: req.ip });
     return { ...attendance, workedMinutes, distanceMeters: location.distanceMeters };
   });
@@ -86,9 +91,16 @@ export default async function attendanceRoutes(app: FastifyInstance) {
       const workedMinutes = member.attendance.reduce((sum, row) => sum + minutesBetween(row.checkInAt, row.checkOutAt), 0);
       const serviceRevenueMinor = member.invoiceItems.filter(item => item.kind === "service").reduce((sum, item) => sum + item.lineTotalMinor, 0);
       const productRevenueMinor = member.invoiceItems.filter(item => item.kind === "product").reduce((sum, item) => sum + item.lineTotalMinor, 0);
-      const serviceCommissionMinor = commissionMinor(serviceRevenueMinor, member.commissionRate);
+      const serviceCommissionMinor = serviceRevenueMinor >= member.commissionThresholdMinor ? commissionMinor(serviceRevenueMinor, member.commissionRate) : 0;
       const productCommissionMinor = member.invoiceItems.filter(item => item.kind === "product").reduce((sum, item) => sum + commissionMinor(item.lineTotalMinor, productCommission.get(item.productId ?? "") ?? 0), 0);
-      return { staffId: member.id, displayName: member.displayName, presentDays: new Set(member.attendance.map(row => row.createdAt.toISOString().slice(0, 10))).size, workedMinutes, lateMinutes: member.attendance.reduce((sum, row) => sum + row.lateMinutes, 0), overtimeMinutes: member.attendance.reduce((sum, row) => sum + row.overtimeMin, 0), serviceRevenueMinor, productRevenueMinor, commissionRateBps: member.commissionRate, serviceCommissionMinor, productCommissionMinor, commissionMinor: serviceCommissionMinor + productCommissionMinor };
+      const lateDays = member.attendance.filter((row) => row.lateMinutes > 0).length;
+      const halfDays = member.attendance.filter((row) => {
+        const minutes = minutesBetween(row.checkInAt, row.checkOutAt);
+        return row.checkOutAt && minutes > 0 && minutes < member.halfDayAfterMinutes;
+      }).length;
+      const lateDeductionMinor = lateDays * member.lateDeductionMinor;
+      const commissionTotalMinor = serviceCommissionMinor + productCommissionMinor;
+      return { staffId: member.id, displayName: member.displayName, designation: member.designation, presentDays: new Set(member.attendance.map(row => row.createdAt.toISOString().slice(0, 10))).size, workedMinutes, lateMinutes: member.attendance.reduce((sum, row) => sum + row.lateMinutes, 0), lateDays, halfDays, overtimeMinutes: member.attendance.reduce((sum, row) => sum + row.overtimeMin, 0), overtimePaid: member.overtimePaid, serviceRevenueMinor, productRevenueMinor, commissionRateBps: member.commissionRate, commissionThresholdMinor: member.commissionThresholdMinor, serviceCommissionMinor, productCommissionMinor, commissionMinor: commissionTotalMinor, baseSalaryMinor: member.baseSalaryMinor, lateDeductionMinor, estimatedPayMinor: Math.max(0, member.baseSalaryMinor - lateDeductionMinor) + commissionTotalMinor };
     });
   });
 }
