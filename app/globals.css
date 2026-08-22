@@ -479,11 +479,44 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .content-loading > span { width: 28px; height: 28px; border: 3px solid #e1ddd7; border-top-color: #d1725b; border-radius: 50%; animation: content-spin .8s linear infinite; }
 @keyframes content-spin { to { transform: rotate(360deg); } }
 
+.backend-banner { min-height: 54px; display: grid; grid-template-columns: auto minmax(210px, 1fr) minmax(140px, 210px) minmax(120px, 180px) auto; align-items: center; gap: 10px; margin-bottom: 14px; padding: 10px 13px; border: 1px solid #ded9d3; border-radius: 11px; background: #fffdfa; box-shadow: 0 5px 18px rgb(64 50 43 / 5%); }
+.backend-banner > span { color: #d19a4c; font-size: 10px; }
+.backend-banner.connected > span { color: #5f9865; }
+.backend-banner.offline > span { color: #b75c52; }
+.backend-banner > div { display: flex; flex-direction: column; gap: 2px; }
+.backend-banner strong { font-size: 8px; }
+.backend-banner small { color: #918d86; font-size: 6px; }
+.backend-banner input { min-width: 0; height: 31px; padding: 0 9px; border: 1px solid #dedad4; border-radius: 7px; background: #fbfaf8; font-size: 7px; outline: none; }
+.backend-banner input:focus { border-color: #cc765f; box-shadow: 0 0 0 2px rgb(204 118 95 / 10%); }
+.backend-banner button { height: 31px; padding: 0 12px; border: 1px solid #dedad4; border-radius: 7px; background: white; color: #754239; font-size: 7px; font-weight: 800; cursor: pointer; }
+.backend-banner.connected { grid-template-columns: auto 1fr auto auto; border-color: #cfe0d0; background: #f8fcf8; }
+.live-agenda { overflow: hidden; }
+.live-agenda > header, .live-agenda > div { display: grid; grid-template-columns: 90px 1.4fr 1fr 100px; align-items: center; gap: 15px; min-height: 56px; padding: 9px 16px; border-bottom: 1px solid #ebe8e3; }
+.live-agenda > header { min-height: 38px; background: #f8f7f4; color: #928e87; font-size: 6px; font-weight: 800; text-transform: uppercase; }
+.live-agenda > div > strong { font-size: 9px; }
+.live-agenda > div > span { display: flex; flex-direction: column; gap: 3px; font-size: 8px; }
+.live-agenda > div small { color: #96918a; font-size: 6px; }
+.live-agenda em { width: max-content; padding: 4px 7px; border-radius: 10px; background: #f0eaf7; color: #674e82; font-size: 6px; font-style: normal; font-weight: 800; }
+.membership-plan-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.membership-plan-grid .plan-card { min-height: 240px; }
+.inventory-table { overflow: hidden; }
+.inventory-table > header, .inventory-table > div { display: grid; grid-template-columns: 1.7fr .8fr .6fr .7fr .8fr; align-items: center; gap: 12px; min-height: 50px; padding: 8px 16px; border-bottom: 1px solid #ece9e5; font-size: 8px; }
+.inventory-table > header { min-height: 38px; background: #f8f7f4; color: #918d86; font-size: 6px; font-weight: 800; text-transform: uppercase; }
+.inventory-table > div > span:first-child { display: flex; flex-direction: column; gap: 3px; }
+.inventory-table small { color: #96918a; font-size: 6px; }
+.inventory-table .low { color: #af554b; }
+.checkout-error { margin: 6px 0; color: #a94e44; font-size: 7px; }
+.payment-mix-list { display: grid; gap: 10px; margin-top: 20px; }
+.payment-mix-list p { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #ece9e5; font-size: 8px; }
+
 @media (max-width: 1100px) {
   .membership-plans-section { grid-template-columns: 1fr; }
   .membership-intro { max-width: 680px; }
   .testimonial-editor-grid, .membership-editor-grid { grid-template-columns: 1fr 1fr; }
   .content-savebar { left: 225px; right: 20px; }
+  .backend-banner { grid-template-columns: auto 1fr auto; }
+  .backend-banner input { grid-row: 2; }
+  .membership-plan-grid { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 780px) {
@@ -501,6 +534,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .content-remove { grid-column: 2; justify-self: end; }
   .testimonial-editor-grid, .membership-editor-grid { grid-template-columns: 1fr; }
   .content-savebar { left: 14px; right: 14px; bottom: 10px; }
+  .backend-banner, .backend-banner.connected { grid-template-columns: auto 1fr; }
+  .backend-banner input, .backend-banner button { grid-column: 2; width: 100%; }
+  .live-agenda > header, .live-agenda > div { grid-template-columns: 70px 1fr 90px; }
+  .live-agenda > header span:nth-child(3), .live-agenda > div > span:nth-child(3) { display: none; }
+  .membership-plan-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 520px) {

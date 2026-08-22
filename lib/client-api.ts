@@ -6,10 +6,8 @@ export type BookingPayload = {
   customer: { name: string; phone: string; email?: string };
 };
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL ?? '';
-
 export async function submitBooking(payload: BookingPayload) {
-  const response = await fetch(`${apiBase}/api/bookings`, {
+  const response = await fetch('/api/bookings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
