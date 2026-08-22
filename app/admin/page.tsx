@@ -50,6 +50,12 @@ type CartItem = {
   price: number;
   taxRateBps: number;
 };
+type SaleService = {
+  id: string;
+  name: string;
+  duration: string;
+  price: number;
+};
 
 const money = (minor: number) =>
   `₹${Math.round(minor / 100).toLocaleString("en-IN")}`;
@@ -66,6 +72,16 @@ const toDateTimeInput = (value: string) => {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
     .toISOString()
     .slice(0, 16);
+};
+const localDateKey = (value: Date | string) => {
+  const date = typeof value === "string" ? new Date(value) : value;
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
+};
+const shiftDateKey = (value: string, days: number) => {
+  const date = new Date(`${value}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return localDateKey(date);
 };
 const parseCsv = (text: string) => {
   const rows: string[][] = [];
@@ -120,7 +136,7 @@ const navGroups: Array<{
     label: "Relationships",
     items: [
       { id: "customers", label: "Customers", icon: "CU" },
-      { id: "memberships", label: "Memberships", icon: "ME" },
+      { id: "memberships", label: "Memberships & packages", icon: "ME" },
       { id: "inbox", label: "Inbox", icon: "IN" },
     ],
   },
@@ -152,106 +168,6 @@ const navGroups: Array<{
   },
 ];
 
-const appointments = [
-  {
-    time: "10:00",
-    name: "Aanya Mehta",
-    service: "Global colour",
-    staff: "Riya",
-    status: "Checked in",
-    tone: "mint",
-  },
-  {
-    time: "11:30",
-    name: "Kabir Sethi",
-    service: "Cut & beard sculpt",
-    staff: "Arjun",
-    status: "Confirmed",
-    tone: "lavender",
-  },
-  {
-    time: "12:45",
-    name: "Diya Rao",
-    service: "Skin reset facial",
-    staff: "Meher",
-    status: "Pending",
-    tone: "amber",
-  },
-  {
-    time: "02:30",
-    name: "Neha Kapoor",
-    service: "Hair spa",
-    staff: "Riya",
-    status: "Confirmed",
-    tone: "lavender",
-  },
-  {
-    time: "04:30",
-    name: "Mira Jain",
-    service: "Signature cut",
-    staff: "Arjun",
-    status: "Confirmed",
-    tone: "lavender",
-  },
-];
-
-const customers = [
-  {
-    initials: "AM",
-    name: "Aanya Mehta",
-    phone: "+91 98990 14282",
-    visits: 12,
-    spend: "₹28,450",
-    last: "Today",
-    tags: ["VIP", "Repeat"],
-  },
-  {
-    initials: "KS",
-    name: "Kabir Sethi",
-    phone: "+91 98112 76540",
-    visits: 7,
-    spend: "₹11,320",
-    last: "Today",
-    tags: ["Repeat"],
-  },
-  {
-    initials: "DR",
-    name: "Diya Rao",
-    phone: "+91 99716 34218",
-    visits: 1,
-    spend: "₹1,499",
-    last: "Today",
-    tags: ["New"],
-  },
-  {
-    initials: "NK",
-    name: "Neha Kapoor",
-    phone: "+91 88001 22876",
-    visits: 9,
-    spend: "₹19,760",
-    last: "18 Aug",
-    tags: ["At-risk"],
-  },
-  {
-    initials: "RJ",
-    name: "Rohan Joshi",
-    phone: "+91 98102 44670",
-    visits: 5,
-    spend: "₹8,990",
-    last: "12 May",
-    tags: ["Lapsed"],
-  },
-];
-
-const saleServices = [
-  { id: "cut", name: "Signature cut", duration: "60m", price: 799 },
-  { id: "colour", name: "Global colour", duration: "120m", price: 2499 },
-  { id: "spa", name: "Hair spa", duration: "75m", price: 1299 },
-  { id: "facial", name: "Skin reset", duration: "75m", price: 1499 },
-  { id: "beard", name: "Beard sculpt", duration: "35m", price: 499 },
-  { id: "manicure", name: "Manicure", duration: "45m", price: 699 },
-];
-
 const viewTitles: Record<View, [string, string]> = {
   dashboard: ["Good morning, Sana", "Here’s how Cutz & Bangs is doing today."],
   calendar: [
@@ -260,7 +176,7 @@ const viewTitles: Record<View, [string, string]> = {
   ],
   pos: ["Point of sale", "Build, mark and issue a bill in a few taps."],
   customers: ["Customers", "One clear history across every booking and visit."],
-  memberships: ["Memberships", "Plans, balances and immutable ledger entries."],
+  memberships: ["Memberships & packages", "Create plans, build service bundles, assign them and track every redemption."],
   services: [
     "Service catalogue",
     "Create bookable services and connect eligible artists.",
@@ -300,17 +216,7 @@ const viewTitles: Record<View, [string, string]> = {
 export default function AdminPage() {
   const [view, setView] = useState<View>("dashboard");
   const [search, setSearch] = useState("");
-  const [cart, setCart] = useState<CartItem[]>([
-    {
-      id: "cut-style",
-      kind: "service",
-      serviceId: "cut-style",
-      name: "Signature cut",
-      staff: "Arjun",
-      price: 799,
-      taxRateBps: 1800,
-    },
-  ]);
+  const [cart, setCart] = useState<CartItem[]>([]);
   const [memberCredit, setMemberCredit] = useState(false);
   const [paid, setPaid] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
@@ -319,31 +225,6 @@ export default function AdminPage() {
   const unreadNotifications = backend.data.notifications.filter((item) => !item.readAt);
   const unreadConversations = backend.data.conversations.filter((item) => item.unread).length;
   const [title, subtitle] = viewTitles[view];
-  const customerRows = backend.data.customers.length
-    ? backend.data.customers.map((customer) => ({
-        initials: customer.name
-          .split(" ")
-          .map((part) => part[0])
-          .join("")
-          .slice(0, 2),
-        name: customer.name,
-        phone: customer.phone ?? "No phone",
-        visits: customer.visitCount,
-        spend: money(customer.totalSpent),
-        last: customer.lastVisitAt
-          ? new Date(customer.lastVisitAt).toLocaleDateString("en-IN", {
-              day: "numeric",
-              month: "short",
-            })
-          : "No visit",
-        tags: customer.segments.map(prettyStatus),
-      }))
-    : customers;
-  const filteredCustomers = customerRows.filter(
-    (customer) =>
-      customer.name.toLowerCase().includes(search.toLowerCase()) ||
-      customer.phone.includes(search),
-  );
   const liveServices = backend.data.categories
     .flatMap((category) => category.services)
     .map((service) => ({
@@ -352,7 +233,7 @@ export default function AdminPage() {
       duration: `${service.durationMin}m`,
       price: service.priceMinor / 100,
     }));
-  const pointOfSaleServices = liveServices.length ? liveServices : saleServices;
+  const pointOfSaleServices = liveServices;
   const subtotal = cart.reduce((sum, item) => sum + item.price, 0);
   // Membership credit is an auditable payment tender, not a discount. Invoice
   // tax and totals remain unchanged; redemption is posted to the ledger.
@@ -385,17 +266,12 @@ export default function AdminPage() {
     setMobileNav(false);
     setPaid(false);
   };
-  const addItem = (item: (typeof saleServices)[number]) => {
+  const addItem = (item: SaleService) => {
     const backendService = backend.data.categories
       .flatMap((category) => category.services)
       .find((service) => service.id === item.id);
     const staff =
-      backendService?.serviceStaff[0]?.staff.displayName ??
-      (item.id === "facial"
-        ? "Meher"
-        : item.id === "colour"
-          ? "Riya"
-          : "Arjun");
+      backendService?.serviceStaff[0]?.staff.displayName ?? "Unassigned";
     setCart((current) => [
       ...current,
       {
@@ -535,6 +411,10 @@ export default function AdminPage() {
                 </div>
               )}
             </div>
+            <div className="admin-session-actions">
+              <span><strong>{prettyStatus(backend.data.user.role)}</strong><small>{backend.data.user.email}</small></span>
+              <button onClick={backend.logout}>Log out</button>
+            </div>
             <button
               className="button admin-primary"
               onClick={() => selectView(view === "pos" ? "calendar" : "pos")}
@@ -578,6 +458,8 @@ export default function AdminPage() {
               setMemberCredit={setMemberCredit}
               paid={paid}
               setPaid={setPaid}
+              onRefresh={() => void backend.refresh()}
+              onOpenCashbook={() => selectView("cash")}
             />
           )}
           {view === "customers" && (
@@ -586,7 +468,6 @@ export default function AdminPage() {
               data={backend.data}
               search={search}
               setSearch={setSearch}
-              items={filteredCustomers}
               onRefresh={() => void backend.refresh()}
             />
           )}
@@ -1482,14 +1363,7 @@ function Dashboard({
 }) {
   const live = Boolean(data.today);
   const insights = data.dashboardInsights;
-  const metrics = insights
-    ? [
-        ["Today’s sales", money(insights.sales.todayMinor), `${data.today?.bills ?? 0} bills`, "Live from POS"],
-        ["Month-to-date", money(insights.sales.monthMinor), insights.timezone, "Current calendar month"],
-        ["Last 15 days", money(insights.sales.rolling15Minor), money(insights.sales.rolling10Minor), "Last 10 days"],
-        ["Repeat customers", String(insights.customers.repeat), `${insights.customers.repeatRate}%`, `of ${insights.customers.total} customers`],
-      ]
-    : data.today
+  const metrics = data.today
     ? [
         [
           "Today’s sales",
@@ -1505,23 +1379,21 @@ function Dashboard({
         ],
         ["Average bill", money(data.today.avgBillMinor), "Live", "Today"],
         [
-          "Low stock",
-          String(data.today.lowStockCount),
-          "Reorder",
-          "Products at threshold",
+          "New customers",
+          String(data.today.newCustomers),
+          "Added today",
+          "From live CRM",
         ],
       ]
     : [
-        ["Today’s sales", "₹42,680", "+12.4%", "Up from last Sat"],
-        ["Appointments", "18", "14 done", "4 remaining"],
-        ["Average bill", "₹2,371", "+8.2%", "This month"],
-        ["New customers", "6", "+2", "vs last Sat"],
+        ["Today’s sales", money(0), "No bills", "Waiting for live POS data"],
+        ["Appointments", "0", "No bookings", "Waiting for live calendar data"],
+        ["Average bill", money(0), "No bills", "Waiting for live POS data"],
+        ["New customers", "0", "No records", "Waiting for live CRM data"],
       ];
-  const dashboardAppointments = data.appointments.length
-    ? data.appointments
-        .slice(0, 4)
-        .map((item, index) => appointmentRow(item, index))
-    : appointments.slice(0, 4);
+  const dashboardAppointments = data.appointments
+    .slice(0, 4)
+    .map((item, index) => appointmentRow(item, index));
   const range = data.range;
   const chartRows = insights?.dailySales ?? [];
   const chartMax = Math.max(1, ...chartRows.map((row) => row.salesMinor));
@@ -1561,21 +1433,22 @@ function Dashboard({
             <span className="filter-button">{insights ? "Last 15 days" : "This week"}</span>
           </div>
           <div className="sales-summary">
-            <strong>{insights ? money(insights.sales.rolling15Minor) : "₹2,48,320"}</strong>
-            <span>{insights ? `${money(insights.sales.rolling10Minor)} in last 10 days` : "↗ 14.2% vs last week"}</span>
+            <strong>{money(insights?.sales.rolling15Minor ?? 0)}</strong>
+            <span>{insights ? `${money(insights.sales.rolling10Minor)} in last 10 days` : "No live sales data yet"}</span>
           </div>
-          <div className={`bar-chart ${chartRows.length ? "rolling-chart" : ""}`} aria-label={chartRows.length ? "Rolling 15-day sales chart" : "Weekly sales chart"}>
-            {(chartRows.length ? chartRows : [42, 60, 52, 76, 68, 92, 58]).map((row, index) => {
-              const height = typeof row === "number" ? row : Math.max(3, Math.round((row.salesMinor / chartMax) * 100));
-              const label = typeof row === "number" ? ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][index] : new Date(`${row.date}T12:00:00`).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
-              return <div key={typeof row === "number" ? index : row.date} title={typeof row === "number" ? undefined : `${label}: ${money(row.salesMinor)} · ${row.bills} bills`}>
+          <div className={`bar-chart ${chartRows.length ? "rolling-chart" : ""}`} aria-label="Rolling 15-day sales chart">
+            {chartRows.map((row) => {
+              const height = Math.max(3, Math.round((row.salesMinor / chartMax) * 100));
+              const label = new Date(`${row.date}T12:00:00`).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+              return <div key={row.date} title={`${label}: ${money(row.salesMinor)} · ${row.bills} bills`}>
                 <span
                   style={{ height: `${height}%` }}
-                  className={height === Math.max(...(chartRows.length ? chartRows.map((item) => Math.max(3, Math.round((item.salesMinor / chartMax) * 100))) : [42, 60, 52, 76, 68, 92, 58])) ? "peak" : ""}
+                  className={height === Math.max(...chartRows.map((item) => Math.max(3, Math.round((item.salesMinor / chartMax) * 100)))) ? "peak" : ""}
                 />
                 <small>{label}</small>
               </div>;
             })}
+            {!chartRows.length && <p className="empty-cart">Sales will appear here after the first live bill.</p>}
           </div>
         </article>
         <article className="admin-card audience-card">
@@ -1589,18 +1462,18 @@ function Dashboard({
           <div className="donut-row">
             <div className="donut">
               <span>
-                <strong>{range?.customers.total ?? "1,248"}</strong>
+                <strong>{range?.customers.total ?? 0}</strong>
                 <small>Customers</small>
               </span>
             </div>
             <div className="donut-legend">
               <p>
                 <i className="dot coral" />
-                Repeat <strong>{range?.customers.repeat ?? 599}</strong>
+                Repeat <strong>{range?.customers.repeat ?? 0}</strong>
               </p>
               <p>
                 <i className="dot wine" />
-                New <strong>{range?.customers.new ?? 338}</strong>
+                New <strong>{range?.customers.new ?? 0}</strong>
               </p>
               <p>
                 <i className="dot sage" />
@@ -1608,12 +1481,12 @@ function Dashboard({
                 <strong>
                   {data.customers.filter((item) =>
                     item.segments.includes("AT_RISK"),
-                  ).length || 187}
+                  ).length}
                 </strong>
               </p>
               <p>
                 <i className="dot sand" />
-                Lapsed <strong>{range?.customers.lapsed ?? 124}</strong>
+                Lapsed <strong>{range?.customers.lapsed ?? 0}</strong>
               </p>
             </div>
           </div>
@@ -1621,7 +1494,7 @@ function Dashboard({
             <span>!</span>
             <p>
               <strong>
-                {(range?.customers.lapsed ?? 124) +
+                {(range?.customers.lapsed ?? 0) +
                   data.customers.filter((item) =>
                     item.segments.includes("AT_RISK"),
                   ).length}{" "}
@@ -1642,7 +1515,7 @@ function Dashboard({
               <p>
                 {data.today
                   ? `${data.today.appointments} bookings · ${data.today.walkIns} walk-ins · live`
-                  : "18 bookings · 2 walk-ins"}
+                  : "No live booking data yet"}
               </p>
             </div>
             <button onClick={() => onView("calendar")}>Full calendar →</button>
@@ -1668,6 +1541,7 @@ function Dashboard({
                 <button aria-label={`Open ${item.name}'s appointment`} onClick={() => onView("calendar")}>Open</button>
               </div>
             ))}
+            {!dashboardAppointments.length && <p className="empty-cart">No appointments scheduled for today.</p>}
           </div>
         </article>
         <article className="admin-card stock-card">
@@ -1756,6 +1630,7 @@ function Calendar({
   data: BackendSnapshot;
   onRefresh: () => void;
 }) {
+  const [selectedDate, setSelectedDate] = useState(() => localDateKey(new Date()));
   const [rescheduleId, setRescheduleId] = useState("");
   const [nextStart, setNextStart] = useState("");
   const [override, setOverride] = useState(false);
@@ -1768,6 +1643,9 @@ function Calendar({
     data.categories
       .flatMap((category) => category.services)
       .map((service) => [service.id, service.name]),
+  );
+  const selectedAppointments = data.appointments.filter(
+    (appointment) => localDateKey(appointment.startAt) === selectedDate,
   );
 
   const reschedule = async () => {
@@ -1833,38 +1711,38 @@ function Calendar({
     }
   };
 
-  if (!data.appointments.length)
+  if (!selectedAppointments.length)
     return (
       <div className="calendar-view">
         <div className="calendar-toolbar">
           <div className="view-switch">
-            <span className="active">Live agenda</span>
+            <span className="active">Day agenda</span>
           </div>
-          <span className="filter-button">No appointments yet</span>
+          <CalendarDateControls value={selectedDate} onChange={setSelectedDate} />
+          <span className="filter-button">No appointments on this date</span>
         </div>
-        <WalkInCreator token={token} data={data} onRefresh={onRefresh} />
+        <div className="calendar-date-summary"><strong>{new Date(`${selectedDate}T12:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</strong><span>Use Previous / Next or choose any past or future date.</span></div>
+        <WalkInCreator key={selectedDate} token={token} data={data} selectedDate={selectedDate} onRefresh={onRefresh} />
         <div className="admin-card waitlist-empty">
-          The live calendar is clear. Add a walk-in or wait for an online
-          booking.
+          This date is clear. Add a walk-in or move backward/forward to another day.
         </div>
       </div>
     );
 
-  if (data.appointments.length)
+  if (selectedAppointments.length)
     return (
       <div className="calendar-view">
         <div className="calendar-toolbar">
           <div className="view-switch">
-            <span className="active">Live agenda</span>
+            <span className="active">Day agenda</span>
           </div>
-          <div>
-            <span className="today-button">Appointments & waitlist</span>
-          </div>
+          <CalendarDateControls value={selectedDate} onChange={setSelectedDate} />
           <span className="filter-button">
-            {data.appointments.length} from backend
+            {selectedAppointments.length} appointment{selectedAppointments.length === 1 ? "" : "s"}
           </span>
         </div>
-        <WalkInCreator token={token} data={data} onRefresh={onRefresh} />
+        <div className="calendar-date-summary"><strong>{new Date(`${selectedDate}T12:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</strong><span>{selectedAppointments.filter((item) => item.isWalkIn).length} walk-ins · backend calendar</span></div>
+        <WalkInCreator key={selectedDate} token={token} data={data} selectedDate={selectedDate} onRefresh={onRefresh} />
         {message && (
           <div
             className={`calendar-message ${message.includes("failed") || message.includes("Slot") ? "error" : ""}`}
@@ -1880,7 +1758,7 @@ function Calendar({
             <span>Status</span>
             <span>Action</span>
           </header>
-          {data.appointments.map((item, index) => {
+          {selectedAppointments.map((item, index) => {
             const row = appointmentRow(item, index);
             return (
               <div key={item.id}>
@@ -2041,13 +1919,27 @@ function Calendar({
   return null;
 }
 
+function CalendarDateControls({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const today = localDateKey(new Date());
+  return (
+    <div className="calendar-date-controls" aria-label="Calendar date navigation">
+      <button onClick={() => onChange(shiftDateKey(value, -1))} aria-label="Previous date">← Previous</button>
+      <button className={value === today ? "active" : ""} onClick={() => onChange(today)}>Today</button>
+      <input type="date" value={value} onChange={(event) => onChange(event.target.value || today)} aria-label="Choose calendar date" />
+      <button onClick={() => onChange(shiftDateKey(value, 1))} aria-label="Next date">Next →</button>
+    </div>
+  );
+}
+
 function WalkInCreator({
   token,
   data,
+  selectedDate,
   onRefresh,
 }: {
   token: string;
   data: BackendSnapshot;
+  selectedDate: string;
   onRefresh: () => void;
 }) {
   const services = data.categories.flatMap((category) => category.services);
@@ -2055,9 +1947,7 @@ function WalkInCreator({
   const [phone, setPhone] = useState("");
   const [serviceId, setServiceId] = useState("");
   const [staffId, setStaffId] = useState("");
-  const [startAt, setStartAt] = useState(() =>
-    toDateTimeInput(new Date(Date.now() + 15 * 60_000).toISOString()),
-  );
+  const [startAt, setStartAt] = useState(() => `${selectedDate}T10:00`);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const service = services.find((item) => item.id === serviceId);
@@ -2192,12 +2082,14 @@ function POS({
   setMemberCredit,
   paid,
   setPaid,
+  onRefresh,
+  onOpenCashbook,
 }: {
   cart: CartItem[];
-  services: typeof saleServices;
+  services: SaleService[];
   token: string;
   data: BackendSnapshot;
-  addItem: (item: (typeof saleServices)[number]) => void;
+  addItem: (item: SaleService) => void;
   addProduct: (item: BackendSnapshot["products"][number]) => void;
   assignStaff: (index: number, staffId: string) => void;
   removeItem: (index: number) => void;
@@ -2210,6 +2102,8 @@ function POS({
   setMemberCredit: (value: boolean) => void;
   paid: boolean;
   setPaid: (value: boolean) => void;
+  onRefresh: () => void;
+  onOpenCashbook: () => void;
 }) {
   const [invoice, setInvoice] = useState("");
   const [invoiceId, setInvoiceId] = useState("");
@@ -2230,6 +2124,9 @@ function POS({
     "CASH" | "UPI" | "CARD" | "SPLIT"
   >("UPI");
   const [deliveryMessage, setDeliveryMessage] = useState("");
+  const [openingCash, setOpeningCash] = useState(0);
+  const [openingNote, setOpeningNote] = useState("");
+  const [openingBusy, setOpeningBusy] = useState(false);
   const customer = data.customers.find((item) => item.id === customerId);
   const serviceCategory = new Map(
     data.categories.flatMap((category) =>
@@ -2255,7 +2152,19 @@ function POS({
       (catalogFilter === "All" || catalogFilter === "Products") &&
       (!queryKey || `${product.name} ${product.brand ?? ""} ${product.sku ?? ""}`.toLowerCase().includes(queryKey)),
   );
-  const matchingCustomers = data.customers.filter((item) => !customerSearch.trim() || item.name.toLowerCase().includes(customerSearch.toLowerCase()) || (item.phone ?? "").includes(customerSearch.replace(/\D/g, ""))).slice(0, 30);
+  const posCustomerQuery = customerSearch.trim();
+  const posCustomerDigits = posCustomerQuery.replace(/\D/gu, "");
+  const matchingCustomers = data.customers
+    .filter((item) => !posCustomerQuery || (posCustomerDigits
+      ? (item.phone ?? "").replace(/\D/gu, "").includes(posCustomerDigits)
+      : item.name.toLowerCase().includes(posCustomerQuery.toLowerCase())))
+    .sort((left, right) => {
+      if (!posCustomerDigits) return left.name.localeCompare(right.name);
+      const leftPhone = (left.phone ?? "").replace(/\D/gu, "");
+      const rightPhone = (right.phone ?? "").replace(/\D/gu, "");
+      return Number(rightPhone === posCustomerDigits) - Number(leftPhone === posCustomerDigits);
+    })
+    .slice(0, 30);
   const membership = customerDetail?.memberships.find(
     (item) => item.id === membershipId && item.isActive,
   );
@@ -2505,8 +2414,54 @@ function POS({
       setCharging(false);
     }
   };
+  const openBusinessDay = async () => {
+    if (!token) return;
+    setOpeningBusy(true);
+    setCheckoutError("");
+    try {
+      await backendApi.openCashSession(token, {
+        branchId: "main",
+        openingCashMinor: Math.round(openingCash * 100),
+        openingNote: openingNote.trim() || undefined,
+      });
+      setOpeningNote("");
+      onRefresh();
+    } catch (cause) {
+      setCheckoutError(cause instanceof Error ? prettyStatus(cause.message) : "Business day could not be opened.");
+    } finally {
+      setOpeningBusy(false);
+    }
+  };
+
+  if (!data.currentCash) {
+    return (
+      <section className="admin-card pos-day-gate">
+        <div className="pos-day-gate-copy">
+          <p className="eyebrow">Required before billing</p>
+          <h2>Start today’s salon drawer</h2>
+          <p>Record the physical cash already in the drawer before services, products or payments can be added in POS. Closing cash and variance are completed at end of day.</p>
+        </div>
+        <div className="pos-day-gate-form">
+          <label>Opening cash in drawer (₹)<input type="number" min="0" step="1" value={openingCash} onChange={(event) => setOpeningCash(Math.max(0, Number(event.target.value)))} /></label>
+          <label>Opening note (optional)<input value={openingNote} onChange={(event) => setOpeningNote(event.target.value)} placeholder="Float counted by reception" /></label>
+          <button className="button admin-primary" disabled={openingBusy || !token} onClick={() => void openBusinessDay()}>{openingBusy ? "Opening drawer…" : "Open drawer & start POS"}</button>
+          <button onClick={onOpenCashbook}>View previous cash sessions</button>
+        </div>
+        {checkoutError && <p className="checkout-error">{checkoutError}</p>}
+      </section>
+    );
+  }
   return (
-    <div className="pos-layout">
+    <div className="pos-workspace">
+      <div className="pos-day-strip">
+        <span><small>Business date</small><strong>{data.currentCash.businessDate}</strong></span>
+        <span><small>Opened</small><strong>{new Date(data.currentCash.openedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</strong></span>
+        <span><small>Opening drawer</small><strong>{money(data.currentCash.openingCashMinor)}</strong></span>
+        <span><small>Cash sales</small><strong>{money(data.currentCash.cashSalesMinor ?? 0)}</strong></span>
+        <span><small>Expected cash</small><strong>{money(data.currentCash.expectedCashMinor ?? data.currentCash.openingCashMinor)}</strong></span>
+        <button onClick={onOpenCashbook}>Expenses / close drawer →</button>
+      </div>
+      <div className="pos-layout">
       <section className="pos-catalog">
         <label className="pos-search">
           <span>⌕</span>
@@ -2577,7 +2532,7 @@ function POS({
                 : "Choose a customer for CRM and membership"}
             </p>
           </div>
-          <label className="pos-customer-search"><span>Search customer</span><input value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder="Name or phone" /></label>
+          <label className="pos-customer-search"><span>Find by phone first</span><input inputMode="tel" value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder="Phone number (or name)" /></label>
           <select
             value={customerId}
             onChange={(event) => {
@@ -2781,6 +2736,7 @@ function POS({
           </>
         )}
       </aside>
+      </div>
     </div>
   );
 }
@@ -2790,14 +2746,12 @@ function Customers({
   data,
   search,
   setSearch,
-  items,
   onRefresh,
 }: {
   token: string;
   data: BackendSnapshot;
   search: string;
   setSearch: (value: string) => void;
-  items: typeof customers;
   onRefresh: () => void;
 }) {
   const [segment, setSegment] = useState("ALL");
@@ -2805,6 +2759,9 @@ function Customers({
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  const [source, setSource] = useState("walk_in");
+  const [referralName, setReferralName] = useState("");
+  const [referralPhone, setReferralPhone] = useState("");
   const [waConsent, setWaConsent] = useState(false);
   const [emailConsent, setEmailConsent] = useState(false);
   const [detail, setDetail] = useState<BackendCustomerDetail | null>(null);
@@ -2817,12 +2774,23 @@ function Customers({
   const [loyaltyReason, setLoyaltyReason] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  const liveRows = data.customers.filter(
-    (customer) =>
-      (customer.name.toLowerCase().includes(search.toLowerCase()) ||
-        (customer.phone ?? "").includes(search)) &&
-      (segment === "ALL" || customer.segments.includes(segment)),
-  );
+  const customerQuery = search.trim();
+  const customerQueryDigits = customerQuery.replace(/\D/gu, "");
+  const liveRows = data.customers
+    .filter((customer) => {
+      const matchesQuery = !customerQuery
+        ? true
+        : customerQueryDigits.length > 0
+          ? (customer.phone ?? "").replace(/\D/gu, "").includes(customerQueryDigits)
+          : customer.name.toLowerCase().includes(customerQuery.toLowerCase());
+      return matchesQuery && (segment === "ALL" || customer.segments.includes(segment));
+    })
+    .sort((left, right) => {
+      if (!customerQueryDigits) return left.name.localeCompare(right.name);
+      const leftPhone = (left.phone ?? "").replace(/\D/gu, "");
+      const rightPhone = (right.phone ?? "").replace(/\D/gu, "");
+      return Number(rightPhone === customerQueryDigits) - Number(leftPhone === customerQueryDigits);
+    });
   const counts = Object.fromEntries(
     ["ALL", "NEW", "REPEAT", "AT_RISK", "LAPSED"].map((key) => [
       key,
@@ -2851,13 +2819,18 @@ function Customers({
         name,
         phone: phone || undefined,
         email: email || undefined,
-        source: "reception",
+        source,
+        referralName: source === "referral" ? referralName || undefined : undefined,
+        referralPhone: source === "referral" ? referralPhone || undefined : undefined,
         waConsent,
         emailConsent,
       });
       setName("");
       setPhone("");
       setEmail("");
+      setSource("walk_in");
+      setReferralName("");
+      setReferralPhone("");
       setWaConsent(false);
       setEmailConsent(false);
       setShowCreate(false);
@@ -2932,7 +2905,7 @@ function Customers({
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search name or phone…"
+            placeholder="Search phone number (recommended) or name…"
           />
         </label>
         <div className="segment-tabs">
@@ -2988,6 +2961,22 @@ function Customers({
               onChange={(event) => setEmail(event.target.value)}
             />
           </label>
+          <label>
+            Customer source
+            <select value={source} onChange={(event) => { setSource(event.target.value); if (event.target.value !== "referral") { setReferralName(""); setReferralPhone(""); } }}>
+              <option value="walk_in">Walk-in</option>
+              <option value="referral">Customer referral</option>
+              <option value="google">Google / Maps</option>
+              <option value="instagram">Instagram</option>
+              <option value="facebook">Facebook</option>
+              <option value="magicpin">Magicpin</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          {source === "referral" && <>
+            <label>Referred by<input value={referralName} onChange={(event) => setReferralName(event.target.value)} placeholder="Customer name" required /></label>
+            <label>Referrer phone (optional)<input inputMode="tel" value={referralPhone} onChange={(event) => setReferralPhone(event.target.value)} placeholder="Phone number" /></label>
+          </>}
           <fieldset>
             <legend>Communication consent</legend>
             <label><input type="checkbox" checked={waConsent} onChange={(event) => setWaConsent(event.target.checked)} />WhatsApp</label>
@@ -2995,7 +2984,7 @@ function Customers({
           </fieldset>
           <button
             className="button admin-primary"
-            disabled={busy || !token || !name || Boolean(duplicate)}
+            disabled={busy || !token || !name || Boolean(duplicate) || (source === "referral" && !referralName.trim())}
             onClick={() => void create()}
           >
             {busy ? "Saving…" : "Create customer"}
@@ -3012,8 +3001,7 @@ function Customers({
           <span>Last visit</span>
           <span />
         </header>
-        {data.customers.length
-          ? liveRows.map((customer) => (
+        {liveRows.map((customer) => (
               <div key={customer.id}>
                 <span className="customer-cell">
                   <i>
@@ -3025,9 +3013,7 @@ function Customers({
                   </i>
                   <span>
                     <strong>{customer.name}</strong>
-                    <small>
-                      {customer.phone ?? customer.email ?? "No contact"}
-                    </small>
+                    <small>{customer.phone ?? customer.email ?? "No contact"} · {prettyStatus(customer.source ?? "walk_in")}{customer.referralName ? ` via ${customer.referralName}` : ""}</small>
                   </span>
                 </span>
                 <span className="tag-cell">
@@ -3055,28 +3041,10 @@ function Customers({
                   →
                 </button>
               </div>
-            ))
-          : items.map((customer) => (
-              <div key={customer.name}>
-                <span className="customer-cell">
-                  <i>{customer.initials}</i>
-                  <span>
-                    <strong>{customer.name}</strong>
-                    <small>{customer.phone}</small>
-                  </span>
-                </span>
-                <span className="tag-cell">
-                  {customer.tags.map((tag) => (
-                    <em key={tag}>{tag}</em>
-                  ))}
-                </span>
-                <span>{customer.visits}</span>
-                <strong>—</strong>
-                <strong>{customer.spend}</strong>
-                <span>{customer.last}</span>
-                <span aria-label="Connect backend to open this demo record">Demo</span>
-              </div>
             ))}
+        {!liveRows.length && (
+          <p className="empty-cart">No customers match this phone, name or segment.</p>
+        )}
       </article>
       {detail && (
         <section className="admin-card customer-360">
@@ -3084,7 +3052,7 @@ function Customers({
             <div>
               <p className="eyebrow">Customer 360</p>
               <h2>{detail.name}</h2>
-              <span>{detail.phone ?? detail.email ?? "No contact"}</span>
+              <span>{detail.phone ?? detail.email ?? "No contact"} · {prettyStatus(detail.source ?? "walk_in")}{detail.referralName ? ` · referred by ${detail.referralName}${detail.referralPhone ? ` (${detail.referralPhone})` : ""}` : ""}</span>
             </div>
             <button onClick={() => setDetail(null)}>Close</button>
           </header>
@@ -3314,18 +3282,7 @@ function Memberships({
       setBusy(false);
     }
   };
-  const activePlans = plans.length
-    ? plans
-    : [
-        {
-          id: "regular",
-          name: "The Regular",
-          payMinor: 300000,
-          creditMinor: 500000,
-          validityDays: 180,
-          memberDiscountBps: 0,
-        },
-      ];
+  const activePlans = plans;
   return (
     <div>
       {message && <div className="calendar-message">{message}</div>}
@@ -3424,7 +3381,7 @@ function Memberships({
         <article>
           <span>Active plans</span>
           <strong>{activePlans.length}</strong>
-          <small>{plans.length ? "Live from backend" : "Demo catalog"}</small>
+          <small>{plans.length ? "Live from backend" : "No plans created yet"}</small>
         </article>
         <article>
           <span>Total plan credit</span>
@@ -3857,36 +3814,7 @@ function Inventory({
   const [movementReason, setMovementReason] = useState<
     "PURCHASE" | "CONSUMPTION" | "WASTAGE" | "ADJUSTMENT"
   >("PURCHASE");
-  const rows = data.products.length
-    ? data.products
-    : [
-        {
-          id: "demo-1",
-          name: "L’Oréal Majirel 5.0",
-          brand: "L’Oréal",
-          sku: "MAJ-50",
-          stockQty: 3,
-          reorderLevel: 8,
-          sellMinor: 125000,
-          purchaseMinor: 80000,
-          mrpMinor: 140000,
-          discountBps: 1000,
-          commissionBps: 200,
-        },
-        {
-          id: "demo-2",
-          name: "Moroccanoil Treatment",
-          brand: "Moroccanoil",
-          sku: "MOR-100",
-          stockQty: 14,
-          reorderLevel: 5,
-          sellMinor: 385000,
-          purchaseMinor: 250000,
-          mrpMinor: 420000,
-          discountBps: 500,
-          commissionBps: 300,
-        },
-      ];
+  const rows = data.products;
   const createVendor = async () => {
     if (!token || !vendorName) return;
     setBusy(true);
@@ -3992,9 +3920,7 @@ function Inventory({
         <article>
           <span>Products</span>
           <strong>{rows.length}</strong>
-          <small>
-            {data.products.length ? "Live stock catalog" : "Demo stock catalog"}
-          </small>
+          <small>{data.products.length ? "Live stock catalog" : "No stock records yet"}</small>
         </article>
         <article>
           <span>Low stock</span>
@@ -4452,9 +4378,8 @@ function Campaigns({
   const attention = data.range
     ? data.range.customers.lapsed +
       data.customers.filter((item) => item.segments.includes("AT_RISK")).length
-    : 187;
-  const rows = data.campaigns.length
-    ? data.campaigns.map((item) => [
+    : 0;
+  const rows = data.campaigns.map((item) => [
         item.name,
         item.segment ? prettyStatus(item.segment) : "All customers",
         prettyStatus(item.channel),
@@ -4462,36 +4387,7 @@ function Campaigns({
         `${item.engagement?.sent ?? 0}/${item.engagement?.total ?? item._count.recipients}`,
         String(item.engagement?.read ?? 0),
         String(item.engagement?.replied ?? 0),
-      ])
-    : [
-        [
-          "We miss you · August",
-          "Lapsed customers",
-          "WhatsApp",
-          "Completed",
-          "2,140",
-          "86",
-          "₹1.84L",
-        ],
-        [
-          "Weekend colour ritual",
-          "Repeat colour clients",
-          "Email",
-          "Sending",
-          "820",
-          "21",
-          "₹54.2K",
-        ],
-        [
-          "Birthday joy",
-          "August birthdays",
-          "WhatsApp",
-          "Scheduled",
-          "146",
-          "—",
-          "—",
-        ],
-      ];
+      ]);
   const visibleRows = statusFilter === "ALL"
     ? rows
     : rows.filter((row) => row[3].toUpperCase().replaceAll(" ", "_") === statusFilter);
@@ -4658,7 +4554,7 @@ function Campaigns({
             <p>
               {data.campaigns.length
                 ? "Live delivery records"
-                : "Demo campaign records"}
+                : "No campaigns created yet"}
             </p>
           </div>
           <select
@@ -4697,15 +4593,8 @@ function Campaigns({
 function Reports({ report }: { report: BackendRangeReport | null }) {
   const repeatRate = report?.customers.total
     ? Math.round((report.customers.repeat / report.customers.total) * 100)
-    : 48;
-  const top: Array<[string, number]> = report?.topServices.length
-    ? report.topServices
-    : [
-        ["Global colour", 28400000],
-        ["Signature cut", 17200000],
-        ["Hair spa", 11800000],
-        ["Skin reset", 9600000],
-      ];
+    : 0;
+  const top: Array<[string, number]> = report?.topServices ?? [];
   const max = Math.max(...top.map((item) => item[1]), 1);
   const exportCsv = () => {
     if (!report) return;
@@ -4744,23 +4633,23 @@ function Reports({ report }: { report: BackendRangeReport | null }) {
         {[
           [
             "Gross sales",
-            report ? money(report.salesMinor) : "₹9.42L",
-            report ? "Live" : "+18.4%",
+            money(report?.salesMinor ?? 0),
+            report ? "Live" : "No live data",
           ],
           [
             "Completed bills",
-            String(report?.bills ?? 412),
-            report ? "Live" : "+11.2%",
+            String(report?.bills ?? 0),
+            report ? "Live" : "No live data",
           ],
           [
             "Repeat customers",
             `${repeatRate}%`,
-            report ? `${report?.customers.repeat ?? 0} customers` : "+3.6 pts",
+            report ? `${report.customers.repeat} customers` : "No live data",
           ],
           [
             "Total customers",
-            String(report?.customers.total ?? 1248),
-            report ? "Live CRM" : "Demo",
+            String(report?.customers.total ?? 0),
+            report ? "Live CRM" : "No live data",
           ],
         ].map(([label, value, trend]) => (
           <article className="metric-card" key={label}>
@@ -4785,18 +4674,13 @@ function Reports({ report }: { report: BackendRangeReport | null }) {
             </div>
           </div>
           <div className="payment-mix-list">
-            {Object.entries(
-              report?.paymentMix ?? {
-                UPI: 42000000,
-                CARD: 31000000,
-                CASH: 21000000,
-              },
-            ).map(([method, amount]) => (
+            {Object.entries(report?.paymentMix ?? {}).map(([method, amount]) => (
               <p key={method}>
                 <span>{prettyStatus(method)}</span>
                 <strong>{money(amount)}</strong>
               </p>
             ))}
+            {!Object.keys(report?.paymentMix ?? {}).length && <p className="empty-cart">Payment totals will appear after live bills.</p>}
           </div>
         </article>
         <article className="admin-card">
@@ -4821,6 +4705,7 @@ function Reports({ report }: { report: BackendRangeReport | null }) {
                 </i>
               </div>
             ))}
+            {!top.length && <p className="empty-cart">Service revenue will appear after live bills.</p>}
           </div>
         </article>
       </div>
@@ -4889,8 +4774,7 @@ function Staff({
     finally { setBusy(false); }
   };
   const team = data.teamAccounts.length ? data.teamAccounts : data.staff;
-  const rows = team.length
-    ? team.map((staff) => [
+  const rows = team.map((staff) => [
         staff.displayName
           .split(" ")
           .map((part) => part[0])
@@ -4900,13 +4784,7 @@ function Staff({
         staff.user ? prettyStatus(staff.user.role) : "No login",
         `${data.categories.flatMap((category) => category.services).filter((service) => service.serviceStaff.some((link) => link.staff.id === staff.id)).length} services`,
         money(data.range?.topStaff.find(([id]) => id === staff.id)?.[1] ?? 0),
-      ])
-    : [
-        ["RS", "Riya Sen", "Creative colourist", "6 services", "₹1.82L"],
-        ["AK", "Arjun Khanna", "Style director", "8 services", "₹1.64L"],
-        ["MM", "Meher Malik", "Skin therapist", "5 services", "₹1.09L"],
-        ["PP", "Priya Pal", "Nail artist", "4 services", "₹76K"],
-      ];
+      ]);
   return (
     <div className="staff-view">
       {message && <div className="calendar-message">{message}</div>}
@@ -5075,8 +4953,7 @@ function Attendance({
       setBusy(false);
     }
   };
-  const rows = data.attendance.length
-    ? data.attendance.map((item) => {
+  const rows = data.attendance.map((item) => {
         const minutes =
           item.checkInAt && item.checkOutAt
             ? Math.round(
@@ -5103,13 +4980,7 @@ function Attendance({
             : "Open",
           item.lateMinutes > 0 ? "Late" : "Present",
         ];
-      })
-    : [
-        ["RS", "Riya Sen", "09:46 AM", "8h 14m", "Present"],
-        ["AK", "Arjun Khanna", "09:52 AM", "8h 08m", "Present"],
-        ["MM", "Meher Malik", "10:03 AM", "7h 57m", "Present"],
-        ["PP", "Priya Pal", "10:14 AM", "7h 46m", "Late"],
-      ];
+      });
   return (
     <div className="attendance-view">
       {message && <div className="calendar-message">{message}</div>}
@@ -5179,7 +5050,7 @@ function Attendance({
             <p>
               {data.attendance.length
                 ? "Live, audited records"
-                : "Demo records until the first check-in"}
+                : "No attendance recorded yet"}
             </p>
           </div>
           <span className="filter-button">GPS + selfie + consent</span>
@@ -5393,18 +5264,10 @@ function Settings({
   const [testMessage, setTestMessage] = useState("Hello from Cutz & Bangs");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [integrationLoading, setIntegrationLoading] = useState(true);
+  const [integrationError, setIntegrationError] = useState("");
 
-  const loadIntegrations = async () => {
-    if (!token) return;
-    const [nextStatus, settings, nextProviderConfig, nextEmailHealth] = await Promise.all([
-      backendApi.whatsappStatus(token),
-      backendApi.branchSettings(token),
-      backendApi.providerConfig(token),
-      backendApi.emailStatus(token),
-    ]);
-    setStatus(nextStatus);
-    setProviderConfig(nextProviderConfig);
-    setEmailHealth(nextEmailHealth);
+  const applySettings = (settings: Record<string, unknown>) => {
     const booking = settings.booking as Record<string, unknown> | undefined;
     if (booking) {
       setBookingInterval(Number(booking.intervalMin ?? 15));
@@ -5425,37 +5288,37 @@ function Settings({
     const retention = settings.retention as Record<string, unknown> | undefined;
     if (retention) setInactiveDays(Number(retention.inactiveDays ?? 60));
   };
+
+  const loadIntegrations = async () => {
+    if (!token) return;
+    setIntegrationLoading(true);
+    const results = await Promise.allSettled([
+      backendApi.whatsappStatus(token),
+      backendApi.branchSettings(token),
+      backendApi.providerConfig(token),
+      backendApi.emailStatus(token),
+    ] as const);
+    if (results[0].status === "fulfilled") setStatus(results[0].value);
+    if (results[1].status === "fulfilled") applySettings(results[1].value);
+    if (results[2].status === "fulfilled") setProviderConfig(results[2].value);
+    if (results[3].status === "fulfilled") setEmailHealth(results[3].value);
+    const failures = results.filter((result) => result.status === "rejected") as PromiseRejectedResult[];
+    setIntegrationError(failures.length ? failures.map((result) => result.reason instanceof Error ? prettyStatus(result.reason.message) : "Integration check failed").join(" · ") : "");
+    setIntegrationLoading(false);
+  };
   useEffect(() => {
     let cancelled = false;
     if (!token) return;
-    Promise.all([backendApi.whatsappStatus(token), backendApi.branchSettings(token), backendApi.providerConfig(token), backendApi.emailStatus(token)])
-      .then(([nextStatus, settings, nextProviderConfig, nextEmailHealth]) => {
+    Promise.allSettled([backendApi.whatsappStatus(token), backendApi.branchSettings(token), backendApi.providerConfig(token), backendApi.emailStatus(token)])
+      .then((results) => {
         if (cancelled) return;
-        setStatus(nextStatus);
-        setProviderConfig(nextProviderConfig);
-        setEmailHealth(nextEmailHealth);
-        const booking = settings.booking as Record<string, unknown> | undefined;
-        if (booking) {
-          setBookingInterval(Number(booking.intervalMin ?? 15));
-          setMinimumNotice(Number(booking.minimumNoticeHours ?? 2));
-          setAllowWaitlist(Boolean(booking.allowWaitlist ?? true));
-          setManagerOverride(Boolean(booking.managerOverride ?? true));
-          setCancellationHours(Number(booking.cancellationHours ?? 3));
-        }
-        const loyalty = settings.loyalty as Record<string, unknown> | undefined;
-        if (loyalty) {
-          setLoyaltyEnabled(Boolean(loyalty.enabled ?? true));
-          setWelcomePoints(Number(loyalty.welcomePoints ?? 50));
-          setEarnPoints(Number(loyalty.earnPoints ?? 1));
-          setEarnEveryRupees(Number(loyalty.earnEveryMinor ?? 10_000) / 100);
-          setRedeemRupeesPerPoint(Number(loyalty.redeemMinorPerPoint ?? 100) / 100);
-          setMinimumRedeemPoints(Number(loyalty.minRedeemPoints ?? 50));
-        }
-        const retention = settings.retention as Record<string, unknown> | undefined;
-        if (retention) setInactiveDays(Number(retention.inactiveDays ?? 60));
-      })
-      .catch((cause) => {
-        if (!cancelled) setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Settings could not be loaded.");
+        if (results[0].status === "fulfilled") setStatus(results[0].value);
+        if (results[1].status === "fulfilled") applySettings(results[1].value);
+        if (results[2].status === "fulfilled") setProviderConfig(results[2].value);
+        if (results[3].status === "fulfilled") setEmailHealth(results[3].value);
+        const failures = results.filter((result) => result.status === "rejected") as PromiseRejectedResult[];
+        setIntegrationError(failures.length ? failures.map((result) => result.reason instanceof Error ? prettyStatus(result.reason.message) : "Integration check failed").join(" · ") : "");
+        setIntegrationLoading(false);
       });
     return () => {
       cancelled = true;
@@ -5583,6 +5446,22 @@ function Settings({
       setBusy(false);
     }
   };
+  const refreshWahaStatus = async () => {
+    if (!token) return;
+    setBusy(true);
+    setIntegrationError("");
+    try {
+      const next = await backendApi.whatsappStatus(token);
+      setStatus(next);
+      setMessage(next.unofficial.connected ? "WAHA is connected; QR stays hidden." : next.unofficial.qrDataUrl ? "Fresh QR loaded. Scan it in WhatsApp → Linked devices." : `WAHA status: ${prettyStatus(next.unofficial.status ?? "unavailable")}.`);
+    } catch (cause) {
+      const detail = cause instanceof Error ? prettyStatus(cause.message) : "WAHA status could not be loaded.";
+      setIntegrationError(detail);
+      setMessage(detail);
+    } finally {
+      setBusy(false);
+    }
+  };
   const syncWahaContacts = async () => {
     if (!token) return;
     setBusy(true);
@@ -5673,6 +5552,7 @@ function Settings({
   return (
     <div className="settings-stack">
       {message && <div className="calendar-message">{message}</div>}
+      {integrationError && <div className="calendar-message error">Some integration checks failed: {integrationError}. Other providers remain usable.</div>}
       <TwoFactorSettings token={token} />
       <article className="admin-card settings-card">
         <p className="eyebrow">Booking rules</p>
@@ -5800,9 +5680,12 @@ function Settings({
           {(["official", "unofficial"] as const).map((key) => {
             const item = status?.[key];
             const type = key === "official" ? "WHATSAPP_OFFICIAL" : "WHATSAPP_UNOFFICIAL";
+            const technicalStatus = key === "unofficial" ? status?.unofficial.status : undefined;
+            const hasQr = key === "unofficial" && Boolean(status?.unofficial.qrDataUrl);
+            const sessionNeedsCreate = key === "unofficial" && ["NOT_CONFIGURED", "UNAVAILABLE", "STOPPED"].includes(technicalStatus ?? "");
             return (
               <section key={key} className="provider-card">
-                <header><div><strong>{key === "official" ? "Official Meta Cloud API" : "Unofficial QR connector"}</strong><small>{item?.detail ?? "Checking configuration…"}</small></div><span className={item?.connected ? "connected" : "offline"}>{item?.connected ? "Connected" : item?.configured ? "Configured" : "Needs setup"}</span></header>
+                <header><div><strong>{key === "official" ? "Official Meta Cloud API" : "Unofficial QR connector"}</strong><small>{item?.detail ?? (integrationLoading ? "Checking live backend…" : integrationError || "Status unavailable — run check again")}</small>{technicalStatus && <em className="provider-technical-status">{technicalStatus}</em>}</div><span className={item?.connected ? "connected" : "offline"}>{item?.connected ? "Connected" : item?.configured ? hasQr ? "Scan QR" : "Configured" : "Needs setup"}</span></header>
                 {key === "unofficial" && item?.connected && (
                   <div className="waha-connected"><b>✓ Connected</b><span>{item.accountName || "WhatsApp account"}{item.accountNumber ? ` · +${item.accountNumber}` : ""}</span><small>QR is hidden while the session is working.</small></div>
                 )}
@@ -5817,9 +5700,10 @@ function Settings({
                 <div className="provider-actions">
                   <button className={`toggle ${item?.active ? "active" : ""}`} disabled={busy || !token} onClick={() => void toggleChannel(type, !item?.active)}><i /></button>
                   {key === "official" && <button disabled={busy || !token} onClick={() => void syncTemplates()}>Sync templates</button>}
-                  {key === "unofficial" && !item?.connected && <button disabled={busy || !token || !providerConfig.whatsappUnofficial.enabled} onClick={() => void controlWaha("create")}>Generate / refresh QR</button>}
+                  {key === "unofficial" && !item?.connected && !sessionNeedsCreate && <button disabled={busy || !token || !providerConfig.whatsappUnofficial.enabled} onClick={() => void refreshWahaStatus()}>Show / refresh QR</button>}
+                  {key === "unofficial" && !item?.connected && sessionNeedsCreate && <button disabled={busy || !token || !providerConfig.whatsappUnofficial.enabled} onClick={() => void controlWaha(technicalStatus === "STOPPED" ? "start" : "create")}>{technicalStatus === "STOPPED" ? "Start session" : "Create session"}</button>}
                   {key === "unofficial" && item?.connected && <button disabled={busy || !token} onClick={() => void syncWahaContacts()}>Sync contacts</button>}
-                  {key === "unofficial" && item?.configured && <button disabled={busy || !token} onClick={() => void controlWaha("restart")}>Restart</button>}
+                  {key === "unofficial" && item?.configured && technicalStatus !== "SCAN_QR_CODE" && <button disabled={busy || !token} onClick={() => void controlWaha("restart")}>Restart</button>}
                   {key === "unofficial" && item?.connected && <button disabled={busy || !token} onClick={() => void controlWaha("logout")}>Disconnect</button>}
                   <button disabled={busy || !token || !testTo || !testMessage} onClick={() => void testProvider(type)}>Send test</button>
                 </div>
@@ -5828,7 +5712,7 @@ function Settings({
           })}
         </div>
         <div className="whatsapp-test-row"><input value={testTo} onChange={(event) => setTestTo(event.target.value)} placeholder="Recipient with country code" /><input value={testMessage} onChange={(event) => setTestMessage(event.target.value)} placeholder="Test message" /></div>
-        <small>{data.channels.filter((channel) => channel.type.startsWith("WHATSAPP")).length} WhatsApp channel records · credentials remain server-side.</small>
+        <small>{status ? "Live provider status loaded" : "Provider status not loaded"} · {data.channels.filter((channel) => channel.type.startsWith("WHATSAPP")).length} WhatsApp channel records · credentials remain server-side.</small>
       </article>
     </div>
   );

@@ -50,9 +50,16 @@ export function useBackendIntegration() {
     }
   };
 
-  const logout = () => {
-    if (token) void backendApi.logout(token).catch(() => undefined);
-    setToken(''); setData(emptySnapshot); setStatus('ready'); setError('');
+  const logout = async () => {
+    setStatus('checking');
+    try {
+      if (token) await backendApi.logout(token);
+    } catch {
+      // The same-origin proxy still expires the HttpOnly cookie when the API is
+      // unreachable, so local UI state can be cleared safely.
+    } finally {
+      setToken(''); setData(emptySnapshot); setStatus('ready'); setError('');
+    }
   };
   return { token, data, status, error, login, logout, refresh: () => token && refresh(token) };
 }

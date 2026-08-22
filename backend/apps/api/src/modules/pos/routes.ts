@@ -116,15 +116,17 @@ export default async function posRoutes(app: FastifyInstance) {
       if (productIds.length !== new Set(body.lines.filter((line) => line.kind === "product").map((line) => line.productId)).size || body.lines.some((line) => line.kind === "product" && !line.productId)) {
         return reply.code(400).send({ error: "product_id_required" });
       }
-      const [branch, customer, appointment, staffCount, services, products] = await Promise.all([
+      const [branch, customer, appointment, staffCount, services, products, cashSession] = await Promise.all([
         prisma.branch.findFirst({ where: { id: body.branchId, deletedAt: null }, select: { id: true } }),
         body.customerId ? prisma.customer.findFirst({ where: { id: body.customerId, branchId: body.branchId, deletedAt: null }, select: { id: true, loyaltyPoints: true } }) : null,
         body.appointmentId ? prisma.appointment.findFirst({ where: { id: body.appointmentId, branchId: body.branchId, deletedAt: null }, select: { id: true } }) : null,
         prisma.staff.count({ where: { id: { in: body.lines.flatMap((line) => line.staffId ? [line.staffId] : []) }, branchId: body.branchId, deletedAt: null } }),
         prisma.service.findMany({ where: { id: { in: serviceIds }, isActive: true, deletedAt: null } }),
         prisma.product.findMany({ where: { id: { in: productIds }, isActive: true, deletedAt: null } }),
+        prisma.cashSession.findFirst({ where: { branchId: body.branchId, status: "OPEN" }, select: { id: true } }),
       ]);
       if (!branch) return reply.code(404).send({ error: "branch_not_found" });
+      if (!cashSession) return reply.code(409).send({ error: "open_cash_session_required" });
       if (body.customerId && !customer) return reply.code(400).send({ error: "customer_branch_mismatch" });
       if (body.packageRedemptions.length && !body.customerId) return reply.code(400).send({ error: "customer_required_for_package" });
       if (body.loyaltyPointsToRedeem && !body.customerId) return reply.code(400).send({ error: "customer_required_for_loyalty" });

@@ -219,6 +219,8 @@ model Customer {
   email         String?
   gender        String?
   source        String?
+  referralName  String?
+  referralPhone String?
   notes         String?
   tags          String[]  @default([])
   smsConsent    Boolean   @default(false)

@@ -76,6 +76,8 @@ export default async function customerRoutes(app: FastifyInstance) {
         email: z.string().email().optional(),
         gender: z.string().optional(),
         source: z.string().optional(),
+        referralName: z.string().trim().max(150).optional(),
+        referralPhone: z.string().trim().max(30).optional(),
         tags: z.array(z.string()).optional(),
         notes: z.string().optional(),
         waConsent: z.boolean().optional(),
@@ -83,7 +85,11 @@ export default async function customerRoutes(app: FastifyInstance) {
       })
       .parse(req.body);
     if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user!.branchId !== body.branchId) return reply.code(403).send({ error: "forbidden" });
-    const normalized = { ...body, phone: body.phone ? body.phone.replace(/\D/g, "") : undefined };
+    const normalized = {
+      ...body,
+      phone: body.phone ? body.phone.replace(/\D/g, "") : undefined,
+      referralPhone: body.referralPhone ? body.referralPhone.replace(/\D/g, "") : undefined,
+    };
     try {
       const c = await prisma.$transaction(async (tx) => {
         const customer = await tx.customer.create({ data: normalized });
@@ -182,6 +188,8 @@ export default async function customerRoutes(app: FastifyInstance) {
       email: z.string().email().nullable().optional(),
       gender: z.string().nullable().optional(),
       source: z.string().nullable().optional(),
+      referralName: z.string().trim().max(150).nullable().optional(),
+      referralPhone: z.string().trim().max(30).nullable().optional(),
       notes: z.string().nullable().optional(),
       tags: z.array(z.string()).optional(),
       waConsent: z.boolean().optional(),

@@ -21,7 +21,7 @@ export default async function reportRoutes(app: FastifyInstance) {
     const end = zonedToUtc(`${calendarKeys(todayKey, 1, 1)[0]}T00:00:00`, timezone);
     const branchWhere = branchId ? { branchId } : {};
 
-    const [appointments, walkIns, invoices, lowStock] = await Promise.all([
+    const [appointments, walkIns, invoices, lowStock, newCustomers] = await Promise.all([
       prisma.appointment.count({ where: { ...branchWhere, startAt: { gte: start, lt: end }, deletedAt: null } }),
       prisma.appointment.count({ where: { ...branchWhere, isWalkIn: true, startAt: { gte: start, lt: end } } }),
       prisma.invoice.findMany({
@@ -29,13 +29,14 @@ export default async function reportRoutes(app: FastifyInstance) {
         select: { totalMinor: true, paidMinor: true },
       }),
       prisma.product.findMany({ where: { deletedAt: null } }),
+      prisma.customer.count({ where: { ...branchWhere, createdAt: { gte: start, lt: end }, deletedAt: null } }),
     ]);
 
     const salesMinor = invoices.reduce((s, i) => s + i.totalMinor, 0);
     const avgBillMinor = invoices.length ? Math.round(salesMinor / invoices.length) : 0;
     const low = lowStock.filter((p) => p.stockQty <= p.reorderLevel).length;
 
-    return { appointments, walkIns, bills: invoices.length, salesMinor, avgBillMinor, lowStockCount: low };
+    return { appointments, walkIns, bills: invoices.length, salesMinor, avgBillMinor, lowStockCount: low, newCustomers };
   });
 
   // Range report: sales, payment mix, new vs repeat, top services/staff.

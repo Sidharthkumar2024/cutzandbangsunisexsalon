@@ -23,10 +23,12 @@ export type BackendToday = {
   salesMinor: number;
   avgBillMinor: number;
   lowStockCount: number;
+  newCustomers: number;
 };
 export type BackendAppointment = {
   id: string;
   status: string;
+  isWalkIn: boolean;
   startAt: string;
   endAt: string;
   guestName?: string | null;
@@ -58,6 +60,9 @@ export type BackendCustomer = {
   name: string;
   phone?: string | null;
   email?: string | null;
+  source?: string | null;
+  referralName?: string | null;
+  referralPhone?: string | null;
   visitCount: number;
   totalSpent: number;
   loyaltyPoints: number;
@@ -811,6 +816,8 @@ export const backendApi = {
       phone?: string;
       email?: string;
       source?: string;
+      referralName?: string;
+      referralPhone?: string;
       tags?: string[];
       notes?: string;
       waConsent?: boolean;

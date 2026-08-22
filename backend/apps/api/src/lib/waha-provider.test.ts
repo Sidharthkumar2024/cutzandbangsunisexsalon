@@ -50,6 +50,20 @@ describe("WAHA provider", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("reuses an existing QR session instead of restarting it", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: "Session already exists" }), { status: 422 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: "SCAN_QR_CODE" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ mimetype: "image/png", data: "YWJj" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const state = await new WhatsAppUnofficialProvider(config).sessionAction("create");
+
+    expect(state).toMatchObject({ status: "SCAN_QR_CODE", connected: false });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/restart"))).toBe(false);
+  });
+
   it("requires the independent webhook secret", () => {
     const provider = new WhatsAppUnofficialProvider(config);
     expect(provider.verifyWebhook({ "x-internal-secret": config.webhookSecret }, "")).toBe(true);

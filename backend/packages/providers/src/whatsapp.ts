@@ -284,7 +284,11 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
         });
       } catch (error) {
         if (!(error instanceof Error) || !/already|exist|422/i.test(error.message)) throw error;
-        await this.json(`/api/sessions/${encodeURIComponent(this.session)}/restart`, { method: "POST", body: "{}" });
+        // An existing SCAN_QR_CODE session already exposes a fresh QR through
+        // the read-only auth/qr endpoint. Restarting here makes some WAHA/WebJS
+        // releases call a removed refreshQR command and leaves the UI looking
+        // broken even though a valid QR is available.
+        return this.health();
       }
     } else {
       await this.json(`/api/sessions/${encodeURIComponent(this.session)}/${action}`, { method: "POST", body: "{}" });

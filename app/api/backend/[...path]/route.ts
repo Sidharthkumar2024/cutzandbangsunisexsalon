@@ -24,14 +24,17 @@ function sessionCookie(value: string, maxAge: number) {
 }
 
 async function forward(request: Request, context: { params: Promise<{ path: string[] }> }) {
-  const base = backendBase();
-  if (!base) return Response.json({ error: 'backend_not_configured' }, { status: 503 });
-
   const { path } = await context.params;
   const incoming = new URL(request.url);
   const backendPath = path.length === 1 && path[0] === 'health'
     ? '/health'
     : `/api/v1/${path.map(encodeURIComponent).join('/')}`;
+  const isLogout = request.method === 'POST' && backendPath === '/api/v1/auth/logout';
+  const base = backendBase();
+  if (!base) {
+    const headers = isLogout ? { 'set-cookie': sessionCookie('', 0) } : undefined;
+    return Response.json({ error: 'backend_not_configured' }, { status: 503, headers });
+  }
   const isMutation = !['GET', 'HEAD', 'OPTIONS'].includes(request.method);
   const origin = request.headers.get('origin');
   if (isMutation && origin && origin !== incoming.origin) {
@@ -63,7 +66,6 @@ async function forward(request: Request, context: { params: Promise<{ path: stri
     const isSessionIssue = request.method === 'POST' && (
       backendPath === '/api/v1/auth/login' || backendPath === '/api/v1/auth/register'
     );
-    const isLogout = request.method === 'POST' && backendPath === '/api/v1/auth/logout';
     const body = await response.arrayBuffer();
 
     if (isSessionIssue && response.ok) {
@@ -90,7 +92,8 @@ async function forward(request: Request, context: { params: Promise<{ path: stri
       headers: responseHeaders,
     });
   } catch {
-    return Response.json({ error: 'backend_unavailable' }, { status: 502 });
+    const headers = isLogout ? { 'set-cookie': sessionCookie('', 0) } : undefined;
+    return Response.json({ error: 'backend_unavailable' }, { status: 502, headers });
   }
 }
 
