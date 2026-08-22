@@ -28,6 +28,7 @@ type View =
   | "memberships"
   | "services"
   | "inventory"
+  | "cash"
   | "inbox"
   | "content"
   | "coupons"
@@ -126,6 +127,7 @@ const navGroups: Array<{
     items: [
       { id: "services", label: "Services", icon: "SV" },
       { id: "inventory", label: "Inventory", icon: "IV" },
+      { id: "cash", label: "Cash & expenses", icon: "₹" },
     ],
   },
   {
@@ -265,6 +267,7 @@ const viewTitles: Record<View, [string, string]> = {
     "Inventory",
     "Products, vendor bills, stock movements and reorder alerts.",
   ],
+  cash: ["Cash & expenses", "Opening float, daily expenses and end-of-day reconciliation."],
   inbox: ["Unified inbox", "WhatsApp, email and internal notes in one queue."],
   content: [
     "Website content",
@@ -353,6 +356,17 @@ export default function AdminPage() {
     cart.reduce((sum, item) => sum + item.price * item.taxRateBps, 0) / 10_000,
   );
   const total = subtotal + tax;
+  const activeBranch = backend.data.branches.find((branch) => branch.id === (backend.data.user?.branchId ?? "main")) ?? backend.data.branches[0];
+  const role = backend.data.user?.role;
+  const allowedViews = new Set<View>(
+    role === "RECEPTION"
+      ? ["dashboard", "calendar", "pos", "customers", "memberships", "inbox", "cash"]
+      : role === "MANAGER"
+        ? ["dashboard", "calendar", "pos", "customers", "memberships", "services", "inventory", "cash", "inbox", "coupons", "campaigns", "reports", "staff", "attendance", "payroll", "settings"]
+        : role === "STAFF"
+          ? ["calendar", "customers"]
+          : navGroups.flatMap((group) => group.items.map((item) => item.id)).concat("settings"),
+  );
 
   const selectView = (next: View) => {
     setView(next);
@@ -416,8 +430,8 @@ export default function AdminPage() {
         <div className="branch-chip">
           <span>C&B</span>
           <div>
-            <strong>DLF Phase 4</strong>
-            <small>Gurugram · Open</small>
+            <strong>{activeBranch?.name ?? "Sector 15 Dwarka"}</strong>
+            <small>New Delhi · Open</small>
           </div>
           <i>⌄</i>
         </div>
@@ -425,7 +439,7 @@ export default function AdminPage() {
           {navGroups.map((group) => (
             <div className="admin-nav-group" key={group.label}>
               <p>{group.label}</p>
-              {group.items.map((item) => (
+              {group.items.filter((item) => !role || allowedViews.has(item.id)).map((item) => (
                 <button
                   key={item.id}
                   className={view === item.id ? "active" : ""}
@@ -448,10 +462,10 @@ export default function AdminPage() {
         <div className="admin-user">
           <span>SS</span>
           <div>
-            <strong>Sana Sharma</strong>
-            <small>Owner</small>
+            <strong>{backend.data.user?.email?.split("@")[0] ?? "Salon team"}</strong>
+            <small>{backend.data.user?.role ? prettyStatus(backend.data.user.role) : "Signed out"}</small>
           </div>
-          <i>•••</i>
+          {backend.token ? <button onClick={backend.logout}>Log out</button> : <i>•••</i>}
         </div>
       </aside>
 
@@ -549,6 +563,9 @@ export default function AdminPage() {
               onRefresh={() => void backend.refresh()}
             />
           )}
+          {view === "cash" && (
+            <Cashbook token={backend.token} data={backend.data} onRefresh={() => void backend.refresh()} />
+          )}
           {view === "inbox" && (
             <Inbox
               token={backend.token}
@@ -618,11 +635,11 @@ function BackendConnection({
       <div className="backend-banner connected">
         <span>●</span>
         <div>
-          <strong>Backend live</strong>
-          <small>Fastify · Postgres · Redis · {backend.data.user?.role}</small>
+          <strong>Signed in securely</strong>
+          <small>{prettyStatus(backend.data.user?.role ?? "team")} access · live salon data</small>
         </div>
         <button onClick={() => void backend.refresh()}>Refresh</button>
-        <button onClick={backend.logout}>Disconnect</button>
+        <button onClick={backend.logout}>Log out</button>
       </div>
     );
   return (
@@ -641,13 +658,13 @@ function BackendConnection({
             ? "Backend offline"
             : backend.status === "checking"
               ? "Checking backend…"
-              : "Connect the business backend"}
+              : "Team sign in"}
         </strong>
         <small>
           {backend.error ||
             (backend.status === "offline"
               ? "Start the API on port 4100. Demo data remains visible."
-              : "Sign in to replace demo figures with live salon data.")}
+              : "Owner, admin, manager and reception accounts use role-based access.")}
         </small>
       </div>
       <input
@@ -2260,6 +2277,7 @@ function POS({
   const [checkoutError, setCheckoutError] = useState("");
   const [charging, setCharging] = useState(false);
   const [customerId, setCustomerId] = useState("");
+  const [customerSearch, setCustomerSearch] = useState("");
   const [customerDetail, setCustomerDetail] =
     useState<BackendCustomerDetail | null>(null);
   const [membershipId, setMembershipId] = useState("");
@@ -2272,6 +2290,7 @@ function POS({
   >("UPI");
   const [deliveryMessage, setDeliveryMessage] = useState("");
   const customer = data.customers.find((item) => item.id === customerId);
+  const matchingCustomers = data.customers.filter((item) => !customerSearch.trim() || item.name.toLowerCase().includes(customerSearch.toLowerCase()) || (item.phone ?? "").includes(customerSearch.replace(/\D/g, ""))).slice(0, 30);
   const membership = customerDetail?.memberships.find(
     (item) => item.id === membershipId && item.isActive,
   );
@@ -2589,6 +2608,7 @@ function POS({
                 : "Choose a customer for CRM and membership"}
             </p>
           </div>
+          <label className="pos-customer-search"><span>Search customer</span><input value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder="Name or phone" /></label>
           <select
             value={customerId}
             onChange={(event) => {
@@ -2602,7 +2622,7 @@ function POS({
             aria-label="Select POS customer"
           >
             <option value="">Walk-in</option>
-            {data.customers.map((item) => (
+            {matchingCustomers.map((item) => (
               <option value={item.id} key={item.id}>
                 {item.name} · {item.phone ?? "No phone"}
               </option>
@@ -2818,6 +2838,11 @@ function Customers({
   const [waConsent, setWaConsent] = useState(false);
   const [emailConsent, setEmailConsent] = useState(false);
   const [detail, setDetail] = useState<BackendCustomerDetail | null>(null);
+  const [duplicate, setDuplicate] = useState<Awaited<ReturnType<typeof backendApi.lookupCustomer>>>(null);
+  const [historyDate, setHistoryDate] = useState("");
+  const [historyService, setHistoryService] = useState("");
+  const [historyAmount, setHistoryAmount] = useState(0);
+  const [historyStaff, setHistoryStaff] = useState("");
   const [loyaltyDelta, setLoyaltyDelta] = useState(0);
   const [loyaltyReason, setLoyaltyReason] = useState("");
   const [message, setMessage] = useState("");
@@ -2837,6 +2862,14 @@ function Customers({
             .length,
     ]),
   );
+
+  useEffect(() => {
+    if (!token || phone.replace(/\D/g, "").length < 8) return;
+    const timer = window.setTimeout(() => {
+      backendApi.lookupCustomer(token, phone).then(setDuplicate).catch(() => setDuplicate(null));
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [phone, token]);
 
   const create = async () => {
     if (!token || !name) return;
@@ -2908,6 +2941,17 @@ function Customers({
       setBusy(false);
     }
   };
+  const addHistory = async () => {
+    if (!token || !detail || !historyDate || !historyService.trim()) return;
+    setBusy(true); setMessage("");
+    try {
+      await backendApi.addCustomerHistory(token, detail.id, { visitedAt: new Date(historyDate).toISOString(), serviceName: historyService.trim(), amountMinor: historyAmount * 100, staffName: historyStaff.trim() || undefined });
+      setDetail(await backendApi.customerDetail(token, detail.id));
+      setHistoryDate(""); setHistoryService(""); setHistoryAmount(0); setHistoryStaff("");
+      setMessage("Earlier visit added to this customer’s dated history."); onRefresh();
+    } catch (cause) { setMessage(cause instanceof Error ? prettyStatus(cause.message) : "History could not be saved."); }
+    finally { setBusy(false); }
+  };
 
   return (
     <div className="customers-view">
@@ -2962,9 +3006,10 @@ function Customers({
             Phone
             <input
               value={phone}
-              onChange={(event) => setPhone(event.target.value)}
+              onChange={(event) => { setPhone(event.target.value); setDuplicate(null); }}
             />
           </label>
+          {duplicate && <div className="duplicate-customer-alert"><strong>Existing customer found: {duplicate.name}</strong><span>{duplicate.visitCount} visits · {money(duplicate.totalSpent)} total · {duplicate.invoices.length + duplicate.historyEntries.length} recent records</span><button onClick={() => { setShowCreate(false); void open(duplicate.id); }}>Open customer history</button></div>}
           <label>
             Email
             <input
@@ -2980,7 +3025,7 @@ function Customers({
           </fieldset>
           <button
             className="button admin-primary"
-            disabled={busy || !token || !name}
+            disabled={busy || !token || !name || Boolean(duplicate)}
             onClick={() => void create()}
           >
             {busy ? "Saving…" : "Create customer"}
@@ -3108,6 +3153,14 @@ function Customers({
             <label>Reason<input value={loyaltyReason} onChange={(event) => setLoyaltyReason(event.target.value)} placeholder="Service recovery / correction" /></label>
             <button className="button admin-primary" disabled={busy || !loyaltyDelta || !loyaltyReason.trim()} onClick={() => void adjustLoyalty()}>Save adjustment</button>
           </div>
+          <div className="history-import-form">
+            <div><strong>Add earlier salon visit</strong><small>Use this for dated records from the previous system. It updates customer search and retention history without creating a fake invoice.</small></div>
+            <label>Visit date<input type="date" max={new Date().toISOString().slice(0, 10)} value={historyDate} onChange={(event) => setHistoryDate(event.target.value)} /></label>
+            <label>Service<input value={historyService} onChange={(event) => setHistoryService(event.target.value)} placeholder="Hair colour + cut" /></label>
+            <label>Sale amount (₹)<input type="number" min="0" value={historyAmount} onChange={(event) => setHistoryAmount(Number(event.target.value))} /></label>
+            <label>Staff (optional)<input value={historyStaff} onChange={(event) => setHistoryStaff(event.target.value)} /></label>
+            <button className="button admin-primary" disabled={busy || !historyDate || !historyService.trim()} onClick={() => void addHistory()}>Add dated visit</button>
+          </div>
           <div className="customer-timeline">
             <h3>Chronological timeline</h3>
             {[
@@ -3146,6 +3199,12 @@ function Customers({
                 at: entry.createdAt,
                 title: `Loyalty · ${entry.deltaPoints > 0 ? "+" : ""}${entry.deltaPoints} points`,
                 meta: `${prettyStatus(entry.type)} · balance ${entry.balanceAfter} · ${entry.reason}`,
+              })),
+              ...(detail.historyEntries ?? []).map((entry) => ({
+                key: `h-${entry.id}`,
+                at: entry.visitedAt,
+                title: `${entry.serviceName} · ${money(entry.amountMinor)}`,
+                meta: `Imported history${entry.staffName ? ` · ${entry.staffName}` : ""}`,
               })),
             ]
               .sort((a, b) => +new Date(b.at) - +new Date(a.at))
@@ -3745,6 +3804,62 @@ function Services({
   );
 }
 
+function Cashbook({ token, data, onRefresh }: { token: string; data: BackendSnapshot; onRefresh: () => void }) {
+  const [openingCash, setOpeningCash] = useState(0);
+  const [closingCash, setClosingCash] = useState(0);
+  const [category, setCategory] = useState("Refreshments");
+  const [description, setDescription] = useState("");
+  const [amount, setAmount] = useState(0);
+  const [paymentMethod, setPaymentMethod] = useState<"CASH" | "UPI" | "CARD">("CASH");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const session = data.currentCash;
+  const operate = async (action: "open" | "close" | "expense") => {
+    if (!token) return;
+    setBusy(true); setMessage("");
+    try {
+      if (action === "open") {
+        await backendApi.openCashSession(token, { branchId: "main", openingCashMinor: openingCash * 100 });
+        setOpeningCash(0); setMessage("Cash drawer opened. Every cash sale and expense now reconciles against it.");
+      } else if (action === "close" && session) {
+        const result = await backendApi.closeCashSession(token, session.id, { closingCashMinor: closingCash * 100 });
+        setClosingCash(0); setMessage(`Drawer closed. Variance: ${money(result.varianceMinor ?? 0)}.`);
+      } else if (action === "expense") {
+        await backendApi.createExpense(token, { branchId: "main", category, description, amountMinor: amount * 100, paymentMethod });
+        setDescription(""); setAmount(0); setMessage("Expense recorded in the audit trail.");
+      }
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Cashbook action failed.");
+    } finally { setBusy(false); }
+  };
+  return <div className="cashbook-view">
+    {message && <div className="calendar-message">{message}</div>}
+    <section className="cashbook-kpis">
+      <article><small>Opening cash</small><strong>{money(session?.openingCashMinor ?? 0)}</strong><span>{session ? `Opened ${new Date(session.openedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}` : "No open drawer"}</span></article>
+      <article><small>Cash sales</small><strong>{money(session?.cashSalesMinor ?? 0)}</strong><span>Paid invoices since opening</span></article>
+      <article><small>Cash expenses</small><strong>{money(session?.cashExpensesMinor ?? 0)}</strong><span>Recorded against this drawer</span></article>
+      <article className="expected"><small>Expected cash</small><strong>{money(session?.expectedCashMinor ?? 0)}</strong><span>Opening + sales − expenses</span></article>
+    </section>
+    <div className="cashbook-grid">
+      <section className="admin-card phase-one-form">
+        <div><p className="eyebrow">Daily register</p><h2>{session ? "Close cash drawer" : "Open cash drawer"}</h2><small>{session ? `Business date ${session.businessDate}` : "Enter the physical cash available before the first sale."}</small></div>
+        {!session ? <label>Opening cash (₹)<input type="number" min="0" value={openingCash} onChange={(event) => setOpeningCash(Number(event.target.value))} /></label> : <label>Physical closing cash (₹)<input type="number" min="0" value={closingCash} onChange={(event) => setClosingCash(Number(event.target.value))} /></label>}
+        <button className="button admin-primary" disabled={busy || !token} onClick={() => void operate(session ? "close" : "open")}>{busy ? "Saving…" : session ? "Close & reconcile" : "Open drawer"}</button>
+      </section>
+      <section className="admin-card phase-one-form">
+        <div><p className="eyebrow">Operating expense</p><h2>Add daily expense</h2><small>Milk, refreshments, supplies, travel and other salon expenses.</small></div>
+        <label>Category<select value={category} onChange={(event) => setCategory(event.target.value)}><option>Refreshments</option><option>Consumables</option><option>Utilities</option><option>Travel</option><option>Maintenance</option><option>Other</option></select></label>
+        <label>Description<input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Milk and tea supplies" /></label>
+        <label>Amount (₹)<input type="number" min="1" value={amount} onChange={(event) => setAmount(Number(event.target.value))} /></label>
+        <label>Paid via<select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as typeof paymentMethod)}><option value="CASH">Cash</option><option value="UPI">UPI</option><option value="CARD">Card</option></select></label>
+        <button className="button admin-primary" disabled={busy || !token || !description.trim() || amount <= 0 || (paymentMethod === "CASH" && !session)} onClick={() => void operate("expense")}>Record expense</button>
+      </section>
+    </div>
+    <article className="admin-card expense-list"><div className="card-head"><div><h2>Recent expenses</h2><p>Latest branch expenses with payment method.</p></div></div>{data.expenses.slice(0, 12).map((expense) => <div key={expense.id}><span><strong>{expense.description}</strong><small>{expense.category} · {new Date(expense.occurredAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</small></span><em>{prettyStatus(expense.paymentMethod)}</em><b>{money(expense.amountMinor)}</b></div>)}{!data.expenses.length && <p className="empty-cart">No expenses recorded yet.</p>}</article>
+  </div>;
+}
+
 function Inventory({
   token,
   data,
@@ -3762,6 +3877,10 @@ function Inventory({
   const [productName, setProductName] = useState("");
   const [productSku, setProductSku] = useState("");
   const [productPrice, setProductPrice] = useState(499);
+  const [productMrp, setProductMrp] = useState(599);
+  const [productPurchase, setProductPurchase] = useState(300);
+  const [productDiscount, setProductDiscount] = useState(0);
+  const [productCommission, setProductCommission] = useState(0);
   const [reorderLevel, setReorderLevel] = useState(5);
   const [movementProductId, setMovementProductId] = useState("");
   const [movementQty, setMovementQty] = useState(1);
@@ -3779,6 +3898,10 @@ function Inventory({
           stockQty: 3,
           reorderLevel: 8,
           sellMinor: 125000,
+          purchaseMinor: 80000,
+          mrpMinor: 140000,
+          discountBps: 1000,
+          commissionBps: 200,
         },
         {
           id: "demo-2",
@@ -3788,6 +3911,10 @@ function Inventory({
           stockQty: 14,
           reorderLevel: 5,
           sellMinor: 385000,
+          purchaseMinor: 250000,
+          mrpMinor: 420000,
+          discountBps: 500,
+          commissionBps: 300,
         },
       ];
   const createVendor = async () => {
@@ -3819,6 +3946,10 @@ function Inventory({
         name: productName,
         sku: productSku || undefined,
         sellMinor: productPrice * 100,
+        mrpMinor: productMrp * 100,
+        purchaseMinor: productPurchase * 100,
+        discountBps: Math.round(productDiscount * 100),
+        commissionBps: Math.round(productCommission * 100),
         taxRateBps: 1800,
         reorderLevel,
       });
@@ -3920,6 +4051,10 @@ function Inventory({
           <label>Name<input value={productName} onChange={(event) => setProductName(event.target.value)} /></label>
           <label>SKU<input value={productSku} onChange={(event) => setProductSku(event.target.value)} /></label>
           <label>Sell price (₹)<input type="number" min="0" value={productPrice} onChange={(event) => setProductPrice(Number(event.target.value))} /></label>
+          <label>MRP (₹)<input type="number" min="0" value={productMrp} onChange={(event) => setProductMrp(Number(event.target.value))} /></label>
+          <label>Purchase price (₹)<input type="number" min="0" value={productPurchase} onChange={(event) => setProductPurchase(Number(event.target.value))} /></label>
+          <label>Discount %<input type="number" min="0" max="100" value={productDiscount} onChange={(event) => setProductDiscount(Number(event.target.value))} /></label>
+          <label>Staff commission %<input type="number" min="0" max="100" value={productCommission} onChange={(event) => setProductCommission(Number(event.target.value))} /></label>
           <label>Reorder level<input type="number" min="0" value={reorderLevel} onChange={(event) => setReorderLevel(Number(event.target.value))} /></label>
           <button className="button admin-primary" disabled={busy || !token || !productName} onClick={() => void createProduct()}>{busy ? "Saving…" : "Add product"}</button>
         </section>
@@ -3938,6 +4073,8 @@ function Inventory({
           <span>Stock</span>
           <span>Reorder at</span>
           <span>Sell price</span>
+          <span>MRP / discount</span>
+          <span>Commission</span>
         </header>
         {rows.map((product) => (
           <div key={product.id}>
@@ -3953,6 +4090,8 @@ function Inventory({
             </strong>
             <span>{product.reorderLevel}</span>
             <span>{money(product.sellMinor)}</span>
+            <span>{money(product.mrpMinor)} · {product.discountBps / 100}%</span>
+            <span>{product.commissionBps / 100}%</span>
           </div>
         ))}
       </article>
@@ -4096,12 +4235,15 @@ function Inbox({
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [newCustomerId, setNewCustomerId] = useState("");
+  const [inboxSearch, setInboxSearch] = useState("");
+  const [unreadOnly, setUnreadOnly] = useState(false);
   const [newChannel, setNewChannel] = useState<
     "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL"
   >("WHATSAPP_OFFICIAL");
   const selected =
     data.conversations.find((item) => item.id === selectedId) ??
     data.conversations[0];
+  const conversationRows = data.conversations.filter((item) => (!unreadOnly || item.unread) && (!inboxSearch.trim() || (item.customer?.name ?? "").toLowerCase().includes(inboxSearch.toLowerCase()) || (item.customer?.phone ?? "").includes(inboxSearch.replace(/\D/g, ""))));
   const load = async (id: string) => {
     if (!token) return;
     setSelectedId(id);
@@ -4176,9 +4318,10 @@ function Inbox({
         <aside className="conversation-list">
           <label>
             <span>⌕</span>
-            <input placeholder="Search conversations" />
+            <input value={inboxSearch} onChange={(event) => setInboxSearch(event.target.value)} placeholder="Name or phone" />
           </label>
-          {data.conversations.map((item) => (
+          <button className={`inbox-unread-filter ${unreadOnly ? "active" : ""}`} onClick={() => setUnreadOnly((value) => !value)}>Unread only · {data.conversations.filter((item) => item.unread).length}</button>
+          {conversationRows.map((item) => (
             <button
               key={item.id}
               className={selected?.id === item.id ? "active" : ""}
@@ -4325,6 +4468,9 @@ function Campaigns({
   const [content, setContent] = useState("");
   const [offer, setOffer] = useState("");
   const [scheduledAt, setScheduledAt] = useState("");
+  const [mediaKey, setMediaKey] = useState("");
+  const [mediaType, setMediaType] = useState<"image" | "document" | "video" | "">("");
+  const [mediaName, setMediaName] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [waRisk, setWaRisk] = useState<BackendWhatsAppStatus["unofficial"]["risk"]>();
@@ -4342,9 +4488,9 @@ function Campaigns({
         item.segment ? prettyStatus(item.segment) : "All customers",
         prettyStatus(item.channel),
         prettyStatus(item.status),
-        String(item._count.recipients),
-        new Date(item.createdAt).toLocaleDateString("en-IN"),
-        "Backend",
+        `${item.engagement?.sent ?? 0}/${item.engagement?.total ?? item._count.recipients}`,
+        String(item.engagement?.read ?? 0),
+        String(item.engagement?.replied ?? 0),
       ])
     : [
         [
@@ -4405,10 +4551,13 @@ function Campaigns({
         content,
         branchId: "main",
         scheduledAt: scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
+        mediaKey: mediaKey || undefined,
+        mediaType: mediaType || undefined,
       });
       setName("");
       setContent("");
       setScheduledAt("");
+      setMediaKey(""); setMediaType(""); setMediaName("");
       setMessage("Campaign created for consented customers and waiting for approval.");
       onRefresh();
     } catch (cause) {
@@ -4416,6 +4565,17 @@ function Campaigns({
     } finally {
       setBusy(false);
     }
+  };
+  const uploadCreative = async (file?: File) => {
+    if (!token || !file) return;
+    setBusy(true); setMessage("");
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(",")[1] ?? ""); reader.onerror = reject; reader.readAsDataURL(file); });
+      const upload = await backendApi.uploadMedia(token, { purpose: "campaign", contentType: file.type, base64 });
+      setMediaKey(upload.key); setMediaName(file.name); setMediaType(file.type === "application/pdf" ? "document" : "image");
+      setMessage("Campaign creative uploaded. It will be signed only when each message is sent.");
+    } catch (cause) { setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Creative upload failed."); }
+    finally { setBusy(false); }
   };
   const approve = async (campaignId: string) => {
     if (!token) return;
@@ -4499,6 +4659,7 @@ function Campaigns({
         <label>Channel<select value={channel} onChange={(event) => setChannel(event.target.value as typeof channel)}><option value="WHATSAPP_OFFICIAL">WhatsApp Official</option><option value="WHATSAPP_UNOFFICIAL">WhatsApp Unofficial</option><option value="EMAIL">Email</option></select></label>
         <label>Offer<input value={offer} onChange={(event) => setOffer(event.target.value)} placeholder="20% off on weekday services" /></label>
         <label>Schedule (optional)<input type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} /></label>
+        <label>Image / PDF creative<span className="campaign-file-picker">{mediaName || "Choose creative"}<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={(event) => void uploadCreative(event.target.files?.[0])} /></span></label>
         <label className="campaign-copy">Message<textarea value={content} onChange={(event) => setContent(event.target.value)} rows={5} /></label>
         <div className="form-actions"><button disabled={!token || busy} onClick={() => void draft()}>AI draft</button><button className="button admin-primary" disabled={!token || busy || !name || !content} onClick={() => void create()}>Create for approval</button></div>
       </section>
@@ -4507,7 +4668,7 @@ function Campaigns({
           ["1", "Audience", `At-risk / lapsed · ${attention}`],
           ["2", "Channel", "WhatsApp, email or SMS"],
           ["3", "Content", "AI draft with human approval"],
-          ["4", "Delivery", "Queued and tracked"],
+          ["4", "Delivery", "Sent, read and reply tracked"],
         ].map(([num, label, detail], i) => (
           <article key={label} className={i < 3 ? "complete" : ""}>
             <span>{i < 3 ? "✓" : num}</span>
@@ -4528,6 +4689,7 @@ function Campaigns({
           </div>
           <button>All statuses⌄</button>
         </div>
+        <div className="campaign-table-labels"><span>Campaign</span><span>Audience</span><span>Channel</span><span>Status</span><span>Sent / total</span><span>Read</span><span>Replied</span></div>
         {rows.map((row) => (
           <div className="campaign-row" key={row[0]}>
             {row.map((cell, index) =>
@@ -4693,7 +4855,13 @@ function Staff({
   const [showCreate, setShowCreate] = useState(false);
   const [displayName, setDisplayName] = useState("");
   const [phone, setPhone] = useState("");
+  const [commissionRate, setCommissionRate] = useState(0);
   const [serviceIds, setServiceIds] = useState<string[]>([]);
+  const [accountStaffId, setAccountStaffId] = useState("");
+  const [accountEmail, setAccountEmail] = useState("");
+  const [accountPassword, setAccountPassword] = useState("");
+  const [accountRole, setAccountRole] = useState<"MANAGER" | "RECEPTION" | "STAFF">("STAFF");
+  const [accountCommission, setAccountCommission] = useState(0);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const services = data.categories.flatMap((category) => category.services);
@@ -4706,11 +4874,12 @@ function Staff({
         branchId: "main",
         displayName,
         phone: phone || undefined,
-        commissionRate: 0,
+        commissionRate: Math.round(commissionRate * 100),
         serviceIds,
       });
       setDisplayName("");
       setPhone("");
+      setCommissionRate(0);
       setServiceIds([]);
       setShowCreate(false);
       setMessage("Staff profile created with selected booking skills.");
@@ -4725,15 +4894,25 @@ function Staff({
       setBusy(false);
     }
   };
-  const rows = data.staff.length
-    ? data.staff.map((staff) => [
+  const setAccount = async () => {
+    if (!token || !accountStaffId || !accountEmail || accountPassword.length < 10) return;
+    setBusy(true); setMessage("");
+    try {
+      await backendApi.setStaffAccount(token, accountStaffId, { email: accountEmail, password: accountPassword, role: accountRole, commissionRate: Math.round(accountCommission * 100) });
+      setAccountPassword(""); setMessage(`${prettyStatus(accountRole)} login enabled with ${accountCommission}% commission.`); onRefresh();
+    } catch (cause) { setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Team login could not be saved."); }
+    finally { setBusy(false); }
+  };
+  const team = data.teamAccounts.length ? data.teamAccounts : data.staff;
+  const rows = team.length
+    ? team.map((staff) => [
         staff.displayName
           .split(" ")
           .map((part) => part[0])
           .join("")
           .slice(0, 2),
         staff.displayName,
-        "Salon artist",
+        staff.user ? prettyStatus(staff.user.role) : "No login",
         `${data.categories.flatMap((category) => category.services).filter((service) => service.serviceStaff.some((link) => link.staff.id === staff.id)).length} services`,
         money(data.range?.topStaff.find(([id]) => id === staff.id)?.[1] ?? 0),
       ])
@@ -4764,6 +4943,10 @@ function Staff({
               value={displayName}
               onChange={(event) => setDisplayName(event.target.value)}
             />
+          </label>
+          <label>
+            Commission %
+            <input type="number" min="0" max="100" step="0.25" value={commissionRate} onChange={(event) => setCommissionRate(Number(event.target.value))} />
           </label>
           <label>
             Phone
@@ -4800,6 +4983,15 @@ function Staff({
           </button>
         </section>
       )}
+      <section className="admin-card phase-one-form team-access-form">
+        <div><p className="eyebrow">Role-based access</p><h2>Manager, reception & staff login</h2><small>Managers use the admin workspace, reception sees front-desk tools, and staff use their own daily portal.</small></div>
+        <label>Team member<select value={accountStaffId} onChange={(event) => { const id = event.target.value; setAccountStaffId(id); const member = team.find((item) => item.id === id); setAccountEmail(member?.user?.email ?? ""); setAccountRole((member?.user?.role as typeof accountRole) ?? "STAFF"); setAccountCommission((member?.commissionRate ?? 0) / 100); }}><option value="">Select team member</option>{team.map((member) => <option key={member.id} value={member.id}>{member.displayName} · {member.user ? prettyStatus(member.user.role) : "No login"}</option>)}</select></label>
+        <label>Login role<select value={accountRole} onChange={(event) => setAccountRole(event.target.value as typeof accountRole)}><option value="MANAGER">Manager</option><option value="RECEPTION">Reception</option><option value="STAFF">Staff</option></select></label>
+        <label>Email<input type="email" value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} /></label>
+        <label>New password<input type="password" minLength={10} value={accountPassword} onChange={(event) => setAccountPassword(event.target.value)} placeholder="Minimum 10 characters" /></label>
+        <label>Commission %<input type="number" min="0" max="100" step="0.25" value={accountCommission} onChange={(event) => setAccountCommission(Number(event.target.value))} /></label>
+        <button className="button admin-primary" disabled={busy || !accountStaffId || !accountEmail || accountPassword.length < 10} onClick={() => void setAccount()}>Save login & commission</button>
+      </section>
       <div className="staff-grid">
         {rows.map(([initials, name, role, skills, sales], index) => (
           <article className="admin-card staff-card" key={name}>

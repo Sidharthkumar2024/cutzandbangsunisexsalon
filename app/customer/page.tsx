@@ -14,6 +14,7 @@ export default function CustomerPortal() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [data, setData] = useState<CustomerPortalOverview | null>(null);
+  const [token, setToken] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const authenticate = async () => {
@@ -33,6 +34,7 @@ export default function CustomerPortal() {
       if (session.user.role !== "CUSTOMER")
         throw new Error("customer_account_required");
       setData(await backendApi.customerOverview(session.token));
+      setToken(session.token);
       setPassword("");
     } catch (cause) {
       setMessage(
@@ -175,7 +177,7 @@ export default function CustomerPortal() {
             <strong>{data.name.split(" ")[0]}</strong>
             <small>Secure account</small>
           </div>
-          <button onClick={() => setData(null)}>Sign out</button>
+          <button onClick={() => { if (token) void backendApi.logout(token).catch(() => undefined); setData(null); setToken(""); }}>Sign out</button>
         </div>
       </header>
       <div className="portal-content" id="overview">
@@ -240,7 +242,7 @@ export default function CustomerPortal() {
                     .join(", ")}
                 </p>
                 <div>
-                  <button>Get directions</button>
+                  <a className="portal-inline-button" href="https://www.google.com/maps/search/?api=1&query=28.6166967%2C77.0283703" target="_blank" rel="noreferrer">Get directions</a>
                   <button>Request reschedule</button>
                 </div>
               </div>

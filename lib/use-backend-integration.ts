@@ -45,6 +45,9 @@ export function useBackendIntegration() {
     }
   };
 
-  const logout = () => { sessionStorage.removeItem(TOKEN_KEY); setToken(''); setData(emptySnapshot); setStatus('ready'); setError(''); };
+  const logout = () => {
+    if (token) void backendApi.logout(token).catch(() => undefined);
+    sessionStorage.removeItem(TOKEN_KEY); setToken(''); setData(emptySnapshot); setStatus('ready'); setError('');
+  };
   return { token, data, status, error, login, logout, refresh: () => token && refresh(token) };
 }

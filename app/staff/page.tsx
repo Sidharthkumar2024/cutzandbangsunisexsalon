@@ -144,6 +144,7 @@ export default function StaffPortal() {
           </div>
           <button
             onClick={() => {
+              if (token) void backendApi.logout(token).catch(() => undefined);
               setData(null);
               setToken("");
             }}

@@ -101,6 +101,9 @@ export type BackendProduct = {
   reorderLevel: number;
   sellMinor: number;
   purchaseMinor: number;
+  mrpMinor: number;
+  discountBps: number;
+  commissionBps: number;
   taxRateBps: number;
   isActive: boolean;
 };
@@ -243,6 +246,9 @@ export type BackendCampaign = {
   dailyCap?: number | null;
   riskLevel?: string | null;
   deliveryRisk?: { score: number; label: string };
+  mediaKey?: string | null;
+  mediaType?: string | null;
+  engagement?: { total: number; sent: number; delivered: number; read: number; replied: number; failed: number };
   createdAt: string;
   _count: { recipients: number };
 };
@@ -250,6 +256,43 @@ export type BackendStaff = {
   id: string;
   displayName: string;
   branchId: string;
+  phone?: string | null;
+  commissionRate?: number;
+  user?: { id: string; email?: string | null; role: string; isActive: boolean } | null;
+};
+export type BackendCashSession = {
+  id: string;
+  branchId: string;
+  businessDate: string;
+  openingCashMinor: number;
+  closingCashMinor?: number | null;
+  expectedCashMinor: number;
+  varianceMinor?: number | null;
+  status: "OPEN" | "CLOSED";
+  openedAt: string;
+  closedAt?: string | null;
+  cashSalesMinor: number;
+  cashExpensesMinor: number;
+};
+export type BackendExpense = {
+  id: string;
+  branchId: string;
+  cashSessionId?: string | null;
+  category: string;
+  description: string;
+  amountMinor: number;
+  paymentMethod: "CASH" | "UPI" | "CARD";
+  vendorName?: string | null;
+  occurredAt: string;
+};
+export type BackendCustomerHistoryEntry = {
+  id: string;
+  visitedAt: string;
+  serviceName: string;
+  amountMinor: number;
+  staffName?: string | null;
+  notes?: string | null;
+  source: string;
 };
 export type BackendService = {
   id: string;
@@ -468,6 +511,7 @@ export type BackendCustomerDetail = Omit<BackendCustomer, "segments"> & {
     createdAt: string;
   }>;
   loyaltyLedger: BackendLoyaltyEntry[];
+  historyEntries: BackendCustomerHistoryEntry[];
 };
 export type PublicCatalog = Array<{
   id: string;
@@ -557,6 +601,9 @@ export type BackendSnapshot = {
   dashboardInsights: BackendDashboardInsights | null;
   auditLogs: BackendAuditLog[];
   systemHealth: BackendSystemHealth | null;
+  currentCash: BackendCashSession | null;
+  expenses: BackendExpense[];
+  teamAccounts: BackendStaff[];
 };
 
 const emptySnapshot: BackendSnapshot = {
@@ -587,6 +634,9 @@ const emptySnapshot: BackendSnapshot = {
   dashboardInsights: null,
   auditLogs: [],
   systemHealth: null,
+  currentCash: null,
+  expenses: [],
+  teamAccounts: [],
 };
 
 async function request<T>(
@@ -629,6 +679,7 @@ export const backendApi = {
       method: "POST",
       body: JSON.stringify({ email, password }),
     }),
+  logout: (token: string) => request<unknown>("/auth/logout", { method: "POST", body: "{}" }, token),
   registerCustomer: (payload: {
     name: string;
     email: string;
@@ -681,6 +732,9 @@ export const backendApi = {
       ["/payments/reconciliation?take=100", "reconciliations"],
       ["/branches", "branches"],
       ["/invoices?branchId=main&take=50", "invoices"],
+      ["/cash-sessions/current?branchId=main", "currentCash"],
+      ["/expenses?branchId=main&take=100", "expenses"],
+      ["/team-accounts", "teamAccounts"],
     ] as const;
     const [user, ...results] = await Promise.all([
       request<BackendUser>("/auth/me", {}, token),
@@ -733,6 +787,18 @@ export const backendApi = {
     ),
   customerDetail: (token: string, customerId: string) =>
     request<BackendCustomerDetail>(`/customers/${customerId}`, {}, token),
+  lookupCustomer: (token: string, phone: string, branchId = "main") =>
+    request<(BackendCustomer & { invoices: BackendInvoice[]; historyEntries: BackendCustomerHistoryEntry[] }) | null>(
+      `/customers/lookup?branchId=${encodeURIComponent(branchId)}&phone=${encodeURIComponent(phone)}`,
+      {},
+      token,
+    ),
+  addCustomerHistory: (token: string, customerId: string, payload: { visitedAt: string; serviceName: string; amountMinor: number; staffName?: string; notes?: string }) =>
+    request<BackendCustomerHistoryEntry>(
+      `/customers/${encodeURIComponent(customerId)}/history`,
+      { method: "POST", body: JSON.stringify(payload) },
+      token,
+    ),
   adjustLoyalty: (token: string, customerId: string, payload: { deltaPoints: number; reason: string }) =>
     request<{ entry: BackendLoyaltyEntry; balanceAfter: number }>(
       `/customers/${encodeURIComponent(customerId)}/loyalty/adjust`,
@@ -792,6 +858,12 @@ export const backendApi = {
   ) =>
     request<BackendStaff>(
       "/staff",
+      { method: "POST", body: JSON.stringify(payload) },
+      token,
+    ),
+  setStaffAccount: (token: string, staffId: string, payload: { email: string; password: string; role: "MANAGER" | "RECEPTION" | "STAFF"; commissionRate?: number }) =>
+    request<BackendUser>(
+      `/staff/${encodeURIComponent(staffId)}/account`,
       { method: "POST", body: JSON.stringify(payload) },
       token,
     ),
@@ -916,7 +988,7 @@ export const backendApi = {
   uploadMedia: (
     token: string,
     payload: {
-      purpose: "attendance-selfie" | "vendor-bill" | "inbox";
+      purpose: "attendance-selfie" | "vendor-bill" | "inbox" | "campaign";
       contentType: string;
       base64: string;
       consent?: boolean;
@@ -962,6 +1034,9 @@ export const backendApi = {
       sku?: string;
       purchaseMinor?: number;
       sellMinor?: number;
+      mrpMinor?: number;
+      discountBps?: number;
+      commissionBps?: number;
       taxRateBps?: number;
       reorderLevel?: number;
     },
@@ -1000,6 +1075,8 @@ export const backendApi = {
       channel: "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL" | "EMAIL" | "SMS";
       segment?: string;
       content: string;
+      mediaKey?: string;
+      mediaType?: "image" | "document" | "video";
       couponCode?: string;
       branchId: string;
       scheduledAt?: string;
@@ -1016,6 +1093,12 @@ export const backendApi = {
       { method: "POST", body: "{}" },
       token,
     ),
+  openCashSession: (token: string, payload: { branchId: string; openingCashMinor: number; openingNote?: string }) =>
+    request<BackendCashSession>("/cash-sessions/open", { method: "POST", body: JSON.stringify(payload) }, token),
+  closeCashSession: (token: string, cashSessionId: string, payload: { closingCashMinor: number; closingNote?: string }) =>
+    request<BackendCashSession>(`/cash-sessions/${encodeURIComponent(cashSessionId)}/close`, { method: "POST", body: JSON.stringify(payload) }, token),
+  createExpense: (token: string, payload: { branchId: string; category: string; description: string; amountMinor: number; paymentMethod: "CASH" | "UPI" | "CARD"; vendorName?: string; occurredAt?: string }) =>
+    request<BackendExpense>("/expenses", { method: "POST", body: JSON.stringify(payload) }, token),
   createConversation: (
     token: string,
     payload: { customerId: string; channel: "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL" },
