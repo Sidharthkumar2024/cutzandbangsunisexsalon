@@ -1,14 +1,15 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
+import type { FeaturedService, MembershipPlan, SiteContent, Testimonial } from '../../lib/content-types';
 
-type View = 'dashboard' | 'calendar' | 'pos' | 'customers' | 'memberships' | 'inbox' | 'campaigns' | 'reports' | 'staff' | 'attendance' | 'settings';
+type View = 'dashboard' | 'calendar' | 'pos' | 'customers' | 'memberships' | 'inbox' | 'content' | 'campaigns' | 'reports' | 'staff' | 'attendance' | 'settings';
 type CartItem = { id: string; name: string; staff: string; price: number };
 
 const navGroups: Array<{ label: string; items: Array<{ id: View; label: string; icon: string }> }> = [
   { label: 'Workspace', items: [{ id: 'dashboard', label: 'Dashboard', icon: 'DB' }, { id: 'calendar', label: 'Calendar', icon: 'CA' }, { id: 'pos', label: 'Point of sale', icon: '₹' }] },
   { label: 'Relationships', items: [{ id: 'customers', label: 'Customers', icon: 'CU' }, { id: 'memberships', label: 'Memberships', icon: 'ME' }, { id: 'inbox', label: 'Inbox', icon: 'IN' }] },
-  { label: 'Growth', items: [{ id: 'campaigns', label: 'Campaigns', icon: 'CP' }, { id: 'reports', label: 'Reports', icon: 'RP' }] },
+  { label: 'Growth', items: [{ id: 'content', label: 'Website content', icon: 'WC' }, { id: 'campaigns', label: 'Campaigns', icon: 'CP' }, { id: 'reports', label: 'Reports', icon: 'RP' }] },
   { label: 'Team', items: [{ id: 'staff', label: 'Staff', icon: 'ST' }, { id: 'attendance', label: 'Attendance', icon: 'AT' }] },
 ];
 
@@ -38,7 +39,7 @@ const saleServices = [
 ];
 
 const viewTitles: Record<View, [string, string]> = {
-  dashboard: ['Good morning, Sana', 'Here’s how Cutz & Bangs is doing today.'], calendar: ['Booking calendar', 'Saturday, 22 August · 5 artists working'], pos: ['Point of sale', 'Build and complete a bill in a few taps.'], customers: ['Customers', 'One clear history across every booking and visit.'], memberships: ['Memberships', 'Balances, redemptions and immutable ledger entries.'], inbox: ['Unified inbox', 'WhatsApp, email and internal notes in one queue.'], campaigns: ['Campaigns', 'Reach the right audience with an approval-first workflow.'], reports: ['Reports', 'Sales, retention and service performance.'], staff: ['Staff', 'Skills, shifts, commission and availability.'], attendance: ['Attendance', 'Today’s check-ins, hours and exceptions.'], settings: ['Settings', 'Business, booking, payment and notification rules.'],
+  dashboard: ['Good morning, Sana', 'Here’s how Cutz & Bangs is doing today.'], calendar: ['Booking calendar', 'Saturday, 22 August · 5 artists working'], pos: ['Point of sale', 'Build and complete a bill in a few taps.'], customers: ['Customers', 'One clear history across every booking and visit.'], memberships: ['Memberships', 'Balances, redemptions and immutable ledger entries.'], inbox: ['Unified inbox', 'WhatsApp, email and internal notes in one queue.'], content: ['Website content', 'Manage what customers see on the public website.'], campaigns: ['Campaigns', 'Reach the right audience with an approval-first workflow.'], reports: ['Reports', 'Sales, retention and service performance.'], staff: ['Staff', 'Skills, shifts, commission and availability.'], attendance: ['Attendance', 'Today’s check-ins, hours and exceptions.'], settings: ['Settings', 'Business, booking, payment and notification rules.'],
 };
 
 export default function AdminPage() {
@@ -77,6 +78,7 @@ export default function AdminPage() {
           {view === 'customers' && <Customers search={search} setSearch={setSearch} items={filteredCustomers} />}
           {view === 'memberships' && <Memberships />}
           {view === 'inbox' && <Inbox />}
+          {view === 'content' && <WebsiteContent />}
           {view === 'campaigns' && <Campaigns />}
           {view === 'reports' && <Reports />}
           {view === 'staff' && <Staff />}
@@ -86,6 +88,67 @@ export default function AdminPage() {
       </section>
     </main>
   );
+}
+
+type ContentTab = 'services' | 'testimonials' | 'memberships';
+
+function WebsiteContent() {
+  const [tab, setTab] = useState<ContentTab>('services');
+  const [content, setContent] = useState<SiteContent | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/admin/content', { cache: 'no-store' })
+      .then(response => {
+        if (!response.ok) throw new Error('Content could not be loaded.');
+        return response.json() as Promise<SiteContent>;
+      })
+      .then(data => { if (active) setContent(data); })
+      .catch(error => { if (active) setMessage(error instanceof Error ? error.message : 'Content could not be loaded.'); });
+    return () => { active = false; };
+  }, []);
+
+  const move = (section: keyof SiteContent, index: number, direction: -1 | 1) => {
+    setContent(current => {
+      if (!current) return current;
+      const items = [...current[section]] as Array<FeaturedService | Testimonial | MembershipPlan>;
+      const target = index + direction;
+      if (target < 0 || target >= items.length) return current;
+      [items[index], items[target]] = [items[target], items[index]];
+      return { ...current, [section]: items.map((item, displayOrder) => ({ ...item, displayOrder })) } as SiteContent;
+    });
+  };
+
+  const save = async () => {
+    if (!content) return;
+    setSaving(true); setMessage('');
+    try {
+      const response = await fetch('/api/admin/content', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(content) });
+      const result = await response.json() as SiteContent & { error?: string };
+      if (!response.ok) throw new Error(result.error ?? 'Content could not be saved.');
+      setContent(result); setMessage('Saved. The public website now uses these updates.');
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Content could not be saved.'); }
+    finally { setSaving(false); }
+  };
+
+  if (!content) return <div className="content-loading"><span/><p>{message || 'Loading website content…'}</p></div>;
+
+  return <div className="content-manager">
+    <div className="content-overview"><div><p className="eyebrow">Live website controls</p><h2>One place to shape what customers see.</h2><p>Order, copy and pricing saved here feed the public homepage through the same content API.</p></div><div className="content-live-badge"><span>●</span><p><strong>Connected</strong><small>Public site · Live data</small></p></div></div>
+    <div className="content-tabs" role="tablist">{[
+      ['services', 'Popular services', 'First, second, third'], ['testimonials', 'Testimonials', 'Customer stories'], ['memberships', 'Membership plans', 'Three public cards'],
+    ].map(([id, label, detail]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => { setTab(id as ContentTab); setMessage(''); }}><span>{id === 'services' ? '01' : id === 'testimonials' ? '02' : '03'}</span><p><strong>{label}</strong><small>{detail}</small></p></button>)}</div>
+
+    {tab === 'services' && <section className="content-editor admin-card"><div className="content-editor-head"><div><h3>Popular right now</h3><p>The first three active services appear on the homepage in this exact order.</p></div><button onClick={() => setContent(current => current ? { ...current, services: [...current.services, { id: `service-${Date.now()}`, name: 'New service', category: 'Service', description: 'Add a short customer-facing description', priceInr: 999, durationMinutes: 60, displayOrder: current.services.length, isActive: true }] } : current)}>+ Add service</button></div><div className="content-service-list">{content.services.map((service, index) => <article key={service.id}><div className="content-rank"><span>0{index + 1}</span><div><button disabled={index === 0} onClick={() => move('services', index, -1)}>↑</button><button disabled={index === content.services.length - 1} onClick={() => move('services', index, 1)}>↓</button></div></div><div className="content-fields"><label>Service name<input value={service.name} onChange={event => setContent({ ...content, services: content.services.map(item => item.id === service.id ? { ...item, name: event.target.value } : item) })}/></label><label>Label<input value={service.category} onChange={event => setContent({ ...content, services: content.services.map(item => item.id === service.id ? { ...item, category: event.target.value } : item) })}/></label><label className="wide">Short description<input value={service.description} onChange={event => setContent({ ...content, services: content.services.map(item => item.id === service.id ? { ...item, description: event.target.value } : item) })}/></label><label>Price (₹)<input type="number" min="0" value={service.priceInr} onChange={event => setContent({ ...content, services: content.services.map(item => item.id === service.id ? { ...item, priceInr: Number(event.target.value) } : item) })}/></label><label>Duration (minutes)<input type="number" min="5" step="5" value={service.durationMinutes} onChange={event => setContent({ ...content, services: content.services.map(item => item.id === service.id ? { ...item, durationMinutes: Number(event.target.value) } : item) })}/></label></div><button className="content-remove" disabled={content.services.length === 1} onClick={() => setContent({ ...content, services: content.services.filter(item => item.id !== service.id) })}>Remove</button></article>)}</div></section>}
+
+    {tab === 'testimonials' && <section className="content-editor admin-card"><div className="content-editor-head"><div><h3>Testimonials</h3><p>The first three stories appear in the “Notes from the chair” section.</p></div><button onClick={() => setContent({ ...content, testimonials: [...content.testimonials, { id: `review-${Date.now()}`, quote: 'Add the customer’s experience here.', customerName: 'Customer name', customerDetail: 'Service · Visit count', rating: 5, displayOrder: content.testimonials.length, isActive: true }] })}>+ Add testimonial</button></div><div className="testimonial-editor-grid">{content.testimonials.map((testimonial, index) => <article key={testimonial.id}><header><span>0{index + 1}</span><div><button disabled={index === 0} onClick={() => move('testimonials', index, -1)}>←</button><button disabled={index === content.testimonials.length - 1} onClick={() => move('testimonials', index, 1)}>→</button></div></header><label>Customer quote<textarea value={testimonial.quote} onChange={event => setContent({ ...content, testimonials: content.testimonials.map(item => item.id === testimonial.id ? { ...item, quote: event.target.value } : item) })}/></label><div><label>Name<input value={testimonial.customerName} onChange={event => setContent({ ...content, testimonials: content.testimonials.map(item => item.id === testimonial.id ? { ...item, customerName: event.target.value } : item) })}/></label><label>Detail<input value={testimonial.customerDetail} onChange={event => setContent({ ...content, testimonials: content.testimonials.map(item => item.id === testimonial.id ? { ...item, customerDetail: event.target.value } : item) })}/></label></div><footer><label>Rating<select value={testimonial.rating} onChange={event => setContent({ ...content, testimonials: content.testimonials.map(item => item.id === testimonial.id ? { ...item, rating: Number(event.target.value) } : item) })}>{[5,4,3,2,1].map(rating => <option value={rating} key={rating}>{rating} stars</option>)}</select></label><button onClick={() => setContent({ ...content, testimonials: content.testimonials.filter(item => item.id !== testimonial.id) })}>Remove</button></footer></article>)}</div></section>}
+
+    {tab === 'memberships' && <section className="content-editor admin-card"><div className="content-editor-head"><div><h3>Membership plans</h3><p>Three plans are shown publicly. Name, value, validity and benefits are all editable.</p></div><button disabled={content.membershipPlans.length >= 6} onClick={() => setContent({ ...content, membershipPlans: [...content.membershipPlans, { id: `plan-${Date.now()}`, name: 'New plan', tagline: 'Add a short tagline', payAmount: 5000, creditAmount: 7000, validityMonths: 6, description: 'Describe who this plan is for.', perks: ['Bonus salon credit'], theme: 'cream', displayOrder: content.membershipPlans.length, isFeatured: false, isActive: true }] })}>+ Add plan</button></div><div className="membership-editor-grid">{content.membershipPlans.map((plan, index) => <article className={plan.isFeatured ? 'featured' : ''} key={plan.id}><header><div><span>0{index + 1}</span><p><strong>{plan.name || 'Untitled plan'}</strong><small>{plan.isFeatured ? 'Most popular' : 'Membership card'}</small></p></div><div><button disabled={index === 0} onClick={() => move('membershipPlans', index, -1)}>←</button><button disabled={index === content.membershipPlans.length - 1} onClick={() => move('membershipPlans', index, 1)}>→</button></div></header><div className="membership-editor-fields"><label>Plan name<input value={plan.name} onChange={event => setContent({ ...content, membershipPlans: content.membershipPlans.map(item => item.id === plan.id ? { ...item, name: event.target.value } : item) })}/></label><label>Tagline<input value={plan.tagline} onChange={event => setContent({ ...content, membershipPlans: content.membershipPlans.map(item => item.id === plan.id ? { ...item, tagline: event.target.value } : item) })}/></label><label>Pay amount<input type="number" min="1" value={plan.payAmount} onChange={event => setContent({ ...content, membershipPlans: content.membershipPlans.map(item => item.id === plan.id ? { ...item, payAmount: Number(event.target.value) } : item) })}/></label><label>Service credit<input type="number" min="1" value={plan.creditAmount} onChange={event => setContent({ ...content, membershipPlans: content.membershipPlans.map(item => item.id === plan.id ? { ...item, creditAmount: Number(event.target.value) } : item) })}/></label><label>Validity months<input type="number" min="1" value={plan.validityMonths ?? ''} placeholder="No expiry" onChange={event => setContent({ ...content, membershipPlans: content.membershipPlans.map(item => item.id === plan.id ? { ...item, validityMonths: event.target.value ? Number(event.target.value) : null } : item) })}/></label><label>Card colour<select value={plan.theme} onChange={event => setContent({ ...content, membershipPlans: content.membershipPlans.map(item => item.id === plan.id ? { ...item, theme: event.target.value as MembershipPlan['theme'] } : item) })}><option value="cream">Cream</option><option value="wine">Wine</option><option value="sage">Sage</option></select></label><label className="wide">Description<input value={plan.description} onChange={event => setContent({ ...content, membershipPlans: content.membershipPlans.map(item => item.id === plan.id ? { ...item, description: event.target.value } : item) })}/></label><label className="wide">Benefits, one per line<textarea value={plan.perks.join('\n')} onChange={event => setContent({ ...content, membershipPlans: content.membershipPlans.map(item => item.id === plan.id ? { ...item, perks: event.target.value.split('\n').filter(Boolean) } : item) })}/></label></div><footer><button className={`featured-toggle ${plan.isFeatured ? 'active' : ''}`} onClick={() => setContent({ ...content, membershipPlans: content.membershipPlans.map(item => ({ ...item, isFeatured: item.id === plan.id })) })}><i>{plan.isFeatured ? '✓' : '+'}</i>Mark most popular</button><button className="remove-plan" disabled={content.membershipPlans.length === 1} onClick={() => setContent({ ...content, membershipPlans: content.membershipPlans.filter(item => item.id !== plan.id) })}>Remove</button></footer></article>)}</div></section>}
+
+    <div className="content-savebar"><div><span className={message.startsWith('Saved') ? 'success' : message ? 'error' : ''}>{message || 'Changes stay in draft until you save.'}</span><small>Public data is stored in the salon content database.</small></div><a href="/" target="_blank">Preview website ↗</a><button className="button admin-primary" disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save & publish content'}</button></div>
+  </div>;
 }
 
 function Dashboard({ onView }: { onView: (view: View) => void }) {

@@ -16,6 +16,18 @@ The booking client reads `NEXT_PUBLIC_API_URL`. If it is unset, the included `/a
 
 The screens currently use representative local data so every flow can be reviewed before backend integration. Replace the arrays with API queries without changing the UI contracts.
 
+## Website content management
+
+Admin → **Website content** manages the public homepage through persisted D1 data:
+
+- Ranked “Popular right now” services; row order controls first, second, and third position.
+- Testimonials, including quote, customer label, rating, and display order.
+- Membership cards, including name, pay amount, service credit, validity, benefits, colour, order, and “most popular” state.
+
+The public homepage reads this content from the same server-side store on every request. The admin API is `GET/PUT /api/admin/content`; the read-only public API is `GET /api/site-content`. The current Sites deployment is owner-only, which protects the admin surface. App authentication must be added before changing the site to public access.
+
+`CONTENT_API_URL` accepts the external cloud backend’s exact matching content endpoint. When configured, reads and writes go through that endpoint and mirror into D1; if it is unavailable, the UI falls back to D1. Until the external endpoint is supplied, D1 is the working backend rather than temporary browser storage.
+
 ## Local use
 
 ```bash
