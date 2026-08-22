@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import type {
   FeaturedService,
   MembershipPlan,
@@ -15,6 +16,7 @@ import {
   type BackendCustomerDetail,
   type BackendRangeReport,
   type BackendSnapshot,
+  type BackendWhatsAppStatus,
 } from "../../lib/backend-api";
 
 type View =
@@ -35,10 +37,14 @@ type View =
   | "settings";
 type CartItem = {
   id: string;
+  kind: "service" | "product";
+  serviceId?: string;
+  productId?: string;
   name: string;
   staff: string;
   staffId?: string;
   price: number;
+  taxRateBps: number;
 };
 
 const money = (minor: number) =>
@@ -258,7 +264,15 @@ export default function AdminPage() {
   const [view, setView] = useState<View>("dashboard");
   const [search, setSearch] = useState("");
   const [cart, setCart] = useState<CartItem[]>([
-    { id: "cut-style", name: "Signature cut", staff: "Arjun", price: 799 },
+    {
+      id: "cut-style",
+      kind: "service",
+      serviceId: "cut-style",
+      name: "Signature cut",
+      staff: "Arjun",
+      price: 799,
+      taxRateBps: 1800,
+    },
   ]);
   const [memberCredit, setMemberCredit] = useState(false);
   const [paid, setPaid] = useState(false);
@@ -303,7 +317,9 @@ export default function AdminPage() {
   // Membership credit is an auditable payment tender, not a discount. Invoice
   // tax and totals remain unchanged; redemption is posted to the ledger.
   const credit = 0;
-  const tax = Math.round(subtotal * 0.18);
+  const tax = Math.round(
+    cart.reduce((sum, item) => sum + item.price * item.taxRateBps, 0) / 10_000,
+  );
   const total = subtotal + tax;
 
   const selectView = (next: View) => {
@@ -326,10 +342,27 @@ export default function AdminPage() {
       ...current,
       {
         id: item.id,
+        kind: "service",
+        serviceId: item.id,
         name: item.name,
         staff,
         staffId: backendService?.serviceStaff[0]?.staff.id,
         price: item.price,
+        taxRateBps: backendService?.taxRateBps ?? 1800,
+      },
+    ]);
+  };
+  const addProduct = (product: BackendSnapshot["products"][number]) => {
+    setCart((current) => [
+      ...current,
+      {
+        id: product.id,
+        kind: "product",
+        productId: product.id,
+        name: product.name,
+        staff: "Retail",
+        price: product.sellMinor / 100,
+        taxRateBps: product.taxRateBps,
       },
     ]);
   };
@@ -435,6 +468,7 @@ export default function AdminPage() {
               token={backend.token}
               data={backend.data}
               addItem={addItem}
+              addProduct={addProduct}
               removeItem={(index) =>
                 setCart((current) =>
                   current.filter((_, itemIndex) => itemIndex !== index),
@@ -490,7 +524,13 @@ export default function AdminPage() {
             />
           )}
           {view === "content" && <WebsiteContent />}
-          {view === "campaigns" && <Campaigns data={backend.data} />}
+          {view === "campaigns" && (
+            <Campaigns
+              token={backend.token}
+              data={backend.data}
+              onRefresh={() => void backend.refresh()}
+            />
+          )}
           {view === "reports" && <Reports report={backend.data.range} />}
           {view === "staff" && (
             <Staff
@@ -507,7 +547,13 @@ export default function AdminPage() {
             />
           )}
           {view === "payroll" && <Payroll data={backend.data} />}
-          {view === "settings" && <Settings />}
+          {view === "settings" && (
+            <Settings
+              token={backend.token}
+              data={backend.data}
+              onRefresh={() => void backend.refresh()}
+            />
+          )}
         </div>
       </section>
     </main>
@@ -2091,6 +2137,7 @@ function POS({
   token,
   data,
   addItem,
+  addProduct,
   removeItem,
   resetCart,
   subtotal,
@@ -2107,6 +2154,7 @@ function POS({
   token: string;
   data: BackendSnapshot;
   addItem: (item: (typeof saleServices)[number]) => void;
+  addProduct: (item: BackendSnapshot["products"][number]) => void;
   removeItem: (index: number) => void;
   resetCart: () => void;
   subtotal: number;
@@ -2126,6 +2174,7 @@ function POS({
   const [customerDetail, setCustomerDetail] =
     useState<BackendCustomerDetail | null>(null);
   const [membershipId, setMembershipId] = useState("");
+  const [packageSelection, setPackageSelection] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<
     "CASH" | "UPI" | "CARD" | "SPLIT"
   >("UPI");
@@ -2134,9 +2183,52 @@ function POS({
   const membership = customerDetail?.memberships.find(
     (item) => item.id === membershipId && item.isActive,
   );
+  const packageOptions = (customerDetail?.servicePackages ?? []).flatMap(
+    (enrollment) =>
+      enrollment.package.items.flatMap((item) => {
+        const balance = enrollment.ledger
+          .filter((entry) => entry.serviceId === item.serviceId)
+          .reduce((sum, entry) => sum + entry.qtyDelta, 0);
+        const isExpired = enrollment.expiresAt
+          ? new Date(enrollment.expiresAt) < new Date()
+          : false;
+        const inCart = cart.some(
+          (line) =>
+            line.kind === "service" && line.serviceId === item.serviceId,
+        );
+        return enrollment.isActive && !isExpired && balance > 0 && inCart
+          ? [
+              {
+                key: `${enrollment.id}:${item.serviceId}`,
+                customerServicePackageId: enrollment.id,
+                serviceId: item.serviceId,
+                label: `${enrollment.package.name} · ${item.service.name}`,
+                balance,
+              },
+            ]
+          : [];
+      }),
+  );
+  const selectedPackage = packageOptions.find(
+    (option) => option.key === packageSelection,
+  );
+  const packageCartLine = selectedPackage
+    ? cart.find(
+        (line) =>
+          line.kind === "service" &&
+          line.serviceId === selectedPackage.serviceId,
+      )
+    : undefined;
+  const packageDiscountMinor = packageCartLine
+    ? packageCartLine.price * 100 +
+      Math.round(
+        (packageCartLine.price * 100 * packageCartLine.taxRateBps) / 10_000,
+      )
+    : 0;
+  const payableMinor = Math.max(0, total * 100 - packageDiscountMinor);
   const redeemMinor =
     memberCredit && membership
-      ? Math.min(membership.balanceMinor, total * 100)
+      ? Math.min(membership.balanceMinor, payableMinor)
       : 0;
 
   useEffect(() => {
@@ -2152,6 +2244,7 @@ function POS({
             (item) => item.isActive && item.balanceMinor > 0,
           )?.id ?? "",
         );
+        setPackageSelection("");
       })
       .catch(() => {
         if (!cancelled) setCustomerDetail(null);
@@ -2195,24 +2288,37 @@ function POS({
               },
             ]
           : []),
-        ...manualPayments(total * 100 - redeemMinor),
+        ...manualPayments(payableMinor - redeemMinor),
       ];
       const result = await backendApi.checkout(token, {
         branchId: "main",
         customerId: customer?.id,
         lines: cart.map((item) => ({
-          kind: "service",
-          serviceId: item.id,
+          kind: item.kind,
+          serviceId: item.serviceId,
+          productId: item.productId,
           staffId:
-            item.staffId ??
-            data.staff.find((staff) => staff.displayName === item.staff)?.id,
+            item.kind === "service"
+              ? item.staffId ??
+                data.staff.find((staff) => staff.displayName === item.staff)?.id
+              : undefined,
           description: item.name,
           qty: 1,
           unitMinor: item.price * 100,
           discountMinor: 0,
-          taxRateBps: 1800,
+          taxRateBps: item.taxRateBps,
         })),
         payments,
+        packageRedemptions: selectedPackage
+          ? [
+              {
+                customerServicePackageId:
+                  selectedPackage.customerServicePackageId,
+                serviceId: selectedPackage.serviceId,
+                qty: 1,
+              },
+            ]
+          : [],
       });
       setInvoice(result.number);
       setInvoiceId(result.id);
@@ -2296,6 +2402,17 @@ function POS({
               <i>+</i>
             </button>
           ))}
+          {data.products
+            .filter((product) => product.isActive !== false && product.stockQty > 0)
+            .map((product, index) => (
+              <button key={product.id} onClick={() => addProduct(product)}>
+                <span className={`tile-icon tile-${(index + services.length) % 6}`}>PR</span>
+                <strong>{product.name}</strong>
+                <small>{product.stockQty} in stock · product</small>
+                <b>{money(product.sellMinor)}</b>
+                <i>+</i>
+              </button>
+            ))}
         </div>
       </section>
       <aside className="pos-cart admin-card">
@@ -2324,6 +2441,7 @@ function POS({
               setCustomerId(event.target.value);
               setCustomerDetail(null);
               setMembershipId("");
+              setPackageSelection("");
               setMemberCredit(false);
             }}
             aria-label="Select POS customer"
@@ -2342,7 +2460,7 @@ function POS({
               <div key={`${item.id}-${index}`}>
                 <span>
                   <strong>{item.name}</strong>
-                  <small>with {item.staff}</small>
+                  <small>{item.kind === "service" ? `with ${item.staff}` : "Retail product"}</small>
                 </span>
                 <strong>₹{item.price.toLocaleString("en-IN")}</strong>
                 <button
@@ -2373,6 +2491,27 @@ function POS({
           </p>
           <i>{memberCredit ? "✓" : "+"}</i>
         </button>
+        <label className="package-redemption-select">
+          <span>Use a service package</span>
+          <select
+            value={packageSelection}
+            onChange={(event) => setPackageSelection(event.target.value)}
+            disabled={!packageOptions.length}
+          >
+            <option value="">
+              {customerId
+                ? packageOptions.length
+                  ? "Do not redeem a package"
+                  : "No matching package for this cart"
+                : "Choose a customer first"}
+            </option>
+            {packageOptions.map((option) => (
+              <option key={option.key} value={option.key}>
+                {option.label} · {option.balance} left
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="bill-lines">
           <p>
             <span>Subtotal</span>
@@ -2390,13 +2529,19 @@ function POS({
               <strong>−{money(redeemMinor)}</strong>
             </p>
           )}
+          {packageDiscountMinor > 0 && (
+            <p className="discount-line">
+              <span>Service package entitlement</span>
+              <strong>−{money(packageDiscountMinor)}</strong>
+            </p>
+          )}
           <p>
-            <span>GST (18%)</span>
+            <span>Tax</span>
             <strong>₹{tax.toLocaleString("en-IN")}</strong>
           </p>
           <p className="bill-total">
             <span>Total</span>
-            <strong>₹{total.toLocaleString("en-IN")}</strong>
+            <strong>{money(payableMinor)}</strong>
           </p>
         </div>
         {checkoutError && <p className="checkout-error">{checkoutError}</p>}
@@ -2425,6 +2570,7 @@ function POS({
                 setInvoice("");
                 setInvoiceId("");
                 setDeliveryMessage("");
+                setPackageSelection("");
                 resetCart();
               }}
             >
@@ -2451,7 +2597,7 @@ function POS({
             >
               {charging
                 ? "Saving invoice…"
-                : `Mark payment · ₹${total.toLocaleString("en-IN")}`}{" "}
+                : `Mark payment · ${money(payableMinor - redeemMinor)}`}{" "}
               <span>→</span>
             </button>
           </>
@@ -2481,6 +2627,8 @@ function Customers({
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  const [waConsent, setWaConsent] = useState(false);
+  const [emailConsent, setEmailConsent] = useState(false);
   const [detail, setDetail] = useState<BackendCustomerDetail | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -2511,10 +2659,14 @@ function Customers({
         phone: phone || undefined,
         email: email || undefined,
         source: "reception",
+        waConsent,
+        emailConsent,
       });
       setName("");
       setPhone("");
       setEmail("");
+      setWaConsent(false);
+      setEmailConsent(false);
       setShowCreate(false);
       setMessage("Customer created and ready for booking/POS.");
       onRefresh();
@@ -2609,6 +2761,11 @@ function Customers({
               onChange={(event) => setEmail(event.target.value)}
             />
           </label>
+          <fieldset>
+            <legend>Communication consent</legend>
+            <label><input type="checkbox" checked={waConsent} onChange={(event) => setWaConsent(event.target.checked)} />WhatsApp</label>
+            <label><input type="checkbox" checked={emailConsent} onChange={(event) => setEmailConsent(event.target.checked)} />Email</label>
+          </fieldset>
           <button
             className="button admin-primary"
             disabled={busy || !token || !name}
@@ -2722,8 +2879,8 @@ function Customers({
               </strong>
             </span>
             <span>
-              <small>Invoices</small>
-              <strong>{detail.invoices.length}</strong>
+              <small>Active packages</small>
+              <strong>{detail.servicePackages?.length ?? 0}</strong>
             </span>
           </div>
           <div className="customer-timeline">
@@ -2751,6 +2908,14 @@ function Customers({
                   meta: `${prettyStatus(entry.type)} · balance ${money(entry.balanceAfter)}`,
                 })),
               ),
+              ...(detail.servicePackages ?? []).flatMap((customerPackage) =>
+                customerPackage.ledger.map((entry) => ({
+                  key: `p-${entry.id}`,
+                  at: entry.createdAt,
+                  title: `${customerPackage.package.name} · ${entry.service.name}`,
+                  meta: `${prettyStatus(entry.type)} · ${entry.qtyDelta > 0 ? "+" : ""}${entry.qtyDelta} · balance ${entry.balanceAfter}`,
+                })),
+              ),
             ]
               .sort((a, b) => +new Date(b.at) - +new Date(a.at))
               .slice(0, 30)
@@ -2771,7 +2936,8 @@ function Customers({
               ))}
             {!detail.appointments.length &&
               !detail.invoices.length &&
-              !detail.memberships.length && (
+              !detail.memberships.length &&
+              !(detail.servicePackages?.length ?? 0) && (
                 <p className="empty-cart">
                   No visits, invoices or membership entries yet.
                 </p>
@@ -2797,6 +2963,16 @@ function Memberships({
   const [planId, setPlanId] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [planName, setPlanName] = useState("");
+  const [planPay, setPlanPay] = useState(3000);
+  const [planCredit, setPlanCredit] = useState(5000);
+  const [planValidity, setPlanValidity] = useState(180);
+  const [packageName, setPackageName] = useState("");
+  const [packagePrice, setPackagePrice] = useState(1999);
+  const [packageValidity, setPackageValidity] = useState(90);
+  const [packageItems, setPackageItems] = useState<Record<string, number>>({});
+  const [packageId, setPackageId] = useState("");
+  const services = data.categories.flatMap((category) => category.services);
   const enroll = async () => {
     if (!token || !customerId || !planId) return;
     setBusy(true);
@@ -2820,6 +2996,64 @@ function Memberships({
       setBusy(false);
     }
   };
+  const createPlan = async () => {
+    if (!token || !planName || planCredit <= 0 || planPay < 0) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.createMembershipPlan(token, {
+        name: planName,
+        payMinor: planPay * 100,
+        creditMinor: planCredit * 100,
+        validityDays: planValidity > 0 ? planValidity : null,
+      });
+      setPlanName("");
+      setMessage("Membership plan created and available for enrolment.");
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Plan could not be created.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const createPackage = async () => {
+    const items = Object.entries(packageItems)
+      .filter(([, qty]) => qty > 0)
+      .map(([serviceId, qty]) => ({ serviceId, qty }));
+    if (!token || !packageName || !items.length) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.createServicePackage(token, {
+        name: packageName,
+        priceMinor: packagePrice * 100,
+        validityDays: packageValidity > 0 ? packageValidity : null,
+        items,
+      });
+      setPackageName("");
+      setPackageItems({});
+      setMessage("Service package created with ledger-backed visit balances.");
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Package could not be created.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const enrollPackage = async () => {
+    if (!token || !customerId || !packageId) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.enrollServicePackage(token, { customerId, packageId });
+      setMessage("Service package assigned; every included service was added to its immutable ledger.");
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Package could not be assigned.");
+    } finally {
+      setBusy(false);
+    }
+  };
   const activePlans = plans.length
     ? plans
     : [
@@ -2835,6 +3069,38 @@ function Memberships({
   return (
     <div>
       {message && <div className="calendar-message">{message}</div>}
+      <div className="membership-builder-grid">
+        <section className="admin-card phase-one-form compact-builder">
+          <div>
+            <p className="eyebrow">Credit membership</p>
+            <h2>Create membership plan</h2>
+          </div>
+          <label>Name<input value={planName} onChange={(event) => setPlanName(event.target.value)} placeholder="Premium membership" /></label>
+          <label>Customer pays (₹)<input type="number" min="0" value={planPay} onChange={(event) => setPlanPay(Number(event.target.value))} /></label>
+          <label>Service credit (₹)<input type="number" min="1" value={planCredit} onChange={(event) => setPlanCredit(Number(event.target.value))} /></label>
+          <label>Validity days<input type="number" min="0" value={planValidity} onChange={(event) => setPlanValidity(Number(event.target.value))} /></label>
+          <button className="button admin-primary" disabled={busy || !token || !planName} onClick={() => void createPlan()}>{busy ? "Saving…" : "Create membership"}</button>
+        </section>
+        <section className="admin-card phase-one-form compact-builder package-builder">
+          <div>
+            <p className="eyebrow">Prepaid services</p>
+            <h2>Create service package</h2>
+          </div>
+          <label>Name<input value={packageName} onChange={(event) => setPackageName(event.target.value)} placeholder="Hair care bundle" /></label>
+          <label>Package price (₹)<input type="number" min="0" value={packagePrice} onChange={(event) => setPackagePrice(Number(event.target.value))} /></label>
+          <label>Validity days<input type="number" min="0" value={packageValidity} onChange={(event) => setPackageValidity(Number(event.target.value))} /></label>
+          <fieldset>
+            <legend>Included services and quantity</legend>
+            {services.map((service) => (
+              <label key={service.id}>
+                <span>{service.name}</span>
+                <input type="number" min="0" max="100" value={packageItems[service.id] ?? 0} onChange={(event) => setPackageItems((current) => ({ ...current, [service.id]: Number(event.target.value) }))} />
+              </label>
+            ))}
+          </fieldset>
+          <button className="button admin-primary" disabled={busy || !token || !packageName || !Object.values(packageItems).some((qty) => qty > 0)} onClick={() => void createPackage()}>{busy ? "Saving…" : "Create package"}</button>
+        </section>
+      </div>
       <section className="admin-card membership-enroll">
         <div>
           <p className="eyebrow">Ledger-backed enrolment</p>
@@ -2882,6 +3148,16 @@ function Memberships({
           onClick={() => void enroll()}
         >
           {busy ? "Activating…" : "Activate plan"}
+        </button>
+        <label>
+          Service package
+          <select value={packageId} onChange={(event) => setPackageId(event.target.value)}>
+            <option value="">Select package</option>
+            {data.servicePackages.map((item) => <option key={item.id} value={item.id}>{item.name} · {money(item.priceMinor)}</option>)}
+          </select>
+        </label>
+        <button className="button" disabled={busy || !token || !customerId || !packageId} onClick={() => void enrollPackage()}>
+          {busy ? "Assigning…" : "Assign package"}
         </button>
       </section>
       <div className="membership-metrics">
@@ -2932,7 +3208,20 @@ function Memberships({
                 ? ` · ${plan.memberDiscountBps / 100}% member discount`
                 : ""}
             </p>
-            <button className="button admin-primary">Manage plan</button>
+            <span className="plan-ready">Available for enrolment</span>
+          </article>
+        ))}
+      </div>
+      <div className="membership-plan-grid package-plan-grid">
+        {data.servicePackages.map((item) => (
+          <article className="admin-card plan-card" key={item.id}>
+            <p className="eyebrow">Service package</p>
+            <h2>{item.name}</h2>
+            <strong className="package-price">{money(item.priceMinor)}</strong>
+            <ul>
+              {item.items.map((entry) => <li key={entry.id}>{entry.qty} × {entry.service.name}</li>)}
+            </ul>
+            <p>{item.validityDays ? `Valid for ${item.validityDays} days` : "No expiry"}</p>
           </article>
         ))}
       </div>
@@ -3107,6 +3396,15 @@ function Inventory({
   const [photoUrl, setPhotoUrl] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [productName, setProductName] = useState("");
+  const [productSku, setProductSku] = useState("");
+  const [productPrice, setProductPrice] = useState(499);
+  const [reorderLevel, setReorderLevel] = useState(5);
+  const [movementProductId, setMovementProductId] = useState("");
+  const [movementQty, setMovementQty] = useState(1);
+  const [movementReason, setMovementReason] = useState<
+    "PURCHASE" | "CONSUMPTION" | "WASTAGE" | "ADJUSTMENT"
+  >("PURCHASE");
   const rows = data.products.length
     ? data.products
     : [
@@ -3145,6 +3443,45 @@ function Inventory({
           ? prettyStatus(cause.message)
           : "Vendor could not be saved.",
       );
+    } finally {
+      setBusy(false);
+    }
+  };
+  const createProduct = async () => {
+    if (!token || !productName) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.createProduct(token, {
+        name: productName,
+        sku: productSku || undefined,
+        sellMinor: productPrice * 100,
+        taxRateBps: 1800,
+        reorderLevel,
+      });
+      setProductName("");
+      setProductSku("");
+      setMessage("Product created and available in POS.");
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Product could not be created.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const moveStock = async () => {
+    if (!token || !movementProductId || movementQty === 0) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const signedQty = movementReason === "PURCHASE" || (movementReason === "ADJUSTMENT" && movementQty > 0)
+        ? Math.abs(movementQty)
+        : -Math.abs(movementQty);
+      const result = await backendApi.moveProductStock(token, movementProductId, { qtyDelta: signedQty, reason: movementReason });
+      setMessage(`Stock movement saved. New balance: ${result.stockAfter}.`);
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Stock movement failed.");
     } finally {
       setBusy(false);
     }
@@ -3214,6 +3551,23 @@ function Inventory({
         </article>
       </div>
       {message && <div className="calendar-message">{message}</div>}
+      <div className="inventory-ops-grid inventory-quick-actions">
+        <section className="admin-card phase-one-form compact-builder">
+          <div><p className="eyebrow">POS catalog</p><h2>Add product</h2></div>
+          <label>Name<input value={productName} onChange={(event) => setProductName(event.target.value)} /></label>
+          <label>SKU<input value={productSku} onChange={(event) => setProductSku(event.target.value)} /></label>
+          <label>Sell price (₹)<input type="number" min="0" value={productPrice} onChange={(event) => setProductPrice(Number(event.target.value))} /></label>
+          <label>Reorder level<input type="number" min="0" value={reorderLevel} onChange={(event) => setReorderLevel(Number(event.target.value))} /></label>
+          <button className="button admin-primary" disabled={busy || !token || !productName} onClick={() => void createProduct()}>{busy ? "Saving…" : "Add product"}</button>
+        </section>
+        <section className="admin-card phase-one-form compact-builder">
+          <div><p className="eyebrow">Append-only stock</p><h2>Record movement</h2></div>
+          <label>Product<select value={movementProductId} onChange={(event) => setMovementProductId(event.target.value)}><option value="">Select product</option>{data.products.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.stockQty}</option>)}</select></label>
+          <label>Reason<select value={movementReason} onChange={(event) => setMovementReason(event.target.value as typeof movementReason)}><option value="PURCHASE">Purchase</option><option value="CONSUMPTION">Salon consumption</option><option value="WASTAGE">Wastage</option><option value="ADJUSTMENT">Positive adjustment</option></select></label>
+          <label>Quantity<input type="number" min="1" value={movementQty} onChange={(event) => setMovementQty(Number(event.target.value))} /></label>
+          <button className="button admin-primary" disabled={busy || !token || !movementProductId || movementQty <= 0} onClick={() => void moveStock()}>{busy ? "Saving…" : "Record stock"}</button>
+        </section>
+      </div>
       <article className="admin-card inventory-table">
         <header>
           <span>Product</span>
@@ -3378,6 +3732,10 @@ function Inbox({
   const [internal, setInternal] = useState(false);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [newCustomerId, setNewCustomerId] = useState("");
+  const [newChannel, setNewChannel] = useState<
+    "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL"
+  >("WHATSAPP_OFFICIAL");
   const selected =
     data.conversations.find((item) => item.id === selectedId) ??
     data.conversations[0];
@@ -3426,9 +3784,31 @@ function Inbox({
       setBusy(false);
     }
   };
+  const startConversation = async () => {
+    if (!token || !newCustomerId) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const conversation = await backendApi.createConversation(token, { customerId: newCustomerId, channel: newChannel });
+      setSelectedId(conversation.id);
+      setDetail(await backendApi.conversation(token, conversation.id));
+      setMessage("Conversation ready on the selected WhatsApp provider.");
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Conversation could not be created.");
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <div>
       {message && <div className="calendar-message">{message}</div>}
+      <section className="admin-card inbox-start-bar">
+        <div><p className="eyebrow">New outbound thread</p><strong>Start a WhatsApp conversation</strong></div>
+        <select value={newCustomerId} onChange={(event) => setNewCustomerId(event.target.value)}><option value="">Select customer</option>{data.customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name} · {customer.phone ?? "No phone"}</option>)}</select>
+        <select value={newChannel} onChange={(event) => setNewChannel(event.target.value as typeof newChannel)}><option value="WHATSAPP_OFFICIAL">Official Cloud API</option><option value="WHATSAPP_UNOFFICIAL">Unofficial QR session</option></select>
+        <button className="button admin-primary" disabled={busy || !token || !newCustomerId} onClick={() => void startConversation()}>Start conversation</button>
+      </section>
       <div className="inbox-layout admin-card">
         <aside className="conversation-list">
           <label>
@@ -3565,7 +3945,25 @@ function Inbox({
   );
 }
 
-function Campaigns({ data }: { data: BackendSnapshot }) {
+function Campaigns({
+  token,
+  data,
+  onRefresh,
+}: {
+  token: string;
+  data: BackendSnapshot;
+  onRefresh: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [segment, setSegment] = useState("LAPSED");
+  const [channel, setChannel] = useState<
+    "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL" | "EMAIL"
+  >("WHATSAPP_OFFICIAL");
+  const [content, setContent] = useState("");
+  const [offer, setOffer] = useState("");
+  const [scheduledAt, setScheduledAt] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
   const attention = data.range
     ? data.range.customers.lapsed +
       data.customers.filter((item) => item.segments.includes("AT_RISK")).length
@@ -3609,18 +4007,85 @@ function Campaigns({ data }: { data: BackendSnapshot }) {
           "—",
         ],
       ];
+  const draft = async () => {
+    if (!token) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await backendApi.draftCampaign(token, {
+        goal: name || "Bring customers back to the salon",
+        segment,
+        offer: offer || undefined,
+      });
+      setContent(result.content);
+      setMessage("Draft ready. Review it before creating the campaign.");
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Draft failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const create = async () => {
+    if (!token || !name || !content) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.createCampaign(token, {
+        name,
+        channel,
+        segment,
+        content,
+        branchId: "main",
+        scheduledAt: scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
+      });
+      setName("");
+      setContent("");
+      setScheduledAt("");
+      setMessage("Campaign created for consented customers and waiting for approval.");
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Campaign could not be created.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const approve = async (campaignId: string) => {
+    if (!token) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await backendApi.approveCampaign(token, campaignId);
+      setMessage(result.status === "SCHEDULED" ? "Campaign approved and scheduled." : "Campaign approved and queued for delivery.");
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Approval failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <div>
+      {message && <div className="calendar-message">{message}</div>}
       <div className="campaign-banner">
         <div>
           <p className="eyebrow">Smart follow-up</p>
           <h2>{attention} customers may need a reason to return.</h2>
           <p>Campaign sending remains approval-first in the backend.</p>
         </div>
-        <button className="button button-light">
-          Create reactivation campaign
+        <button className="button button-light" onClick={() => void draft()} disabled={!token || busy}>
+          {busy ? "Working…" : "Draft reactivation campaign"}
         </button>
       </div>
+      <section className="admin-card campaign-builder phase-one-form">
+        <div><p className="eyebrow">Approval-first delivery</p><h2>Create campaign</h2><small>Only customers who consented to the selected channel enter the audience snapshot.</small></div>
+        <label>Name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="August comeback offer" /></label>
+        <label>Audience<select value={segment} onChange={(event) => setSegment(event.target.value)}><option value="NEW">New</option><option value="REPEAT">Repeat</option><option value="VIP">VIP</option><option value="AT_RISK">At-risk</option><option value="LAPSED">Lapsed</option><option value="MEMBER">Members</option><option value="HIGH_SPEND">High spend</option></select></label>
+        <label>Channel<select value={channel} onChange={(event) => setChannel(event.target.value as typeof channel)}><option value="WHATSAPP_OFFICIAL">WhatsApp Official</option><option value="WHATSAPP_UNOFFICIAL">WhatsApp Unofficial</option><option value="EMAIL">Email</option></select></label>
+        <label>Offer<input value={offer} onChange={(event) => setOffer(event.target.value)} placeholder="20% off on weekday services" /></label>
+        <label>Schedule (optional)<input type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} /></label>
+        <label className="campaign-copy">Message<textarea value={content} onChange={(event) => setContent(event.target.value)} rows={5} /></label>
+        <div className="form-actions"><button disabled={!token || busy} onClick={() => void draft()}>AI draft</button><button className="button admin-primary" disabled={!token || busy || !name || !content} onClick={() => void create()}>Create for approval</button></div>
+      </section>
       <div className="campaign-steps">
         {[
           ["1", "Audience", `At-risk / lapsed · ${attention}`],
@@ -3655,6 +4120,9 @@ function Campaigns({ data }: { data: BackendSnapshot }) {
               ) : (
                 <span key={`${cell}${index}`}>{cell}</span>
               ),
+            )}
+            {data.campaigns.find((item) => item.name === row[0])?.status === "PENDING_APPROVAL" && (
+              <button disabled={busy} onClick={() => void approve(data.campaigns.find((item) => item.name === row[0])!.id)}>Approve</button>
             )}
           </div>
         ))}
@@ -4171,25 +4639,130 @@ function Payroll({ data }: { data: BackendSnapshot }) {
   );
 }
 
-function Settings() {
+function Settings({
+  token,
+  data,
+  onRefresh,
+}: {
+  token: string;
+  data: BackendSnapshot;
+  onRefresh: () => void;
+}) {
+  const [status, setStatus] = useState<BackendWhatsAppStatus | null>(null);
+  const [bookingInterval, setBookingInterval] = useState(15);
+  const [minimumNotice, setMinimumNotice] = useState(2);
+  const [allowWaitlist, setAllowWaitlist] = useState(true);
+  const [managerOverride, setManagerOverride] = useState(true);
+  const [cancellationHours, setCancellationHours] = useState(3);
+  const [testTo, setTestTo] = useState("");
+  const [testMessage, setTestMessage] = useState("Hello from Cutz & Bangs");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const loadIntegrations = async () => {
+    if (!token) return;
+    const [nextStatus, settings] = await Promise.all([
+      backendApi.whatsappStatus(token),
+      backendApi.branchSettings(token),
+    ]);
+    setStatus(nextStatus);
+    const booking = settings.booking as Record<string, unknown> | undefined;
+    if (booking) {
+      setBookingInterval(Number(booking.intervalMin ?? 15));
+      setMinimumNotice(Number(booking.minimumNoticeHours ?? 2));
+      setAllowWaitlist(Boolean(booking.allowWaitlist ?? true));
+      setManagerOverride(Boolean(booking.managerOverride ?? true));
+      setCancellationHours(Number(booking.cancellationHours ?? 3));
+    }
+  };
+  useEffect(() => {
+    let cancelled = false;
+    if (!token) return;
+    Promise.all([backendApi.whatsappStatus(token), backendApi.branchSettings(token)])
+      .then(([nextStatus, settings]) => {
+        if (cancelled) return;
+        setStatus(nextStatus);
+        const booking = settings.booking as Record<string, unknown> | undefined;
+        if (booking) {
+          setBookingInterval(Number(booking.intervalMin ?? 15));
+          setMinimumNotice(Number(booking.minimumNoticeHours ?? 2));
+          setAllowWaitlist(Boolean(booking.allowWaitlist ?? true));
+          setManagerOverride(Boolean(booking.managerOverride ?? true));
+          setCancellationHours(Number(booking.cancellationHours ?? 3));
+        }
+      })
+      .catch((cause) => {
+        if (!cancelled) setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Settings could not be loaded.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  const saveBooking = async () => {
+    if (!token) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.updateBranchSetting(token, "booking", {
+        intervalMin: bookingInterval,
+        minimumNoticeHours: minimumNotice,
+        allowWaitlist,
+        managerOverride,
+        cancellationHours,
+      });
+      setMessage("Booking rules saved to the backend.");
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Settings could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const toggleChannel = async (type: "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL", active: boolean) => {
+    if (!token) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.updateChannel(token, type, active);
+      await loadIntegrations();
+      onRefresh();
+      setMessage(`${prettyStatus(type)} ${active ? "enabled" : "disabled"}.`);
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Channel could not be updated.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const testProvider = async (channel: "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL") => {
+    if (!token || !testTo || !testMessage) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.testWhatsApp(token, { channel, to: testTo, message: testMessage });
+      setMessage(`Test message sent through ${prettyStatus(channel)}.`);
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Test message failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const syncTemplates = async () => {
+    if (!token) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await backendApi.syncWhatsAppTemplates(token);
+      setMessage(`${result.synced} official WhatsApp templates synced.`);
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Template sync failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <div className="settings-layout">
-      <aside>
-        {[
-          "Business profile",
-          "Booking rules",
-          "Notifications",
-          "Payments & tax",
-          "Roles & permissions",
-          "Integrations",
-          "Data & backups",
-        ].map((item, index) => (
-          <button className={index === 1 ? "active" : ""} key={item}>
-            {item}
-            <span>→</span>
-          </button>
-        ))}
-      </aside>
+    <div className="settings-stack">
+      {message && <div className="calendar-message">{message}</div>}
       <article className="admin-card settings-card">
         <p className="eyebrow">Booking rules</p>
         <h2>Availability & scheduling</h2>
@@ -4198,7 +4771,7 @@ function Settings() {
             <strong>Booking interval</strong>
             <small>Start times shown to customers</small>
           </div>
-          <select defaultValue="30">
+          <select value={bookingInterval} onChange={(event) => setBookingInterval(Number(event.target.value))}>
             <option value="15">Every 15 minutes</option>
             <option value="30">Every 30 minutes</option>
           </select>
@@ -4208,7 +4781,7 @@ function Settings() {
             <strong>Minimum notice</strong>
             <small>Prevent last-minute online bookings</small>
           </div>
-          <select defaultValue="2">
+          <select value={minimumNotice} onChange={(event) => setMinimumNotice(Number(event.target.value))}>
             <option value="1">1 hour</option>
             <option value="2">2 hours</option>
           </select>
@@ -4218,7 +4791,7 @@ function Settings() {
             <strong>Allow waitlist</strong>
             <small>Offer a waitlist when a day is full</small>
           </div>
-          <button className="toggle active">
+          <button className={`toggle ${allowWaitlist ? "active" : ""}`} onClick={() => setAllowWaitlist((current) => !current)}>
             <i />
           </button>
         </div>
@@ -4227,7 +4800,7 @@ function Settings() {
             <strong>Manager conflict override</strong>
             <small>Require a reason and keep an audit entry</small>
           </div>
-          <button className="toggle active">
+          <button className={`toggle ${managerOverride ? "active" : ""}`} onClick={() => setManagerOverride((current) => !current)}>
             <i />
           </button>
         </div>
@@ -4236,12 +4809,34 @@ function Settings() {
             <strong>Cancellation window</strong>
             <small>Free reschedule before this point</small>
           </div>
-          <select defaultValue="3">
+          <select value={cancellationHours} onChange={(event) => setCancellationHours(Number(event.target.value))}>
             <option value="3">3 hours</option>
             <option value="6">6 hours</option>
           </select>
         </div>
-        <button className="button admin-primary">Save changes</button>
+        <button className="button admin-primary" disabled={busy || !token} onClick={() => void saveBooking()}>{busy ? "Saving…" : "Save booking rules"}</button>
+      </article>
+      <article className="admin-card whatsapp-settings">
+        <div className="card-head"><div><p className="eyebrow">Provider adapters</p><h2>WhatsApp integrations</h2><p>Official Cloud API and the isolated unofficial QR session stay separate.</p></div></div>
+        <div className="whatsapp-provider-grid">
+          {(["official", "unofficial"] as const).map((key) => {
+            const item = status?.[key];
+            const type = key === "official" ? "WHATSAPP_OFFICIAL" : "WHATSAPP_UNOFFICIAL";
+            return (
+              <section key={key} className="provider-card">
+                <header><div><strong>{key === "official" ? "Official Meta Cloud API" : "Unofficial QR connector"}</strong><small>{item?.detail ?? "Checking configuration…"}</small></div><span className={item?.connected ? "connected" : "offline"}>{item?.connected ? "Connected" : item?.configured ? "Configured" : "Needs setup"}</span></header>
+                {key === "unofficial" && item?.qrDataUrl && <Image src={item.qrDataUrl} alt="Scan to link the unofficial WhatsApp session" width={220} height={220} unoptimized />}
+                <div className="provider-actions">
+                  <button className={`toggle ${item?.active ? "active" : ""}`} disabled={busy || !token} onClick={() => void toggleChannel(type, !item?.active)}><i /></button>
+                  {key === "official" && <button disabled={busy || !token} onClick={() => void syncTemplates()}>Sync templates</button>}
+                  <button disabled={busy || !token || !testTo || !testMessage} onClick={() => void testProvider(type)}>Send test</button>
+                </div>
+              </section>
+            );
+          })}
+        </div>
+        <div className="whatsapp-test-row"><input value={testTo} onChange={(event) => setTestTo(event.target.value)} placeholder="Recipient with country code" /><input value={testMessage} onChange={(event) => setTestMessage(event.target.value)} placeholder="Test message" /></div>
+        <small>{data.channels.filter((channel) => channel.type.startsWith("WHATSAPP")).length} WhatsApp channel records · credentials remain server-side.</small>
       </article>
     </div>
   );

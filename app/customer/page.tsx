@@ -146,6 +146,7 @@ export default function CustomerPortal() {
     )
     .sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))[0];
   const membership = data.memberships[0];
+  const servicePackages = data.servicePackages ?? [];
   return (
     <main className="portal-shell customer-portal">
       <header className="portal-header">
@@ -279,6 +280,42 @@ export default function CustomerPortal() {
             <a href="#history">View ledger →</a>
           </article>
         </div>
+        {servicePackages.length > 0 && (
+          <section className="portal-packages">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">Prepaid services</p>
+                <h2>Your active packages</h2>
+              </div>
+            </div>
+            <div className="portal-package-grid">
+              {servicePackages.map((enrollment) => (
+                <article key={enrollment.id}>
+                  <p className="eyebrow">{enrollment.package.name}</p>
+                  <strong>{money(enrollment.package.priceMinor)}</strong>
+                  <ul>
+                    {enrollment.package.items.map((item) => {
+                      const balance = enrollment.ledger
+                        .filter((entry) => entry.serviceId === item.serviceId)
+                        .reduce((sum, entry) => sum + entry.qtyDelta, 0);
+                      return (
+                        <li key={item.id}>
+                          <span>{item.service.name}</span>
+                          <b>{balance} left</b>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <small>
+                    {enrollment.expiresAt
+                      ? `Valid until ${new Date(enrollment.expiresAt).toLocaleDateString("en-IN")}`
+                      : "No expiry"}
+                  </small>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
         <section className="portal-history" id="history">
           <div className="section-heading">
             <div>

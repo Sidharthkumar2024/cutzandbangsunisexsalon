@@ -60,6 +60,34 @@ export type BackendMembershipPlan = {
   validityDays?: number | null;
   memberDiscountBps: number;
 };
+export type BackendServicePackage = {
+  id: string;
+  name: string;
+  priceMinor: number;
+  validityDays?: number | null;
+  isActive: boolean;
+  items: Array<{
+    id: string;
+    serviceId: string;
+    qty: number;
+    service: BackendService;
+  }>;
+};
+export type BackendCustomerServicePackage = {
+  id: string;
+  expiresAt?: string | null;
+  isActive: boolean;
+  package: BackendServicePackage;
+  ledger: Array<{
+    id: string;
+    serviceId: string;
+    type: string;
+    qtyDelta: number;
+    balanceAfter: number;
+    createdAt: string;
+    service: { id: string; name: string };
+  }>;
+};
 export type BackendProduct = {
   id: string;
   name: string;
@@ -68,6 +96,9 @@ export type BackendProduct = {
   stockQty: number;
   reorderLevel: number;
   sellMinor: number;
+  purchaseMinor: number;
+  taxRateBps: number;
+  isActive: boolean;
 };
 export type BackendAttendance = {
   id: string;
@@ -150,6 +181,17 @@ export type BackendConversation = {
   lastMessageAt: string;
   customer?: { id: string; name: string; phone?: string | null } | null;
   channel: { type: string };
+};
+export type BackendChannel = {
+  id: string;
+  type: "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL" | "EMAIL" | "SMS";
+  label: string;
+  isActive: boolean;
+  _count?: { conversations: number; templates: number };
+};
+export type BackendWhatsAppStatus = {
+  official: { configured: boolean; connected: boolean; active: boolean; detail?: string };
+  unofficial: { configured: boolean; connected: boolean; active: boolean; detail?: string; qrDataUrl?: string };
 };
 export type BackendMessage = {
   id: string;
@@ -250,6 +292,7 @@ export type BackendCustomerDetail = Omit<BackendCustomer, "segments"> & {
       createdAt: string;
     }>;
   }>;
+  servicePackages: BackendCustomerServicePackage[];
   walletLedger: Array<{
     id: string;
     type: string;
@@ -290,6 +333,7 @@ export type CustomerPortalOverview = BackendCustomer & {
       createdAt: string;
     }>;
   }>;
+  servicePackages: BackendCustomerServicePackage[];
   walletLedger: Array<{
     id: string;
     type: string;
@@ -322,6 +366,7 @@ export type BackendSnapshot = {
   waitlist: BackendWaitlistEntry[];
   customers: BackendCustomer[];
   membershipPlans: BackendMembershipPlan[];
+  servicePackages: BackendServicePackage[];
   products: BackendProduct[];
   attendance: BackendAttendance[];
   payroll: BackendPayrollRow[];
@@ -332,6 +377,7 @@ export type BackendSnapshot = {
   branches: BackendBranch[];
   invoices: BackendInvoice[];
   conversations: BackendConversation[];
+  channels: BackendChannel[];
   campaigns: BackendCampaign[];
   staff: BackendStaff[];
   categories: BackendCategory[];
@@ -345,6 +391,7 @@ const emptySnapshot: BackendSnapshot = {
   waitlist: [],
   customers: [],
   membershipPlans: [],
+  servicePackages: [],
   products: [],
   attendance: [],
   payroll: [],
@@ -355,6 +402,7 @@ const emptySnapshot: BackendSnapshot = {
   branches: [],
   invoices: [],
   conversations: [],
+  channels: [],
   campaigns: [],
   staff: [],
   categories: [],
@@ -423,8 +471,10 @@ export const backendApi = {
       ["/waitlist?branchId=main&status=WAITING", "waitlist"],
       ["/customers?branchId=main&take=200", "customers"],
       ["/membership-plans", "membershipPlans"],
+      ["/service-packages", "servicePackages"],
       ["/products", "products"],
       ["/inbox", "conversations"],
+      ["/channels", "channels"],
       ["/campaigns", "campaigns"],
       ["/staff?branchId=main", "staff"],
       ["/services?branchId=main", "categories"],
@@ -481,6 +531,9 @@ export const backendApi = {
       email?: string;
       source?: string;
       tags?: string[];
+      notes?: string;
+      waConsent?: boolean;
+      emailConsent?: boolean;
     },
   ) =>
     request<BackendCustomer>(
@@ -528,6 +581,56 @@ export const backendApi = {
   ) =>
     request<{ id: string; balanceMinor: number }>(
       "/memberships",
+      { method: "POST", body: JSON.stringify(payload) },
+      token,
+    ),
+  createMembershipPlan: (
+    token: string,
+    payload: {
+      name: string;
+      payMinor: number;
+      creditMinor: number;
+      validityDays?: number | null;
+      memberDiscountBps?: number;
+      eligibleCategoryIds?: string[];
+      excludedServiceIds?: string[];
+    },
+  ) =>
+    request<BackendMembershipPlan>(
+      "/membership-plans",
+      { method: "POST", body: JSON.stringify(payload) },
+      token,
+    ),
+  createServicePackage: (
+    token: string,
+    payload: {
+      name: string;
+      priceMinor: number;
+      validityDays?: number | null;
+      items: Array<{ serviceId: string; qty: number }>;
+    },
+  ) =>
+    request<BackendServicePackage>(
+      "/service-packages",
+      { method: "POST", body: JSON.stringify(payload) },
+      token,
+    ),
+  enrollServicePackage: (
+    token: string,
+    payload: { customerId: string; packageId: string },
+  ) =>
+    request<BackendCustomerServicePackage>(
+      "/customer-packages",
+      { method: "POST", body: JSON.stringify(payload) },
+      token,
+    ),
+  redeemServicePackage: (
+    token: string,
+    customerPackageId: string,
+    payload: { serviceId: string; qty: number; invoiceId?: string },
+  ) =>
+    request<{ id: string; balanceAfter: number }>(
+      `/customer-packages/${encodeURIComponent(customerPackageId)}/redeem`,
       { method: "POST", body: JSON.stringify(payload) },
       token,
     ),
@@ -629,6 +732,117 @@ export const backendApi = {
     request<BackendVendor>(
       "/vendors",
       { method: "POST", body: JSON.stringify(payload) },
+      token,
+    ),
+  createProduct: (
+    token: string,
+    payload: {
+      name: string;
+      brand?: string;
+      sku?: string;
+      purchaseMinor?: number;
+      sellMinor?: number;
+      taxRateBps?: number;
+      reorderLevel?: number;
+    },
+  ) =>
+    request<BackendProduct>(
+      "/products",
+      { method: "POST", body: JSON.stringify(payload) },
+      token,
+    ),
+  moveProductStock: (
+    token: string,
+    productId: string,
+    payload: {
+      qtyDelta: number;
+      reason: "CONSUMPTION" | "WASTAGE" | "ADJUSTMENT" | "PURCHASE";
+    },
+  ) =>
+    request<{ stockAfter: number }>(
+      `/products/${encodeURIComponent(productId)}/movement`,
+      { method: "POST", body: JSON.stringify(payload) },
+      token,
+    ),
+  draftCampaign: (
+    token: string,
+    payload: { goal: string; segment?: string; offer?: string },
+  ) =>
+    request<{ content: string }>(
+      "/campaigns/draft",
+      { method: "POST", body: JSON.stringify(payload) },
+      token,
+    ),
+  createCampaign: (
+    token: string,
+    payload: {
+      name: string;
+      channel: "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL" | "EMAIL" | "SMS";
+      segment?: string;
+      content: string;
+      couponCode?: string;
+      branchId: string;
+      scheduledAt?: string;
+    },
+  ) =>
+    request<BackendCampaign>(
+      "/campaigns",
+      { method: "POST", body: JSON.stringify(payload) },
+      token,
+    ),
+  approveCampaign: (token: string, campaignId: string) =>
+    request<BackendCampaign>(
+      `/campaigns/${encodeURIComponent(campaignId)}/approve`,
+      { method: "POST", body: "{}" },
+      token,
+    ),
+  createConversation: (
+    token: string,
+    payload: { customerId: string; channel: "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL" },
+  ) =>
+    request<BackendConversation>(
+      "/inbox",
+      { method: "POST", body: JSON.stringify(payload) },
+      token,
+    ),
+  whatsappStatus: (token: string) =>
+    request<BackendWhatsAppStatus>("/integrations/whatsapp/status", {}, token),
+  updateChannel: (
+    token: string,
+    type: BackendChannel["type"],
+    isActive: boolean,
+  ) =>
+    request<BackendChannel>(
+      `/channels/${type}`,
+      { method: "PATCH", body: JSON.stringify({ isActive }) },
+      token,
+    ),
+  testWhatsApp: (
+    token: string,
+    payload: { channel: "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL"; to: string; message: string },
+  ) =>
+    request<{ externalId: string; status: string }>(
+      "/integrations/whatsapp/test",
+      { method: "POST", body: JSON.stringify(payload) },
+      token,
+    ),
+  syncWhatsAppTemplates: (token: string) =>
+    request<{ synced: number }>(
+      "/integrations/whatsapp/templates/sync",
+      { method: "POST", body: "{}" },
+      token,
+    ),
+  branchSettings: (token: string, branchId = "main") =>
+    request<Record<string, unknown>>(`/settings/${branchId}`, {}, token),
+  updateBranchSetting: (
+    token: string,
+    name: string,
+    value: Record<string, unknown>,
+    branchId = "main",
+  ) =>
+    request<{ key: string }>(
+      `/settings/${branchId}/${encodeURIComponent(name)}`,
+      { method: "PUT", body: JSON.stringify(value) },
       token,
     ),
   scanVendorBill: (
