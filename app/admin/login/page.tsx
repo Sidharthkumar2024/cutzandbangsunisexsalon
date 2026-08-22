@@ -49,7 +49,7 @@ export default function AdminLoginPage() {
     setBusy(true);
     setMessage("");
     try {
-      const result = await backendApi.login(
+      const loginOnce = () => backendApi.login(
         email.trim(),
         password,
         twoFactorRequired
@@ -58,6 +58,15 @@ export default function AdminLoginPage() {
             : { code: code.replace(/\D/gu, "") }
           : undefined,
       );
+      let result;
+      try {
+        result = await loginOnce();
+      } catch (cause) {
+        if (!(cause instanceof Error) || cause.message !== "backend_unavailable") throw cause;
+        await new Promise((resolve) => window.setTimeout(resolve, 750));
+        await backendApi.health();
+        result = await loginOnce();
+      }
       if ("twoFactorRequired" in result && result.twoFactorRequired) {
         setTwoFactorRequired(true);
         setCode("");

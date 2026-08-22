@@ -41,6 +41,26 @@ API_PID=$!
 corepack pnpm --dir "$BACKEND_DIR" dev:worker &
 WORKER_PID=$!
 
-echo "Cutz & Bangs is starting: website http://localhost:3000 · API http://localhost:4100/health · WAHA http://localhost:3005"
+echo "Waiting for the secure backend to become healthy…"
+BACKEND_READY=0
+for attempt in $(seq 1 60); do
+  if curl --fail --silent --show-error --max-time 2 http://127.0.0.1:4100/health >/dev/null 2>&1; then
+    BACKEND_READY=1
+    break
+  fi
+  if ! kill -0 "$API_PID" 2>/dev/null; then
+    echo "Backend API stopped before it became healthy." >&2
+    wait "$API_PID" || true
+    exit 1
+  fi
+  sleep 1
+done
+
+if [[ "$BACKEND_READY" -ne 1 ]]; then
+  echo "Backend API did not become healthy within 60 seconds." >&2
+  exit 1
+fi
+
+echo "Cutz & Bangs is ready: website http://localhost:3000 · API http://localhost:4100/health · WAHA http://localhost:3005"
 export PORT=3000
 npm --prefix "$PROJECT_DIR" run dev
