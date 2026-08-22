@@ -199,9 +199,9 @@ export default function StaffPortal() {
           <article id="commission">
             <span>₹</span>
             <small>Today’s sales</small>
-            <strong>{money(data.performance.serviceRevenueMinor)}</strong>
+            <strong>{money(data.performance.serviceRevenueMinor + data.performance.productRevenueMinor)}</strong>
             <p>
-              {money(data.performance.estimatedCommissionMinor)} est. commission
+              {money(data.performance.estimatedCommissionMinor)} est. commission · {money(data.performance.productCommissionMinor)} retail
             </p>
           </article>
           <article>

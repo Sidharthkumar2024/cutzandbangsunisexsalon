@@ -59,6 +59,8 @@ const prettyStatus = (value: string) =>
     .split("_")
     .map((word) => word[0].toUpperCase() + word.slice(1))
     .join(" ");
+const dataStaffName = (data: BackendSnapshot, staffId: string) =>
+  data.staff.find((staff) => staff.id === staffId)?.displayName ?? "Retail";
 const toDateTimeInput = (value: string) => {
   const date = new Date(value);
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
@@ -516,6 +518,7 @@ export default function AdminPage() {
               data={backend.data}
               addItem={addItem}
               addProduct={addProduct}
+              assignStaff={(index, staffId) => setCart((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, staffId, staff: dataStaffName(backend.data, staffId) } : item))}
               removeItem={(index) =>
                 setCart((current) =>
                   current.filter((_, itemIndex) => itemIndex !== index),
@@ -2244,6 +2247,7 @@ function POS({
   data,
   addItem,
   addProduct,
+  assignStaff,
   removeItem,
   resetCart,
   subtotal,
@@ -2261,6 +2265,7 @@ function POS({
   data: BackendSnapshot;
   addItem: (item: (typeof saleServices)[number]) => void;
   addProduct: (item: BackendSnapshot["products"][number]) => void;
+  assignStaff: (index: number, staffId: string) => void;
   removeItem: (index: number) => void;
   resetCart: () => void;
   subtotal: number;
@@ -2452,11 +2457,7 @@ function POS({
           kind: item.kind,
           serviceId: item.serviceId,
           productId: item.productId,
-          staffId:
-            item.kind === "service"
-              ? item.staffId ??
-                data.staff.find((staff) => staff.displayName === item.staff)?.id
-              : undefined,
+          staffId: item.staffId ?? (item.kind === "service" ? data.staff.find((staff) => staff.displayName === item.staff)?.id : undefined),
           description: item.name,
           qty: 1,
           unitMinor: item.price * 100,
@@ -2635,7 +2636,8 @@ function POS({
               <div key={`${item.id}-${index}`}>
                 <span>
                   <strong>{item.name}</strong>
-                  <small>{item.kind === "service" ? `with ${item.staff}` : "Retail product"}</small>
+                  <small>{item.kind === "service" ? `with ${item.staff}` : item.staffId ? `Retail by ${item.staff}` : "Assign staff for retail commission"}</small>
+                  {item.kind === "product" && <select value={item.staffId ?? ""} onChange={(event) => assignStaff(index, event.target.value)} aria-label={`Assign staff for ${item.name}`}><option value="">No staff commission</option>{data.staff.map((staff) => <option key={staff.id} value={staff.id}>{staff.displayName}</option>)}</select>}
                 </span>
                 <strong>₹{item.price.toLocaleString("en-IN")}</strong>
                 <button
@@ -5220,11 +5222,11 @@ function Payroll({ data }: { data: BackendSnapshot }) {
           <small>Current month</small>
         </article>
         <article>
-          <span>Service revenue</span>
+          <span>Attributed sales</span>
           <strong>
             {money(
               data.payroll.reduce(
-                (sum, row) => sum + row.serviceRevenueMinor,
+                (sum, row) => sum + row.serviceRevenueMinor + (row.productRevenueMinor ?? 0),
                 0,
               ),
             )}
@@ -5234,7 +5236,7 @@ function Payroll({ data }: { data: BackendSnapshot }) {
         <article>
           <span>Estimated commission</span>
           <strong>{money(totalCommission)}</strong>
-          <small>Basis-point rules per staff profile</small>
+          <small>Service rate + product-specific retail commission</small>
         </article>
       </div>
       <article className="admin-card payroll-table">
@@ -5243,7 +5245,7 @@ function Payroll({ data }: { data: BackendSnapshot }) {
           <span>Present days</span>
           <span>Worked</span>
           <span>Late</span>
-          <span>Service revenue</span>
+          <span>Service / retail</span>
           <span>Commission</span>
         </header>
         {data.payroll.map((row) => (
@@ -5254,10 +5256,10 @@ function Payroll({ data }: { data: BackendSnapshot }) {
               {Math.floor(row.workedMinutes / 60)}h {row.workedMinutes % 60}m
             </span>
             <span>{row.lateMinutes}m</span>
-            <span>{money(row.serviceRevenueMinor)}</span>
+            <span>{money(row.serviceRevenueMinor)} / {money(row.productRevenueMinor ?? 0)}</span>
             <strong>
               {money(row.commissionMinor)}{" "}
-              <small>({row.commissionRateBps / 100}%)</small>
+              <small>({row.commissionRateBps / 100}% service · {money(row.productCommissionMinor ?? 0)} retail)</small>
             </strong>
           </div>
         ))}

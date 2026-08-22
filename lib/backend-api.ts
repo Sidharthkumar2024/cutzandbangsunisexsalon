@@ -130,7 +130,10 @@ export type BackendPayrollRow = {
   lateMinutes: number;
   overtimeMinutes: number;
   serviceRevenueMinor: number;
+  productRevenueMinor: number;
   commissionRateBps: number;
+  serviceCommissionMinor: number;
+  productCommissionMinor: number;
   commissionMinor: number;
 };
 export type BackendVendor = {
@@ -568,7 +571,10 @@ export type StaffPortalDay = {
   }>;
   performance: {
     serviceRevenueMinor: number;
+    productRevenueMinor: number;
     commissionRateBps: number;
+    serviceCommissionMinor: number;
+    productCommissionMinor: number;
     estimatedCommissionMinor: number;
   };
 };
