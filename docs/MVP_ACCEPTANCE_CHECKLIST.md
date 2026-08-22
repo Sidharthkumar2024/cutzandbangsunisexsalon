@@ -1,6 +1,6 @@
 # Phase 1 (P0) acceptance checklist
 
-Payroll, live payment-gateway reconciliation, vendor-bill OCR, GPS selfie attendance, advanced AI, multi-branch, official WhatsApp activation, campaigns and inventory expansion are intentionally deferred from this Phase 1 checklist.
+Payment-gateway integration remains intentionally excluded. Real SMTP/Meta/AI/S3 delivery still requires the salon's external provider accounts and production credentials.
 
 ## Public site and booking
 
@@ -19,20 +19,23 @@ Payroll, live payment-gateway reconciliation, vendor-bill OCR, GPS selfie attend
 
 ## Admin, CRM, and operations
 
-- [x] Admin dashboard shows today’s sales, appointments, average bill, new customers, customer mix, and action queues.
+- [x] Admin dashboard shows today/month/rolling-10/rolling-15 sales, daily breakdown, minimum/maximum/average ticket, best day, repeat rate, never-visited count, and a configurable inactive-customer follow-up list.
 - [x] Calendar presents live appointments and creates walk-ins through the same conflict-safe engine.
-- [x] POS supports customer selection, service tiles, staff attribution, ledger-backed membership redemption, GST, Cash/UPI/Card/Split manual marking, PDF invoice generation, and idempotent email delivery.
+- [x] POS supports customer selection, service/product tiles, staff attribution, category filtering, coupons, loyalty and ledger-backed membership/package redemption, GST, Cash/UPI/Card/Split manual marking, PDF invoice generation, and email/official/unofficial WhatsApp delivery.
 - [x] Customer list supports search plus New, Repeat, VIP, At-risk, and Lapsed segments.
 - [x] Membership screen enrols a customer and creates append-only opening-credit ledger history.
 - [x] Unified inbox loads complete live history and stores replies/internal notes through the provider interface.
 - [x] Campaign UI covers audience, eligibility, content approval, scheduling, status, bookings, and attributed revenue.
-- [x] Reports cover sales, visits, repeat rate, no-shows, revenue trend, and top services.
+- [x] Reports cover sales, visits, repeat rate, payment mix and top services, with CSV and print/PDF export.
 - [x] Staff and attendance views cover skills, sales/commission context, check-ins, hours, late marks, and leave.
 - [x] Booking settings include interval, notice, waitlist, override, and cancellation window controls.
 - [x] Website content APIs read/write D1-backed services, testimonials, and membership plans.
 - [x] Admin dashboard, calendar, POS, customers, Customer 360, services, staff, memberships and inbox are connected to role-protected backend APIs.
 - [x] Add inventory, vendor bills, purchase movements, and low-stock workflows.
 - [x] Add branded PDF invoice generation and email delivery.
+- [x] Encrypt SMTP and WhatsApp secrets at rest, manage them from Admin → Settings, and never return saved secret values to the browser.
+- [x] Add protected database/Redis/provider health checks, delivery-failure counts, production-security readiness, and searchable audit history.
+- [x] Apply branch isolation to campaigns, reports, inbox, waitlist and invoice delivery; require signed/secret webhooks and per-route public rate limits.
 
 ## Customer and staff portals
 
@@ -52,5 +55,5 @@ Payroll, live payment-gateway reconciliation, vendor-bill OCR, GPS selfie attend
 ## Production deployment dependency
 
 - [ ] Deploy the backend stack to a real VPS/domain and configure the private Site `BACKEND_API_URL` with its public HTTPS origin.
-- [ ] Configure production SMTP and storage credentials for Phase 1 email/invoice delivery.
-- [ ] Configure WhatsApp, AI and payment-provider credentials only when their later phases begin.
+- [ ] Enter production SMTP, Meta WhatsApp, optional isolated connector, storage and AI credentials through the protected configuration/deployment surfaces.
+- [ ] Generate an independent production `SECRETS_KEY`, configure the explicit CORS allowlist/trusted proxy, and run the VPS backup/restore rehearsal.

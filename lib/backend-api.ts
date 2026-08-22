@@ -51,6 +51,8 @@ export type BackendCustomer = {
   visitCount: number;
   totalSpent: number;
   loyaltyPoints: number;
+  waConsent?: boolean;
+  emailConsent?: boolean;
   lastVisitAt?: string | null;
   segments: string[];
 };
@@ -279,6 +281,95 @@ export type BackendRangeReport = {
   topStaff: Array<[string, number]>;
   customers: { new: number; repeat: number; lapsed: number; total: number };
 };
+export type BackendDashboardInsights = {
+  generatedAt: string;
+  timezone: string;
+  thresholds: { inactiveDays: number; repeatMinVisits: number };
+  sales: {
+    todayMinor: number;
+    rolling10Minor: number;
+    rolling15Minor: number;
+    monthMinor: number;
+    maxDaily: { date: string; salesMinor: number };
+  };
+  tickets: { minimumMinor: number; maximumMinor: number; averageMinor: number };
+  customers: {
+    total: number;
+    repeat: number;
+    repeatRate: number;
+    inactive: number;
+    neverVisited: number;
+    inactiveList: Array<{
+      id: string;
+      name: string;
+      phone?: string | null;
+      email?: string | null;
+      visitCount: number;
+      totalSpent: number;
+      loyaltyPoints: number;
+      lastVisitAt?: string | null;
+      daysSinceVisit?: number | null;
+    }>;
+  };
+  dailySales: Array<{ date: string; salesMinor: number; collectedMinor: number; bills: number }>;
+};
+export type BackendAuditLog = {
+  id: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  before?: unknown;
+  after?: unknown;
+  ip?: string | null;
+  createdAt: string;
+  actor?: { id: string; email?: string | null; role: string } | null;
+};
+export type BackendProviderConfig = {
+  smtp: {
+    enabled: boolean;
+    host: string;
+    port: number;
+    secure: boolean;
+    user: string;
+    from: string;
+    hasPassword: boolean;
+  };
+  whatsappOfficial: {
+    enabled: boolean;
+    phoneId: string;
+    wabaId: string;
+    graphVersion: string;
+    hasToken: boolean;
+    hasAppSecret: boolean;
+    hasWebhookVerifyToken: boolean;
+  };
+  whatsappUnofficial: {
+    enabled: boolean;
+    baseUrl: string;
+    hasSecret: boolean;
+  };
+};
+export type BackendSystemHealth = {
+  status: "healthy" | "degraded";
+  checkedAt: string;
+  uptimeSeconds: number;
+  checks: {
+    database: { ok: boolean; latencyMs: number; detail: string };
+    redis: { ok: boolean; latencyMs: number; detail: string };
+    smtp: { configured: boolean; detail: string };
+    whatsappOfficial: { configured: boolean; detail: string };
+    whatsappUnofficial: { configured: boolean };
+  };
+  security: {
+    productionMode: boolean;
+    explicitCorsAllowlist: boolean;
+    independentSecretsKey: boolean;
+    providerSecretsEncrypted: boolean;
+    strictAuthRateLimit: boolean;
+    securityHeaders: boolean;
+  };
+  failures24h: { email: number; automation: number };
+};
 export type BackendInvoice = {
   id: string;
   number: string;
@@ -427,6 +518,9 @@ export type BackendSnapshot = {
   coupons: BackendCoupon[];
   settings: Record<string, unknown>;
   range: BackendRangeReport | null;
+  dashboardInsights: BackendDashboardInsights | null;
+  auditLogs: BackendAuditLog[];
+  systemHealth: BackendSystemHealth | null;
 };
 
 const emptySnapshot: BackendSnapshot = {
@@ -454,6 +548,9 @@ const emptySnapshot: BackendSnapshot = {
   coupons: [],
   settings: {},
   range: null,
+  dashboardInsights: null,
+  auditLogs: [],
+  systemHealth: null,
 };
 
 async function request<T>(
@@ -527,6 +624,9 @@ export const backendApi = {
       ["/services?branchId=main", "categories"],
       ["/coupons?branchId=main", "coupons"],
       ["/settings/main", "settings"],
+      ["/reports/dashboard?branchId=main&days=15", "dashboardInsights"],
+      ["/audit-logs?take=100", "auditLogs"],
+      ["/system/health?branchId=main", "systemHealth"],
       [
         `/reports/range?branchId=main&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
         "range",
@@ -736,10 +836,10 @@ export const backendApi = {
       );
     return URL.createObjectURL(await response.blob());
   },
-  sendInvoice: (token: string, invoiceId: string) =>
-    request<{ queued: boolean }>(
+  sendInvoice: (token: string, invoiceId: string, channel: "EMAIL" | "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL" = "EMAIL") =>
+    request<{ queued: boolean; channel: string; status?: string }>(
       `/invoices/${invoiceId}/send`,
-      { method: "POST", body: "{}" },
+      { method: "POST", body: JSON.stringify({ channel }) },
       token,
     ),
   conversation: (token: string, conversationId: string) =>
@@ -891,6 +991,25 @@ export const backendApi = {
     ),
   whatsappStatus: (token: string) =>
     request<BackendWhatsAppStatus>("/integrations/whatsapp/status", {}, token),
+  providerConfig: (token: string, branchId = "main") =>
+    request<BackendProviderConfig>(`/integrations/config?branchId=${encodeURIComponent(branchId)}`, {}, token),
+  saveProviderConfig: (
+    token: string,
+    payload: {
+      branchId: string;
+      smtp: { enabled: boolean; host: string; port: number; secure: boolean; user: string; password?: string; from: string };
+      whatsappOfficial: { enabled: boolean; phoneId: string; wabaId: string; graphVersion: string; token?: string; appSecret?: string; webhookVerifyToken?: string };
+      whatsappUnofficial: { enabled: boolean; baseUrl: string; secret?: string };
+    },
+  ) => request<BackendProviderConfig>("/integrations/config", { method: "PUT", body: JSON.stringify(payload) }, token),
+  emailStatus: (token: string, branchId = "main") =>
+    request<{ configured: boolean; connected: boolean; detail: string }>(`/integrations/email/status?branchId=${encodeURIComponent(branchId)}`, {}, token),
+  testEmail: (token: string, to: string, branchId = "main") =>
+    request<{ externalId: string; status: string }>("/integrations/email/test", { method: "POST", body: JSON.stringify({ branchId, to }) }, token),
+  systemHealth: (token: string, branchId = "main") =>
+    request<BackendSystemHealth>(`/system/health?branchId=${encodeURIComponent(branchId)}`, {}, token),
+  auditLogs: (token: string, query = "take=100") =>
+    request<BackendAuditLog[]>(`/audit-logs?${query}`, {}, token),
   updateChannel: (
     token: string,
     type: BackendChannel["type"],

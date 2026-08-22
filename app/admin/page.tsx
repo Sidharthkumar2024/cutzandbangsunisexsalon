@@ -14,6 +14,7 @@ import {
   backendApi,
   type BackendAppointment,
   type BackendCustomerDetail,
+  type BackendProviderConfig,
   type BackendRangeReport,
   type BackendSnapshot,
   type BackendWhatsAppStatus,
@@ -35,6 +36,7 @@ type View =
   | "staff"
   | "attendance"
   | "payroll"
+  | "system"
   | "settings";
 type CartItem = {
   id: string;
@@ -119,6 +121,7 @@ const navGroups: Array<{
       { id: "staff", label: "Staff", icon: "ST" },
       { id: "attendance", label: "Attendance", icon: "AT" },
       { id: "payroll", label: "Payroll", icon: "PY" },
+      { id: "system", label: "System & audit", icon: "SY" },
     ],
   },
 ];
@@ -260,7 +263,11 @@ const viewTitles: Record<View, [string, string]> = {
     "Payroll foundation",
     "Attendance hours, service revenue and estimated commission.",
   ],
-  settings: ["Settings", "Business, booking, payment and notification rules."],
+  system: [
+    "System health & audit",
+    "Service checks, security posture and an immutable change history.",
+  ],
+  settings: ["Settings", "Business, booking, loyalty and notification rules."],
 };
 
 export default function AdminPage() {
@@ -372,6 +379,7 @@ export default function AdminPage() {
 
   return (
     <main className="admin-shell">
+      {mobileNav && <button className="mobile-nav-backdrop" aria-label="Close navigation" onClick={() => setMobileNav(false)} />}
       <aside className={`admin-sidebar ${mobileNav ? "open" : ""}`}>
         <div className="admin-brand">
           <Link className="wordmark" href="/">
@@ -526,7 +534,7 @@ export default function AdminPage() {
               onRefresh={() => void backend.refresh()}
             />
           )}
-          {view === "content" && <WebsiteContent />}
+          {view === "content" && <WebsiteContent token={backend.token} />}
           {view === "coupons" && (
             <Coupons
               token={backend.token}
@@ -557,6 +565,12 @@ export default function AdminPage() {
             />
           )}
           {view === "payroll" && <Payroll data={backend.data} />}
+          {view === "system" && (
+            <SystemAndAudit
+              token={backend.token}
+              data={backend.data}
+            />
+          )}
           {view === "settings" && (
             <Settings
               token={backend.token}
@@ -646,7 +660,7 @@ function BackendConnection({
 
 type ContentTab = "services" | "testimonials" | "memberships";
 
-function WebsiteContent() {
+function WebsiteContent({ token }: { token: string }) {
   const [tab, setTab] = useState<ContentTab>("services");
   const [content, setContent] = useState<SiteContent | null>(null);
   const [saving, setSaving] = useState(false);
@@ -705,7 +719,7 @@ function WebsiteContent() {
     try {
       const response = await fetch("/api/admin/content", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(content),
       });
       const result = (await response.json()) as SiteContent & {
@@ -1383,7 +1397,7 @@ function WebsiteContent() {
         </Link>
         <button
           className="button admin-primary"
-          disabled={saving}
+          disabled={saving || !token}
           onClick={save}
         >
           {saving ? "Saving…" : "Save & publish content"}
@@ -1401,7 +1415,15 @@ function Dashboard({
   data: BackendSnapshot;
 }) {
   const live = Boolean(data.today);
-  const metrics = data.today
+  const insights = data.dashboardInsights;
+  const metrics = insights
+    ? [
+        ["Today’s sales", money(insights.sales.todayMinor), `${data.today?.bills ?? 0} bills`, "Live from POS"],
+        ["Month-to-date", money(insights.sales.monthMinor), insights.timezone, "Current calendar month"],
+        ["Last 15 days", money(insights.sales.rolling15Minor), money(insights.sales.rolling10Minor), "Last 10 days"],
+        ["Repeat customers", String(insights.customers.repeat), `${insights.customers.repeatRate}%`, `of ${insights.customers.total} customers`],
+      ]
+    : data.today
     ? [
         [
           "Today’s sales",
@@ -1435,6 +1457,8 @@ function Dashboard({
         .map((item, index) => appointmentRow(item, index))
     : appointments.slice(0, 4);
   const range = data.range;
+  const chartRows = insights?.dailySales ?? [];
+  const chartMax = Math.max(1, ...chartRows.map((row) => row.salesMinor));
   return (
     <div className="dashboard-view">
       <div className="metric-grid">
@@ -1453,31 +1477,39 @@ function Dashboard({
           </article>
         ))}
       </div>
+      {insights && (
+        <div className="insight-strip">
+          <span><small>Minimum ticket · month</small><strong>{money(insights.tickets.minimumMinor)}</strong></span>
+          <span><small>Maximum ticket · month</small><strong>{money(insights.tickets.maximumMinor)}</strong></span>
+          <span><small>Best sales day · month</small><strong>{money(insights.sales.maxDaily.salesMinor)}</strong><em>{new Date(`${insights.sales.maxDaily.date}T12:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</em></span>
+          <span><small>Not returned in {insights.thresholds.inactiveDays}+ days</small><strong>{insights.customers.inactive}</strong><em>{insights.customers.neverVisited} never visited</em></span>
+        </div>
+      )}
       <div className="dashboard-grid">
         <article className="admin-card sales-card">
           <div className="card-head">
             <div>
               <h2>Sales overview</h2>
-              <p>Revenue across this week</p>
+              <p>{insights ? "Daily sales · rolling 15 days" : "Revenue across this week"}</p>
             </div>
-            <button>This week⌄</button>
+            <button>{insights ? "15 days" : "This week⌄"}</button>
           </div>
           <div className="sales-summary">
-            <strong>₹2,48,320</strong>
-            <span>↗ 14.2% vs last week</span>
+            <strong>{insights ? money(insights.sales.rolling15Minor) : "₹2,48,320"}</strong>
+            <span>{insights ? `${money(insights.sales.rolling10Minor)} in last 10 days` : "↗ 14.2% vs last week"}</span>
           </div>
-          <div className="bar-chart" aria-label="Weekly sales chart">
-            {[42, 60, 52, 76, 68, 92, 58].map((height, index) => (
-              <div key={index}>
+          <div className={`bar-chart ${chartRows.length ? "rolling-chart" : ""}`} aria-label={chartRows.length ? "Rolling 15-day sales chart" : "Weekly sales chart"}>
+            {(chartRows.length ? chartRows : [42, 60, 52, 76, 68, 92, 58]).map((row, index) => {
+              const height = typeof row === "number" ? row : Math.max(3, Math.round((row.salesMinor / chartMax) * 100));
+              const label = typeof row === "number" ? ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][index] : new Date(`${row.date}T12:00:00`).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+              return <div key={typeof row === "number" ? index : row.date} title={typeof row === "number" ? undefined : `${label}: ${money(row.salesMinor)} · ${row.bills} bills`}>
                 <span
                   style={{ height: `${height}%` }}
-                  className={index === 5 ? "peak" : ""}
+                  className={height === Math.max(...(chartRows.length ? chartRows.map((item) => Math.max(3, Math.round((item.salesMinor / chartMax) * 100))) : [42, 60, 52, 76, 68, 92, 58])) ? "peak" : ""}
                 />
-                <small>
-                  {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][index]}
-                </small>
-              </div>
-            ))}
+                <small>{label}</small>
+              </div>;
+            })}
           </div>
         </article>
         <article className="admin-card audience-card">
@@ -1615,6 +1647,31 @@ function Dashboard({
             ))}
         </article>
       </div>
+      {insights && (
+        <article className="admin-card inactive-customers-card">
+          <div className="card-head">
+            <div>
+              <h2>Customers who are not returning</h2>
+              <p>{insights.customers.inactive} customers have not visited for at least {insights.thresholds.inactiveDays} days.</p>
+            </div>
+            <button onClick={() => onView("campaigns")}>Create follow-up campaign →</button>
+          </div>
+          <div className="inactive-customer-table">
+            <header><span>Customer</span><span>Contact</span><span>Last visit</span><span>Visits</span><span>Lifetime spend</span><span>Loyalty</span></header>
+            {insights.customers.inactiveList.slice(0, 12).map((customer) => (
+              <div key={customer.id}>
+                <strong>{customer.name}</strong>
+                <span>{customer.phone || customer.email || "No contact"}</span>
+                <span>{customer.lastVisitAt ? `${customer.daysSinceVisit} days ago` : "Never"}</span>
+                <span>{customer.visitCount}</span>
+                <span>{money(customer.totalSpent)}</span>
+                <span>{customer.loyaltyPoints} pts</span>
+              </div>
+            ))}
+            {!insights.customers.inactiveList.length && <p className="empty-cart">No inactive customers at this threshold.</p>}
+          </div>
+        </article>
+      )}
     </div>
   );
 }
@@ -2433,6 +2490,19 @@ function POS({
       setCharging(false);
     }
   };
+  const whatsappInvoice = async (channel: "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL") => {
+    if (!token || !invoiceId) return;
+    setCharging(true);
+    setCheckoutError("");
+    try {
+      await backendApi.sendInvoice(token, invoiceId, channel);
+      setDeliveryMessage(`Invoice sent through ${channel === "WHATSAPP_OFFICIAL" ? "official WhatsApp" : "the unofficial connector"}.`);
+    } catch (cause) {
+      setCheckoutError(cause instanceof Error ? prettyStatus(cause.message) : "WhatsApp invoice failed.");
+    } finally {
+      setCharging(false);
+    }
+  };
   return (
     <div className="pos-layout">
       <section className="pos-catalog">
@@ -2654,6 +2724,8 @@ function POS({
               >
                 Email invoice
               </button>
+              <button disabled={charging || !customer?.phone || !customer?.waConsent} onClick={() => void whatsappInvoice("WHATSAPP_OFFICIAL")}>Official WhatsApp</button>
+              <button disabled={charging || !customer?.phone || !customer?.waConsent} onClick={() => void whatsappInvoice("WHATSAPP_UNOFFICIAL")}>Unofficial WhatsApp</button>
             </div>
             <button
               onClick={() => {
@@ -4413,13 +4485,38 @@ function Reports({ report }: { report: BackendRangeReport | null }) {
         ["Skin reset", 9600000],
       ];
   const max = Math.max(...top.map((item) => item[1]), 1);
+  const exportCsv = () => {
+    if (!report) return;
+    const rows: Array<Array<string | number>> = [
+      ["Metric", "Value"],
+      ["Gross sales (minor units)", report.salesMinor],
+      ["Completed bills", report.bills],
+      ["New customers", report.customers.new],
+      ["Repeat customers", report.customers.repeat],
+      ["Lapsed customers", report.customers.lapsed],
+      [],
+      ["Payment method", "Collected (minor units)"],
+      ...Object.entries(report.paymentMix),
+      [],
+      ["Service", "Revenue (minor units)"],
+      ...report.topServices,
+    ];
+    const csv = rows.map((row) => row.map((cell) => `"${String(cell ?? "").replaceAll('"', '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `cutz-bangs-report-${new Date().toISOString().slice(0, 10)}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
   return (
     <div>
       <div className="report-filters">
         <button>This month</button>
         <button>All services⌄</button>
         <button>All staff⌄</button>
-        <button>Export CSV/PDF</button>
+        <button disabled={!report} onClick={exportCsv}>Export CSV</button>
+        <button onClick={() => window.print()}>Print / save PDF</button>
       </div>
       <div className="metric-grid report-metrics">
         {[
@@ -4908,6 +5005,78 @@ function Payroll({ data }: { data: BackendSnapshot }) {
   );
 }
 
+function SystemAndAudit({ token, data }: { token: string; data: BackendSnapshot }) {
+  const [healthOverride, setHealth] = useState<BackendSnapshot["systemHealth"]>(null);
+  const [logsOverride, setLogs] = useState<BackendSnapshot["auditLogs"] | null>(null);
+  const health = healthOverride ?? data.systemHealth;
+  const logs = logsOverride ?? data.auditLogs;
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const refresh = async () => {
+    if (!token) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const [nextHealth, nextLogs] = await Promise.all([
+        backendApi.systemHealth(token),
+        backendApi.auditLogs(token).catch(() => []),
+      ]);
+      setHealth(nextHealth);
+      setLogs(nextLogs);
+      setMessage("System checks and audit history refreshed.");
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "System status could not be refreshed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const filtered = logs.filter((item) => `${item.action} ${item.entityType} ${item.entityId} ${item.actor?.email ?? ""}`.toLowerCase().includes(query.toLowerCase()));
+  const checks = health ? [
+    ["Database", health.checks.database.ok, `${health.checks.database.latencyMs} ms · ${health.checks.database.detail}`],
+    ["Redis queue", health.checks.redis.ok, `${health.checks.redis.latencyMs} ms · ${health.checks.redis.detail}`],
+    ["SMTP", health.checks.smtp.configured, health.checks.smtp.detail],
+    ["WhatsApp official", health.checks.whatsappOfficial.configured, health.checks.whatsappOfficial.detail],
+    ["WhatsApp unofficial", health.checks.whatsappUnofficial.configured, health.checks.whatsappUnofficial.configured ? "Connector configured" : "Connector not configured"],
+  ] as const : [];
+  const security = health ? [
+    ["Encrypted provider secrets", health.security.providerSecretsEncrypted],
+    ["Login rate limiting", health.security.strictAuthRateLimit],
+    ["Security headers", health.security.securityHeaders],
+    ["Independent production secret key", health.security.independentSecretsKey],
+    ["Explicit production CORS", health.security.explicitCorsAllowlist],
+    ["Production mode", health.security.productionMode],
+  ] as const : [];
+  return (
+    <div className="system-view">
+      {message && <div className="calendar-message">{message}</div>}
+      <div className="system-toolbar">
+        <div><p className="eyebrow">Live diagnostics</p><h2>{health?.status === "healthy" ? "Core services healthy" : "System needs attention"}</h2><small>{health ? `Checked ${new Date(health.checkedAt).toLocaleString("en-IN")} · uptime ${Math.floor(health.uptimeSeconds / 3600)}h` : "Connect the backend to run protected checks."}</small></div>
+        <button className="button admin-primary" disabled={busy || !token} onClick={() => void refresh()}>{busy ? "Checking…" : "Run health check"}</button>
+      </div>
+      <div className="system-check-grid">
+        {checks.map(([label, ok, detail]) => <article className="admin-card system-check" key={label}><span className={ok ? "ok" : "warn"}>{ok ? "OK" : "!"}</span><div><strong>{label}</strong><small>{detail}</small></div></article>)}
+        {!checks.length && <article className="admin-card system-check"><span className="warn">!</span><div><strong>Backend not connected</strong><small>Sign in above to view live infrastructure checks.</small></div></article>}
+      </div>
+      {health && (
+        <article className="admin-card security-card">
+          <div className="card-head"><div><h2>Security posture</h2><p>Runtime safeguards and production-only controls.</p></div><span className="count-badge">{health.failures24h.email + health.failures24h.automation}</span></div>
+          <div className="security-grid">{security.map(([label, ok]) => <span key={label}><i className={ok ? "ok" : "warn"}>{ok ? "✓" : "!"}</i><strong>{label}</strong></span>)}</div>
+          <p className="security-note">Last 24 hours: {health.failures24h.email} failed emails · {health.failures24h.automation} failed automations. Production-only checks remain amber in local development.</p>
+        </article>
+      )}
+      <article className="admin-card audit-card">
+        <div className="card-head"><div><h2>Audit log</h2><p>Immutable changes across POS, customers, staff, services, settings and campaigns.</p></div><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search action, entity or actor" /></div>
+        <div className="audit-table">
+          <header><span>When</span><span>Action</span><span>Entity</span><span>Actor</span><span>Source</span></header>
+          {filtered.map((item) => <div key={item.id}><time>{new Date(item.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</time><strong>{prettyStatus(item.action.replaceAll(".", "_"))}</strong><span>{item.entityType}<small>{item.entityId}</small></span><span>{item.actor?.email ?? "System"}<small>{item.actor?.role ? prettyStatus(item.actor.role) : "Automation"}</small></span><span>{item.ip ?? "Internal"}</span></div>)}
+          {!filtered.length && <p className="empty-cart">No audit entries match this search.</p>}
+        </div>
+      </article>
+    </div>
+  );
+}
+
 function Settings({
   token,
   data,
@@ -4918,6 +5087,18 @@ function Settings({
   onRefresh: () => void;
 }) {
   const [status, setStatus] = useState<BackendWhatsAppStatus | null>(null);
+  const [providerConfig, setProviderConfig] = useState<BackendProviderConfig>({
+    smtp: { enabled: false, host: "", port: 587, secure: false, user: "", from: "", hasPassword: false },
+    whatsappOfficial: { enabled: false, phoneId: "", wabaId: "", graphVersion: "v23.0", hasToken: false, hasAppSecret: false, hasWebhookVerifyToken: false },
+    whatsappUnofficial: { enabled: false, baseUrl: "", hasSecret: false },
+  });
+  const [smtpPassword, setSmtpPassword] = useState("");
+  const [officialToken, setOfficialToken] = useState("");
+  const [officialAppSecret, setOfficialAppSecret] = useState("");
+  const [webhookVerifyToken, setWebhookVerifyToken] = useState("");
+  const [unofficialSecret, setUnofficialSecret] = useState("");
+  const [emailTestTo, setEmailTestTo] = useState("");
+  const [emailHealth, setEmailHealth] = useState<{ configured: boolean; connected: boolean; detail: string } | null>(null);
   const [bookingInterval, setBookingInterval] = useState(15);
   const [minimumNotice, setMinimumNotice] = useState(2);
   const [allowWaitlist, setAllowWaitlist] = useState(true);
@@ -4929,6 +5110,7 @@ function Settings({
   const [earnEveryRupees, setEarnEveryRupees] = useState(100);
   const [redeemRupeesPerPoint, setRedeemRupeesPerPoint] = useState(1);
   const [minimumRedeemPoints, setMinimumRedeemPoints] = useState(50);
+  const [inactiveDays, setInactiveDays] = useState(60);
   const [testTo, setTestTo] = useState("");
   const [testMessage, setTestMessage] = useState("Hello from Cutz & Bangs");
   const [busy, setBusy] = useState(false);
@@ -4936,11 +5118,15 @@ function Settings({
 
   const loadIntegrations = async () => {
     if (!token) return;
-    const [nextStatus, settings] = await Promise.all([
+    const [nextStatus, settings, nextProviderConfig, nextEmailHealth] = await Promise.all([
       backendApi.whatsappStatus(token),
       backendApi.branchSettings(token),
+      backendApi.providerConfig(token),
+      backendApi.emailStatus(token),
     ]);
     setStatus(nextStatus);
+    setProviderConfig(nextProviderConfig);
+    setEmailHealth(nextEmailHealth);
     const booking = settings.booking as Record<string, unknown> | undefined;
     if (booking) {
       setBookingInterval(Number(booking.intervalMin ?? 15));
@@ -4958,14 +5144,18 @@ function Settings({
       setRedeemRupeesPerPoint(Number(loyalty.redeemMinorPerPoint ?? 100) / 100);
       setMinimumRedeemPoints(Number(loyalty.minRedeemPoints ?? 50));
     }
+    const retention = settings.retention as Record<string, unknown> | undefined;
+    if (retention) setInactiveDays(Number(retention.inactiveDays ?? 60));
   };
   useEffect(() => {
     let cancelled = false;
     if (!token) return;
-    Promise.all([backendApi.whatsappStatus(token), backendApi.branchSettings(token)])
-      .then(([nextStatus, settings]) => {
+    Promise.all([backendApi.whatsappStatus(token), backendApi.branchSettings(token), backendApi.providerConfig(token), backendApi.emailStatus(token)])
+      .then(([nextStatus, settings, nextProviderConfig, nextEmailHealth]) => {
         if (cancelled) return;
         setStatus(nextStatus);
+        setProviderConfig(nextProviderConfig);
+        setEmailHealth(nextEmailHealth);
         const booking = settings.booking as Record<string, unknown> | undefined;
         if (booking) {
           setBookingInterval(Number(booking.intervalMin ?? 15));
@@ -4983,6 +5173,8 @@ function Settings({
           setRedeemRupeesPerPoint(Number(loyalty.redeemMinorPerPoint ?? 100) / 100);
           setMinimumRedeemPoints(Number(loyalty.minRedeemPoints ?? 50));
         }
+        const retention = settings.retention as Record<string, unknown> | undefined;
+        if (retention) setInactiveDays(Number(retention.inactiveDays ?? 60));
       })
       .catch((cause) => {
         if (!cancelled) setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Settings could not be loaded.");
@@ -5032,6 +5224,20 @@ function Settings({
       setBusy(false);
     }
   };
+  const saveRetention = async () => {
+    if (!token) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.updateBranchSetting(token, "retention", { inactiveDays });
+      setMessage(`Retention threshold saved at ${inactiveDays} days. Dashboard and follow-up lists now use it.`);
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Retention rule could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  };
   const toggleChannel = async (type: "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL", active: boolean) => {
     if (!token) return;
     setBusy(true);
@@ -5070,6 +5276,71 @@ function Settings({
       onRefresh();
     } catch (cause) {
       setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Template sync failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const saveProviders = async () => {
+    if (!token) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const saved = await backendApi.saveProviderConfig(token, {
+        branchId: "main",
+        smtp: {
+          enabled: providerConfig.smtp.enabled,
+          host: providerConfig.smtp.host,
+          port: providerConfig.smtp.port,
+          secure: providerConfig.smtp.secure,
+          user: providerConfig.smtp.user,
+          from: providerConfig.smtp.from,
+          ...(smtpPassword ? { password: smtpPassword } : {}),
+        },
+        whatsappOfficial: {
+          enabled: providerConfig.whatsappOfficial.enabled,
+          phoneId: providerConfig.whatsappOfficial.phoneId,
+          wabaId: providerConfig.whatsappOfficial.wabaId,
+          graphVersion: providerConfig.whatsappOfficial.graphVersion,
+          ...(officialToken ? { token: officialToken } : {}),
+          ...(officialAppSecret ? { appSecret: officialAppSecret } : {}),
+          ...(webhookVerifyToken ? { webhookVerifyToken } : {}),
+        },
+        whatsappUnofficial: {
+          enabled: providerConfig.whatsappUnofficial.enabled,
+          baseUrl: providerConfig.whatsappUnofficial.baseUrl,
+          ...(unofficialSecret ? { secret: unofficialSecret } : {}),
+        },
+      });
+      await Promise.all([
+        backendApi.updateChannel(token, "EMAIL", saved.smtp.enabled),
+        backendApi.updateChannel(token, "WHATSAPP_OFFICIAL", saved.whatsappOfficial.enabled),
+        backendApi.updateChannel(token, "WHATSAPP_UNOFFICIAL", saved.whatsappUnofficial.enabled),
+      ]);
+      setProviderConfig(saved);
+      setSmtpPassword("");
+      setOfficialToken("");
+      setOfficialAppSecret("");
+      setWebhookVerifyToken("");
+      setUnofficialSecret("");
+      await loadIntegrations();
+      onRefresh();
+      setMessage("Email and WhatsApp credentials saved securely and applied to the backend.");
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Provider credentials could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const testEmail = async () => {
+    if (!token || !emailTestTo) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.testEmail(token, emailTestTo);
+      setMessage(`SMTP test email queued for ${emailTestTo}.`);
+      setEmailHealth(await backendApi.emailStatus(token));
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "SMTP test failed.");
     } finally {
       setBusy(false);
     }
@@ -5143,6 +5414,52 @@ function Settings({
         </div>
         <p className="loyalty-example">Example: spend ₹{earnEveryRupees.toLocaleString("en-IN")} to earn {earnPoints} point(s); {minimumRedeemPoints} points are worth {money(Math.round(minimumRedeemPoints * redeemRupeesPerPoint * 100))}.</p>
         <button className="button admin-primary" disabled={busy || !token || earnEveryRupees <= 0 || redeemRupeesPerPoint <= 0 || minimumRedeemPoints <= 0} onClick={() => void saveLoyalty()}>{busy ? "Saving…" : "Save loyalty rules"}</button>
+      </article>
+      <article className="admin-card settings-card retention-settings-card">
+        <p className="eyebrow">Customer retention</p>
+        <h2>Not-returning customer threshold</h2>
+        <p className="loyalty-example">Customers whose last completed visit is older than this threshold appear on the dashboard follow-up list.</p>
+        <div className="setting-row"><div><strong>Mark customer inactive after</strong><small>Used by retention KPIs and campaign follow-up</small></div><select value={inactiveDays} onChange={(event) => setInactiveDays(Number(event.target.value))}><option value="30">30 days</option><option value="45">45 days</option><option value="60">60 days</option><option value="90">90 days</option></select></div>
+        <button className="button admin-primary" disabled={busy || !token} onClick={() => void saveRetention()}>{busy ? "Saving…" : "Save retention rule"}</button>
+      </article>
+      <article className="admin-card provider-config-card">
+        <div className="card-head"><div><p className="eyebrow">Secure email setup</p><h2>SMTP configuration</h2><p>Add or rotate the salon mailbox without editing server files. Passwords are encrypted and never returned to this screen.</p></div><span className={emailHealth?.connected ? "integration-badge connected" : "integration-badge"}>{emailHealth?.connected ? "Connected" : providerConfig.smtp.hasPassword ? "Saved" : "Needs setup"}</span></div>
+        <div className="provider-config-form smtp-config-form">
+          <label className="toggle-field"><span>Enable email</span><button className={`toggle ${providerConfig.smtp.enabled ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, smtp: { ...current.smtp, enabled: !current.smtp.enabled } }))}><i /></button></label>
+          <label>SMTP host<input value={providerConfig.smtp.host} onChange={(event) => setProviderConfig((current) => ({ ...current, smtp: { ...current.smtp, host: event.target.value } }))} placeholder="smtp.example.com" /></label>
+          <label>Port<input type="number" min="1" max="65535" value={providerConfig.smtp.port} onChange={(event) => setProviderConfig((current) => ({ ...current, smtp: { ...current.smtp, port: Number(event.target.value) } }))} /></label>
+          <label>Username<input value={providerConfig.smtp.user} onChange={(event) => setProviderConfig((current) => ({ ...current, smtp: { ...current.smtp, user: event.target.value } }))} placeholder="salon@example.com" /></label>
+          <label>From address<input value={providerConfig.smtp.from} onChange={(event) => setProviderConfig((current) => ({ ...current, smtp: { ...current.smtp, from: event.target.value } }))} placeholder="Cutz & Bangs <salon@example.com>" /></label>
+          <label>Password<input type="password" value={smtpPassword} onChange={(event) => setSmtpPassword(event.target.value)} placeholder={providerConfig.smtp.hasPassword ? "Saved · enter only to replace" : "SMTP password"} /></label>
+          <label className="toggle-field"><span>Secure TLS socket</span><button className={`toggle ${providerConfig.smtp.secure ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, smtp: { ...current.smtp, secure: !current.smtp.secure } }))}><i /></button></label>
+        </div>
+        <div className="integration-test-row"><input type="email" value={emailTestTo} onChange={(event) => setEmailTestTo(event.target.value)} placeholder="Test recipient email" /><button disabled={busy || !token || !emailTestTo || !providerConfig.smtp.enabled} onClick={() => void testEmail()}>Send SMTP test</button><small>{emailHealth?.detail ?? "Save credentials, then send a connection test."}</small></div>
+      </article>
+      <article className="admin-card provider-config-card">
+        <div className="card-head"><div><p className="eyebrow">Messaging credentials</p><h2>WhatsApp provider setup</h2><p>Official Meta Cloud API and the optional unofficial connector are isolated from each other.</p></div></div>
+        <div className="provider-credential-grid">
+          <section>
+            <header><div><strong>Official Meta Cloud API</strong><small>Recommended for production messaging</small></div><button className={`toggle ${providerConfig.whatsappOfficial.enabled ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, whatsappOfficial: { ...current.whatsappOfficial, enabled: !current.whatsappOfficial.enabled } }))}><i /></button></header>
+            <div className="provider-config-form">
+              <label>Phone number ID<input value={providerConfig.whatsappOfficial.phoneId} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappOfficial: { ...current.whatsappOfficial, phoneId: event.target.value } }))} /></label>
+              <label>WhatsApp business ID<input value={providerConfig.whatsappOfficial.wabaId} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappOfficial: { ...current.whatsappOfficial, wabaId: event.target.value } }))} /></label>
+              <label>Graph API version<input value={providerConfig.whatsappOfficial.graphVersion} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappOfficial: { ...current.whatsappOfficial, graphVersion: event.target.value } }))} placeholder="v23.0" /></label>
+              <label>Permanent access token<input type="password" value={officialToken} onChange={(event) => setOfficialToken(event.target.value)} placeholder={providerConfig.whatsappOfficial.hasToken ? "Saved · enter only to replace" : "Meta access token"} /></label>
+              <label>App secret<input type="password" value={officialAppSecret} onChange={(event) => setOfficialAppSecret(event.target.value)} placeholder={providerConfig.whatsappOfficial.hasAppSecret ? "Saved · enter only to replace" : "Meta app secret"} /></label>
+              <label>Webhook verify token<input type="password" value={webhookVerifyToken} onChange={(event) => setWebhookVerifyToken(event.target.value)} placeholder={providerConfig.whatsappOfficial.hasWebhookVerifyToken ? "Saved · enter only to replace" : "At least 12 characters"} /></label>
+            </div>
+            <small className="webhook-hint">Webhook endpoint: <code>/api/v1/webhooks/whatsapp</code></small>
+          </section>
+          <section>
+            <header><div><strong>Unofficial connector</strong><small>Keep on a separately isolated service</small></div><button className={`toggle ${providerConfig.whatsappUnofficial.enabled ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, enabled: !current.whatsappUnofficial.enabled } }))}><i /></button></header>
+            <div className="provider-config-form">
+              <label>Connector base URL<input value={providerConfig.whatsappUnofficial.baseUrl} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, baseUrl: event.target.value } }))} placeholder="https://wa-connector.example.com" /></label>
+              <label>Internal shared secret<input type="password" value={unofficialSecret} onChange={(event) => setUnofficialSecret(event.target.value)} placeholder={providerConfig.whatsappUnofficial.hasSecret ? "Saved · enter only to replace" : "At least 12 characters"} /></label>
+            </div>
+            <p className="provider-warning">Unofficial WhatsApp connections may violate provider terms. Keep this disabled unless you accept that operational risk.</p>
+          </section>
+        </div>
+        <button className="button admin-primary" disabled={busy || !token} onClick={() => void saveProviders()}>{busy ? "Saving…" : "Save & apply provider credentials"}</button>
       </article>
       <article className="admin-card whatsapp-settings">
         <div className="card-head"><div><p className="eyebrow">Provider adapters</p><h2>WhatsApp integrations</h2><p>Official Cloud API and the isolated unofficial QR session stay separate.</p></div></div>

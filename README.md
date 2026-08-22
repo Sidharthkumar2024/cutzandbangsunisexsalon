@@ -12,9 +12,9 @@ A responsive front-end MVP for the Cutz & Bangs salon ERP/CRM brief. It includes
 
 ## API integration
 
-The booking client reads `NEXT_PUBLIC_API_URL`. If it is unset, the included `/api/bookings` route acts as a development adapter. Set the variable to the cloud API origin when that backend is ready; the UI sends a JSON payload containing audience, services with staff assignments, date, time, and customer details.
+The Site proxies protected business calls through `BACKEND_API_URL`, keeping the API origin and provider credentials server-side. When the owner signs in, the admin dashboard, calendar, POS, CRM, memberships, services, coupons, inventory, inbox, campaigns, reports, attendance, payroll foundation, settings, system health, and audit history use live backend data. Representative empty-state data remains visible only while the API is not connected.
 
-The screens currently use representative local data so every flow can be reviewed before backend integration. Replace the arrays with API queries without changing the UI contracts.
+Admin → **Settings** manages retention and loyalty rules plus encrypted SMTP, official Meta WhatsApp, and isolated unofficial WhatsApp credentials. Admin → **System & audit** shows database/Redis/provider health, production-security readiness, delivery failures, and immutable changes.
 
 ## Website content management
 
@@ -24,9 +24,9 @@ Admin → **Website content** manages the public homepage through persisted D1 d
 - Testimonials, including quote, customer label, rating, and display order.
 - Membership cards, including name, pay amount, service credit, validity, benefits, colour, order, and “most popular” state.
 
-The public homepage reads this content from the same server-side store on every request. The admin API is `GET/PUT /api/admin/content`; the read-only public API is `GET /api/site-content`. The current Sites deployment is owner-only, which protects the admin surface. App authentication must be added before changing the site to public access.
+The public homepage reads this content from the same server-side store on every request. The read-only API is `GET /api/site-content`; `PUT /api/admin/content` requires a live OWNER/ADMIN backend bearer session and also creates an audited content revision. The private Site access policy remains a second protection layer.
 
-`CONTENT_API_URL` accepts the external cloud backend’s exact matching content endpoint. When configured, reads and writes go through that endpoint and mirror into D1; if it is unavailable, the UI falls back to D1. Until the external endpoint is supplied, D1 is the working backend rather than temporary browser storage.
+`CONTENT_API_URL` accepts an optional external content endpoint. When configured, reads and writes go through that endpoint and mirror into D1; if it is unavailable, the UI falls back to D1. D1 remains the durable website-content store, while operational salon data lives in PostgreSQL.
 
 ## Local use
 

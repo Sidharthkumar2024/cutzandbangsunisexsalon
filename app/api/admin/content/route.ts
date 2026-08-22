@@ -1,6 +1,24 @@
 import { getResolvedSiteContent, replaceResolvedSiteContent } from '../../../../lib/content-store';
 import type { MembershipPlan, SiteContent } from '../../../../lib/content-types';
 
+const backendBase = () => (process.env.BACKEND_API_URL ?? '').replace(/\/$/, '');
+
+async function authorizeAdmin(request: Request) {
+  const base = backendBase();
+  const authorization = request.headers.get('authorization');
+  if (!base) return { error: Response.json({ error: 'backend_not_configured' }, { status: 503 }) };
+  if (!authorization?.startsWith('Bearer ')) return { error: Response.json({ error: 'authentication_required' }, { status: 401 }) };
+  try {
+    const response = await fetch(`${base}/api/v1/auth/me`, { headers: { authorization }, cache: 'no-store' });
+    if (!response.ok) return { error: Response.json({ error: 'invalid_session' }, { status: 401 }) };
+    const user = await response.json() as { role?: string };
+    if (!['OWNER', 'ADMIN'].includes(user.role ?? '')) return { error: Response.json({ error: 'forbidden' }, { status: 403 }) };
+    return { base, authorization };
+  } catch {
+    return { error: Response.json({ error: 'backend_unavailable' }, { status: 502 }) };
+  }
+}
+
 function validText(value: unknown, max = 300) {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 }
@@ -21,7 +39,20 @@ export async function GET() {
 }
 
 export async function PUT(request: Request) {
+  const auth = await authorizeAdmin(request);
+  if ('error' in auth) return auth.error;
   const content = await request.json();
   if (!isValid(content)) return Response.json({ error: 'Please check the content fields and try again.' }, { status: 400 });
-  return Response.json(await replaceResolvedSiteContent(content));
+  const saved = await replaceResolvedSiteContent(content);
+  await fetch(`${auth.base}/api/v1/settings/main/siteContentRevision`, {
+    method: 'PUT',
+    headers: { authorization: auth.authorization, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      updatedAt: new Date().toISOString(),
+      services: saved.services.length,
+      testimonials: saved.testimonials.length,
+      membershipPlans: saved.membershipPlans.length,
+    }),
+  }).catch(() => undefined);
+  return Response.json(saved);
 }
