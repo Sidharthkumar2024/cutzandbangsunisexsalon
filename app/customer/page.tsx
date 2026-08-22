@@ -280,6 +280,20 @@ export default function CustomerPortal() {
             <a href="#history">View ledger →</a>
           </article>
         </div>
+        <section className="portal-loyalty-card">
+          <div>
+            <p className="eyebrow">Loyalty rewards</p>
+            <h2>{data.loyaltyPoints.toLocaleString("en-IN")} points</h2>
+            <p>Worth {money(data.loyaltyPoints * data.loyaltyRules.redeemMinorPerPoint)} at POS. Redeem from {data.loyaltyRules.minRedeemPoints} points.</p>
+          </div>
+          <div>
+            <strong>Recent points activity</strong>
+            {(data.loyaltyLedger ?? []).slice(0, 3).map((entry) => (
+              <span key={entry.id}><b>{entry.deltaPoints > 0 ? "+" : ""}{entry.deltaPoints}</b><small>{entry.reason} · balance {entry.balanceAfter}</small></span>
+            ))}
+            {!data.loyaltyLedger?.length && <small>Your points activity will appear here.</small>}
+          </div>
+        </section>
         {servicePackages.length > 0 && (
           <section className="portal-packages">
             <div className="section-heading">

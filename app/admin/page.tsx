@@ -29,6 +29,7 @@ type View =
   | "inventory"
   | "inbox"
   | "content"
+  | "coupons"
   | "campaigns"
   | "reports"
   | "staff"
@@ -107,6 +108,7 @@ const navGroups: Array<{
     label: "Growth",
     items: [
       { id: "content", label: "Website content", icon: "WC" },
+      { id: "coupons", label: "Coupons", icon: "CO" },
       { id: "campaigns", label: "Campaigns", icon: "CP" },
       { id: "reports", label: "Reports", icon: "RP" },
     ],
@@ -243,6 +245,7 @@ const viewTitles: Record<View, [string, string]> = {
     "Website content",
     "Manage what customers see on the public website.",
   ],
+  coupons: ["Coupons", "Create percentage or fixed offers with controlled usage."],
   campaigns: [
     "Campaigns",
     "Reach the right audience with an approval-first workflow.",
@@ -524,6 +527,13 @@ export default function AdminPage() {
             />
           )}
           {view === "content" && <WebsiteContent />}
+          {view === "coupons" && (
+            <Coupons
+              token={backend.token}
+              data={backend.data}
+              onRefresh={() => void backend.refresh()}
+            />
+          )}
           {view === "campaigns" && (
             <Campaigns
               token={backend.token}
@@ -2175,6 +2185,9 @@ function POS({
     useState<BackendCustomerDetail | null>(null);
   const [membershipId, setMembershipId] = useState("");
   const [packageSelection, setPackageSelection] = useState("");
+  const [couponCode, setCouponCode] = useState("");
+  const [loyaltyPoints, setLoyaltyPoints] = useState(0);
+  const [rewardMessage, setRewardMessage] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<
     "CASH" | "UPI" | "CARD" | "SPLIT"
   >("UPI");
@@ -2226,9 +2239,44 @@ function POS({
       )
     : 0;
   const payableMinor = Math.max(0, total * 100 - packageDiscountMinor);
+  const loyaltySettings = data.settings.loyalty as Record<string, unknown> | undefined;
+  const loyaltyRules = {
+    enabled: Boolean(loyaltySettings?.enabled ?? true),
+    minRedeemPoints: Number(loyaltySettings?.minRedeemPoints ?? 50),
+    redeemMinorPerPoint: Number(loyaltySettings?.redeemMinorPerPoint ?? 100),
+  };
+  const normalizedCouponCode = couponCode.trim().toUpperCase();
+  const selectedCoupon = data.coupons.find((coupon) => coupon.code === normalizedCouponCode);
+  const couponAvailable = Boolean(
+    selectedCoupon?.isActive &&
+      (!selectedCoupon.startsAt || new Date(selectedCoupon.startsAt) <= new Date()) &&
+      (!selectedCoupon.endsAt || new Date(selectedCoupon.endsAt) >= new Date()) &&
+      payableMinor >= (selectedCoupon.minSpendMinor ?? 0) &&
+      (!selectedCoupon.usageLimit || selectedCoupon.usedCount < selectedCoupon.usageLimit) &&
+      (!selectedCoupon.perCustomerLimit || customerId),
+  );
+  const rawCouponDiscount = selectedCoupon
+    ? selectedCoupon.type === "PERCENTAGE"
+      ? Math.round((payableMinor * selectedCoupon.value) / 10_000)
+      : selectedCoupon.value
+    : 0;
+  const couponDiscountMinor = couponAvailable
+    ? Math.min(payableMinor, selectedCoupon?.maxDiscountMinor ? Math.min(rawCouponDiscount, selectedCoupon.maxDiscountMinor) : rawCouponDiscount)
+    : 0;
+  const afterCouponMinor = Math.max(0, payableMinor - couponDiscountMinor);
+  const loyaltyBalance = customerDetail?.loyaltyPoints ?? customer?.loyaltyPoints ?? 0;
+  const maxLoyaltyPoints = loyaltyRules.enabled
+    ? Math.min(loyaltyBalance, Math.floor(afterCouponMinor / loyaltyRules.redeemMinorPerPoint))
+    : 0;
+  const loyaltyRedemptionValid =
+    loyaltyPoints === 0 ||
+    (loyaltyPoints >= loyaltyRules.minRedeemPoints && loyaltyPoints <= maxLoyaltyPoints);
+  const loyaltyMinor = loyaltyPoints > 0 && loyaltyRedemptionValid
+    ? loyaltyPoints * loyaltyRules.redeemMinorPerPoint
+    : 0;
   const redeemMinor =
     memberCredit && membership
-      ? Math.min(membership.balanceMinor, payableMinor)
+      ? Math.min(membership.balanceMinor, afterCouponMinor - loyaltyMinor)
       : 0;
 
   useEffect(() => {
@@ -2274,9 +2322,18 @@ function POS({
       setCheckoutError("Select a customer with active membership credit.");
       return;
     }
+    if (normalizedCouponCode && !couponAvailable) {
+      setCheckoutError("Coupon is invalid, inactive, expired or does not meet its minimum spend.");
+      return;
+    }
+    if (!loyaltyRedemptionValid) {
+      setCheckoutError(`Redeem at least ${loyaltyRules.minRedeemPoints} points and no more than ${maxLoyaltyPoints}.`);
+      return;
+    }
     setCharging(true);
     setCheckoutError("");
     setDeliveryMessage("");
+    setRewardMessage("");
     try {
       const payments = [
         ...(redeemMinor > 0
@@ -2288,7 +2345,7 @@ function POS({
               },
             ]
           : []),
-        ...manualPayments(payableMinor - redeemMinor),
+        ...manualPayments(afterCouponMinor - loyaltyMinor - redeemMinor),
       ];
       const result = await backendApi.checkout(token, {
         branchId: "main",
@@ -2319,10 +2376,15 @@ function POS({
               },
             ]
           : [],
+        couponCode: normalizedCouponCode || undefined,
+        loyaltyPointsToRedeem: loyaltyPoints,
       });
       setInvoice(result.number);
       setInvoiceId(result.id);
       setPaid(true);
+      setRewardMessage(
+        `${result.loyalty.redeemedPoints ? `${result.loyalty.redeemedPoints} points redeemed. ` : ""}${result.loyalty.earnedPoints} points earned${result.loyalty.balanceAfter != null ? ` · balance ${result.loyalty.balanceAfter}` : ""}.`,
+      );
       try {
         await backendApi.generateInvoicePdf(token, result.id);
         setDeliveryMessage("Branded PDF invoice ready.");
@@ -2443,6 +2505,7 @@ function POS({
               setMembershipId("");
               setPackageSelection("");
               setMemberCredit(false);
+              setLoyaltyPoints(0);
             }}
             aria-label="Select POS customer"
           >
@@ -2512,6 +2575,21 @@ function POS({
             ))}
           </select>
         </label>
+        <div className="pos-reward-controls">
+          <label>
+            <span>Coupon code</span>
+            <input list="pos-coupons" value={couponCode} onChange={(event) => setCouponCode(event.target.value.toUpperCase())} placeholder="Enter code" />
+            <datalist id="pos-coupons">
+              {data.coupons.filter((coupon) => coupon.isActive).map((coupon) => <option key={coupon.id} value={coupon.code}>{coupon.name}</option>)}
+            </datalist>
+            {normalizedCouponCode && <small className={couponAvailable ? "valid" : "invalid"}>{couponAvailable ? `${selectedCoupon?.name} applied` : "Code is not currently eligible"}</small>}
+          </label>
+          <label>
+            <span>Redeem loyalty points</span>
+            <input type="number" min="0" max={maxLoyaltyPoints} step="1" value={loyaltyPoints} onChange={(event) => setLoyaltyPoints(Math.max(0, Number(event.target.value)))} disabled={!customerId || !loyaltyRules.enabled} />
+            <small>{customerId ? `${loyaltyBalance} available · min ${loyaltyRules.minRedeemPoints} · max ${maxLoyaltyPoints}` : "Choose a customer first"}</small>
+          </label>
+        </div>
         <div className="bill-lines">
           <p>
             <span>Subtotal</span>
@@ -2535,13 +2613,25 @@ function POS({
               <strong>−{money(packageDiscountMinor)}</strong>
             </p>
           )}
+          {couponDiscountMinor > 0 && (
+            <p className="discount-line">
+              <span>Coupon · {selectedCoupon?.code}</span>
+              <strong>−{money(couponDiscountMinor)}</strong>
+            </p>
+          )}
+          {loyaltyMinor > 0 && (
+            <p className="discount-line">
+              <span>Loyalty tender · {loyaltyPoints} pts</span>
+              <strong>−{money(loyaltyMinor)}</strong>
+            </p>
+          )}
           <p>
             <span>Tax</span>
             <strong>₹{tax.toLocaleString("en-IN")}</strong>
           </p>
           <p className="bill-total">
             <span>Total</span>
-            <strong>{money(payableMinor)}</strong>
+            <strong>{money(afterCouponMinor)}</strong>
           </p>
         </div>
         {checkoutError && <p className="checkout-error">{checkoutError}</p>}
@@ -2553,6 +2643,7 @@ function POS({
               <small>{invoice || "Invoice ready"}</small>
             </p>
             {deliveryMessage && <small>{deliveryMessage}</small>}
+            {rewardMessage && <small>{rewardMessage}</small>}
             <div className="invoice-actions">
               <button disabled={charging} onClick={() => void openInvoice()}>
                 Open PDF
@@ -2571,6 +2662,9 @@ function POS({
                 setInvoiceId("");
                 setDeliveryMessage("");
                 setPackageSelection("");
+                setCouponCode("");
+                setLoyaltyPoints(0);
+                setRewardMessage("");
                 resetCart();
               }}
             >
@@ -2597,7 +2691,7 @@ function POS({
             >
               {charging
                 ? "Saving invoice…"
-                : `Mark payment · ${money(payableMinor - redeemMinor)}`}{" "}
+                : `Mark payment · ${money(afterCouponMinor - loyaltyMinor - redeemMinor)}`}{" "}
               <span>→</span>
             </button>
           </>
@@ -2630,6 +2724,8 @@ function Customers({
   const [waConsent, setWaConsent] = useState(false);
   const [emailConsent, setEmailConsent] = useState(false);
   const [detail, setDetail] = useState<BackendCustomerDetail | null>(null);
+  const [loyaltyDelta, setLoyaltyDelta] = useState(0);
+  const [loyaltyReason, setLoyaltyReason] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const liveRows = data.customers.filter(
@@ -2668,7 +2764,9 @@ function Customers({
       setWaConsent(false);
       setEmailConsent(false);
       setShowCreate(false);
-      setMessage("Customer created and ready for booking/POS.");
+      const loyalty = data.settings.loyalty as Record<string, unknown> | undefined;
+      const welcomePoints = Number(loyalty?.welcomePoints ?? 50);
+      setMessage(`Customer created with ${welcomePoints} welcome loyalty points.`);
       onRefresh();
     } catch (cause) {
       setMessage(
@@ -2692,6 +2790,26 @@ function Customers({
           ? prettyStatus(cause.message)
           : "Customer history could not be loaded.",
       );
+    } finally {
+      setBusy(false);
+    }
+  };
+  const adjustLoyalty = async () => {
+    if (!token || !detail || !loyaltyDelta || !loyaltyReason.trim()) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await backendApi.adjustLoyalty(token, detail.id, {
+        deltaPoints: loyaltyDelta,
+        reason: loyaltyReason.trim(),
+      });
+      setDetail(await backendApi.customerDetail(token, detail.id));
+      setLoyaltyDelta(0);
+      setLoyaltyReason("");
+      setMessage(`Loyalty balance updated to ${result.balanceAfter} points.`);
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Loyalty balance could not be updated.");
     } finally {
       setBusy(false);
     }
@@ -2780,6 +2898,7 @@ function Customers({
           <span>Customer</span>
           <span>Segments</span>
           <span>Visits</span>
+          <span>Points</span>
           <span>Total spend</span>
           <span>Last visit</span>
           <span />
@@ -2813,6 +2932,7 @@ function Customers({
                   ))}
                 </span>
                 <span>{customer.visitCount}</span>
+                <strong>{customer.loyaltyPoints}</strong>
                 <strong>{money(customer.totalSpent)}</strong>
                 <span>
                   {customer.lastVisitAt
@@ -2842,6 +2962,7 @@ function Customers({
                   ))}
                 </span>
                 <span>{customer.visits}</span>
+                <strong>—</strong>
                 <strong>{customer.spend}</strong>
                 <span>{customer.last}</span>
                 <button disabled>→</button>
@@ -2882,6 +3003,16 @@ function Customers({
               <small>Active packages</small>
               <strong>{detail.servicePackages?.length ?? 0}</strong>
             </span>
+            <span>
+              <small>Loyalty points</small>
+              <strong>{detail.loyaltyPoints}</strong>
+            </span>
+          </div>
+          <div className="loyalty-adjustment">
+            <div><strong>Adjust loyalty balance</strong><small>Use a positive number to grant points or a negative number to correct them. Every change is audited.</small></div>
+            <label>Points<input type="number" value={loyaltyDelta} onChange={(event) => setLoyaltyDelta(Number(event.target.value))} placeholder="+100 or -50" /></label>
+            <label>Reason<input value={loyaltyReason} onChange={(event) => setLoyaltyReason(event.target.value)} placeholder="Service recovery / correction" /></label>
+            <button className="button admin-primary" disabled={busy || !loyaltyDelta || !loyaltyReason.trim()} onClick={() => void adjustLoyalty()}>Save adjustment</button>
           </div>
           <div className="customer-timeline">
             <h3>Chronological timeline</h3>
@@ -2916,6 +3047,12 @@ function Customers({
                   meta: `${prettyStatus(entry.type)} · ${entry.qtyDelta > 0 ? "+" : ""}${entry.qtyDelta} · balance ${entry.balanceAfter}`,
                 })),
               ),
+              ...(detail.loyaltyLedger ?? []).map((entry) => ({
+                key: `l-${entry.id}`,
+                at: entry.createdAt,
+                title: `Loyalty · ${entry.deltaPoints > 0 ? "+" : ""}${entry.deltaPoints} points`,
+                meta: `${prettyStatus(entry.type)} · balance ${entry.balanceAfter} · ${entry.reason}`,
+              })),
             ]
               .sort((a, b) => +new Date(b.at) - +new Date(a.at))
               .slice(0, 30)
@@ -3229,6 +3366,110 @@ function Memberships({
   );
 }
 
+function Coupons({
+  token,
+  data,
+  onRefresh,
+}: {
+  token: string;
+  data: BackendSnapshot;
+  onRefresh: () => void;
+}) {
+  const [code, setCode] = useState("");
+  const [name, setName] = useState("");
+  const [type, setType] = useState<"PERCENTAGE" | "FIXED">("PERCENTAGE");
+  const [value, setValue] = useState(10);
+  const [minSpend, setMinSpend] = useState(0);
+  const [maxDiscount, setMaxDiscount] = useState("");
+  const [usageLimit, setUsageLimit] = useState("");
+  const [perCustomerLimit, setPerCustomerLimit] = useState("1");
+  const [startsAt, setStartsAt] = useState("");
+  const [endsAt, setEndsAt] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const create = async () => {
+    if (!token || !code.trim() || !name.trim() || value <= 0) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.createCoupon(token, {
+        branchId: "main",
+        code: code.trim().toUpperCase(),
+        name: name.trim(),
+        type,
+        value: type === "PERCENTAGE" ? Math.round(value * 100) : Math.round(value * 100),
+        minSpendMinor: Math.round(minSpend * 100),
+        maxDiscountMinor: maxDiscount ? Math.round(Number(maxDiscount) * 100) : null,
+        usageLimit: usageLimit ? Number(usageLimit) : null,
+        perCustomerLimit: perCustomerLimit ? Number(perCustomerLimit) : null,
+        startsAt: startsAt ? new Date(`${startsAt}T00:00:00`).toISOString() : null,
+        endsAt: endsAt ? new Date(`${endsAt}T23:59:59`).toISOString() : null,
+        isActive: true,
+      });
+      setCode("");
+      setName("");
+      setMessage("Coupon created and ready at POS.");
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Coupon could not be created.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggle = async (id: string, isActive: boolean) => {
+    if (!token) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.updateCoupon(token, id, { isActive });
+      setMessage(`Coupon ${isActive ? "activated" : "paused"}.`);
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Coupon could not be updated.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="coupon-admin">
+      {message && <div className="calendar-message">{message}</div>}
+      <section className="admin-card phase-one-form coupon-builder">
+        <div>
+          <p className="eyebrow">POS offers</p>
+          <h2>Create coupon</h2>
+          <small>Percentage and fixed-value coupons are validated again by the backend at checkout.</small>
+        </div>
+        <label>Code<input value={code} onChange={(event) => setCode(event.target.value.toUpperCase())} placeholder="WELCOME10" /></label>
+        <label>Name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Welcome offer" /></label>
+        <label>Type<select value={type} onChange={(event) => setType(event.target.value as "PERCENTAGE" | "FIXED")}><option value="PERCENTAGE">Percentage</option><option value="FIXED">Fixed amount</option></select></label>
+        <label>{type === "PERCENTAGE" ? "Discount (%)" : "Discount (₹)"}<input type="number" min="1" max={type === "PERCENTAGE" ? 100 : undefined} value={value} onChange={(event) => setValue(Number(event.target.value))} /></label>
+        <label>Minimum spend (₹)<input type="number" min="0" value={minSpend} onChange={(event) => setMinSpend(Number(event.target.value))} /></label>
+        <label>Max discount (₹)<input type="number" min="1" value={maxDiscount} onChange={(event) => setMaxDiscount(event.target.value)} placeholder="No cap" /></label>
+        <label>Total uses<input type="number" min="1" value={usageLimit} onChange={(event) => setUsageLimit(event.target.value)} placeholder="Unlimited" /></label>
+        <label>Uses / customer<input type="number" min="1" value={perCustomerLimit} onChange={(event) => setPerCustomerLimit(event.target.value)} placeholder="Unlimited" /></label>
+        <label>Starts<input type="date" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label>
+        <label>Ends<input type="date" value={endsAt} onChange={(event) => setEndsAt(event.target.value)} /></label>
+        <button className="button admin-primary" disabled={busy || !token || !code || !name || value <= 0} onClick={() => void create()}>{busy ? "Saving…" : "Create coupon"}</button>
+      </section>
+      <div className="coupon-grid">
+        {data.coupons.map((coupon) => (
+          <article className="admin-card coupon-card" key={coupon.id}>
+            <header><div><strong>{coupon.code}</strong><small>{coupon.name}</small></div><span className={coupon.isActive ? "active" : "paused"}>{coupon.isActive ? "Active" : "Paused"}</span></header>
+            <b>{coupon.type === "PERCENTAGE" ? `${coupon.value / 100}% off` : `${money(coupon.value)} off`}</b>
+            <p>Minimum {money(coupon.minSpendMinor)} · used {coupon.usedCount}{coupon.usageLimit ? ` / ${coupon.usageLimit}` : ""}</p>
+            <small>{coupon.perCustomerLimit ? `${coupon.perCustomerLimit} use(s) per customer` : "No customer limit"}{coupon.endsAt ? ` · ends ${new Date(coupon.endsAt).toLocaleDateString("en-IN")}` : ""}</small>
+            <button disabled={busy} onClick={() => void toggle(coupon.id, !coupon.isActive)}>{coupon.isActive ? "Pause" : "Activate"}</button>
+          </article>
+        ))}
+        {!data.coupons.length && <p className="empty-cart">No coupons yet. Create the first POS offer above.</p>}
+      </div>
+    </div>
+  );
+}
+
 function Services({
   token,
   data,
@@ -3239,12 +3480,34 @@ function Services({
   onRefresh: () => void;
 }) {
   const [categoryId, setCategoryId] = useState("");
+  const [categoryName, setCategoryName] = useState("");
+  const [categoryGender, setCategoryGender] = useState<"Male" | "Female" | "Unisex">("Unisex");
   const [name, setName] = useState("");
   const [duration, setDuration] = useState(60);
   const [price, setPrice] = useState(799);
   const [staffIds, setStaffIds] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const createCategory = async () => {
+    if (!token || !categoryName.trim()) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const category = await backendApi.createServiceCategory(token, {
+        name: categoryName.trim(),
+        gender: categoryGender,
+        sortOrder: data.categories.length * 10,
+      });
+      setCategoryName("");
+      setCategoryId(category.id);
+      setMessage("Category created. Add its first service below.");
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Category could not be created.");
+    } finally {
+      setBusy(false);
+    }
+  };
   const create = async () => {
     if (!token || !categoryId || !name || !staffIds.length) return;
     setBusy(true);
@@ -3278,6 +3541,12 @@ function Services({
   return (
     <div className="services-admin">
       {message && <div className="calendar-message">{message}</div>}
+      <section className="admin-card phase-one-form category-create">
+        <div><p className="eyebrow">Category manager</p><h2>Create category</h2><small>Examples: Male, Female, Manicure, Pedicure or Colouring.</small></div>
+        <label>Category name<input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="Pedicure" /></label>
+        <label>Audience<select value={categoryGender} onChange={(event) => setCategoryGender(event.target.value as "Male" | "Female" | "Unisex")}><option value="Unisex">Unisex</option><option value="Male">Male</option><option value="Female">Female</option></select></label>
+        <button className="button admin-primary" disabled={busy || !token || !categoryName.trim()} onClick={() => void createCategory()}>{busy ? "Creating…" : "Create category"}</button>
+      </section>
       <section className="admin-card phase-one-form service-create">
         <div>
           <p className="eyebrow">Bookable catalogue</p>
@@ -3358,7 +3627,7 @@ function Services({
         {data.categories.map((category) => (
           <article className="admin-card" key={category.id}>
             <header>
-              <h3>{category.name}</h3>
+              <div><h3>{category.name}</h3><small>{category.gender ?? "All audiences"}</small></div>
               <span>{category.services.length}</span>
             </header>
             {category.services.map((service) => (
@@ -4654,6 +4923,12 @@ function Settings({
   const [allowWaitlist, setAllowWaitlist] = useState(true);
   const [managerOverride, setManagerOverride] = useState(true);
   const [cancellationHours, setCancellationHours] = useState(3);
+  const [loyaltyEnabled, setLoyaltyEnabled] = useState(true);
+  const [welcomePoints, setWelcomePoints] = useState(50);
+  const [earnPoints, setEarnPoints] = useState(1);
+  const [earnEveryRupees, setEarnEveryRupees] = useState(100);
+  const [redeemRupeesPerPoint, setRedeemRupeesPerPoint] = useState(1);
+  const [minimumRedeemPoints, setMinimumRedeemPoints] = useState(50);
   const [testTo, setTestTo] = useState("");
   const [testMessage, setTestMessage] = useState("Hello from Cutz & Bangs");
   const [busy, setBusy] = useState(false);
@@ -4674,6 +4949,15 @@ function Settings({
       setManagerOverride(Boolean(booking.managerOverride ?? true));
       setCancellationHours(Number(booking.cancellationHours ?? 3));
     }
+    const loyalty = settings.loyalty as Record<string, unknown> | undefined;
+    if (loyalty) {
+      setLoyaltyEnabled(Boolean(loyalty.enabled ?? true));
+      setWelcomePoints(Number(loyalty.welcomePoints ?? 50));
+      setEarnPoints(Number(loyalty.earnPoints ?? 1));
+      setEarnEveryRupees(Number(loyalty.earnEveryMinor ?? 10_000) / 100);
+      setRedeemRupeesPerPoint(Number(loyalty.redeemMinorPerPoint ?? 100) / 100);
+      setMinimumRedeemPoints(Number(loyalty.minRedeemPoints ?? 50));
+    }
   };
   useEffect(() => {
     let cancelled = false;
@@ -4689,6 +4973,15 @@ function Settings({
           setAllowWaitlist(Boolean(booking.allowWaitlist ?? true));
           setManagerOverride(Boolean(booking.managerOverride ?? true));
           setCancellationHours(Number(booking.cancellationHours ?? 3));
+        }
+        const loyalty = settings.loyalty as Record<string, unknown> | undefined;
+        if (loyalty) {
+          setLoyaltyEnabled(Boolean(loyalty.enabled ?? true));
+          setWelcomePoints(Number(loyalty.welcomePoints ?? 50));
+          setEarnPoints(Number(loyalty.earnPoints ?? 1));
+          setEarnEveryRupees(Number(loyalty.earnEveryMinor ?? 10_000) / 100);
+          setRedeemRupeesPerPoint(Number(loyalty.redeemMinorPerPoint ?? 100) / 100);
+          setMinimumRedeemPoints(Number(loyalty.minRedeemPoints ?? 50));
         }
       })
       .catch((cause) => {
@@ -4714,6 +5007,27 @@ function Settings({
       setMessage("Booking rules saved to the backend.");
     } catch (cause) {
       setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Settings could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const saveLoyalty = async () => {
+    if (!token) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.updateBranchSetting(token, "loyalty", {
+        enabled: loyaltyEnabled,
+        welcomePoints,
+        earnPoints,
+        earnEveryMinor: Math.round(earnEveryRupees * 100),
+        redeemMinorPerPoint: Math.round(redeemRupeesPerPoint * 100),
+        minRedeemPoints: minimumRedeemPoints,
+      });
+      setMessage("Loyalty rules saved. New customers and POS bills will use them immediately.");
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Loyalty rules could not be saved.");
     } finally {
       setBusy(false);
     }
@@ -4815,6 +5129,20 @@ function Settings({
           </select>
         </div>
         <button className="button admin-primary" disabled={busy || !token} onClick={() => void saveBooking()}>{busy ? "Saving…" : "Save booking rules"}</button>
+      </article>
+      <article className="admin-card settings-card loyalty-settings-card">
+        <p className="eyebrow">Loyalty engine</p>
+        <h2>Points earning & redemption</h2>
+        <div className="setting-row"><div><strong>Loyalty programme</strong><small>Enable automatic earning and POS redemption</small></div><button className={`toggle ${loyaltyEnabled ? "active" : ""}`} onClick={() => setLoyaltyEnabled((current) => !current)}><i /></button></div>
+        <div className="loyalty-rule-grid">
+          <label>Welcome points<input type="number" min="0" value={welcomePoints} onChange={(event) => setWelcomePoints(Number(event.target.value))} /></label>
+          <label>Earn points<input type="number" min="0" value={earnPoints} onChange={(event) => setEarnPoints(Number(event.target.value))} /></label>
+          <label>For every spend (₹)<input type="number" min="1" value={earnEveryRupees} onChange={(event) => setEarnEveryRupees(Number(event.target.value))} /></label>
+          <label>Value per point (₹)<input type="number" min="0.01" step="0.01" value={redeemRupeesPerPoint} onChange={(event) => setRedeemRupeesPerPoint(Number(event.target.value))} /></label>
+          <label>Minimum redemption<input type="number" min="1" value={minimumRedeemPoints} onChange={(event) => setMinimumRedeemPoints(Number(event.target.value))} /></label>
+        </div>
+        <p className="loyalty-example">Example: spend ₹{earnEveryRupees.toLocaleString("en-IN")} to earn {earnPoints} point(s); {minimumRedeemPoints} points are worth {money(Math.round(minimumRedeemPoints * redeemRupeesPerPoint * 100))}.</p>
+        <button className="button admin-primary" disabled={busy || !token || earnEveryRupees <= 0 || redeemRupeesPerPoint <= 0 || minimumRedeemPoints <= 0} onClick={() => void saveLoyalty()}>{busy ? "Saving…" : "Save loyalty rules"}</button>
       </article>
       <article className="admin-card whatsapp-settings">
         <div className="card-head"><div><p className="eyebrow">Provider adapters</p><h2>WhatsApp integrations</h2><p>Official Cloud API and the isolated unofficial QR session stay separate.</p></div></div>

@@ -47,8 +47,10 @@ export type BackendCustomer = {
   id: string;
   name: string;
   phone?: string | null;
+  email?: string | null;
   visitCount: number;
   totalSpent: number;
+  loyaltyPoints: number;
   lastVisitAt?: string | null;
   segments: string[];
 };
@@ -224,12 +226,50 @@ export type BackendService = {
   durationMin: number;
   priceMinor: number;
   taxRateBps: number;
+  bufferMin: number;
+  isActive: boolean;
   serviceStaff: Array<{ staff: { id: string; displayName: string } }>;
 };
 export type BackendCategory = {
   id: string;
   name: string;
+  gender?: string | null;
+  sortOrder: number;
   services: BackendService[];
+};
+export type BackendLoyaltyRules = {
+  enabled: boolean;
+  welcomePoints: number;
+  earnPoints: number;
+  earnEveryMinor: number;
+  redeemMinorPerPoint: number;
+  minRedeemPoints: number;
+};
+export type BackendLoyaltyEntry = {
+  id: string;
+  type: string;
+  deltaPoints: number;
+  balanceAfter: number;
+  invoiceId?: string | null;
+  reason: string;
+  createdAt: string;
+};
+export type BackendCoupon = {
+  id: string;
+  branchId: string;
+  code: string;
+  name: string;
+  type: "PERCENTAGE" | "FIXED";
+  value: number;
+  minSpendMinor: number;
+  maxDiscountMinor?: number | null;
+  usageLimit?: number | null;
+  perCustomerLimit?: number | null;
+  usedCount: number;
+  startsAt?: string | null;
+  endsAt?: string | null;
+  isActive: boolean;
+  createdAt: string;
 };
 export type BackendRangeReport = {
   salesMinor: number;
@@ -300,6 +340,7 @@ export type BackendCustomerDetail = Omit<BackendCustomer, "segments"> & {
     balanceAfter: number;
     createdAt: string;
   }>;
+  loyaltyLedger: BackendLoyaltyEntry[];
 };
 export type PublicCatalog = Array<{
   id: string;
@@ -341,6 +382,8 @@ export type CustomerPortalOverview = BackendCustomer & {
     balanceAfter: number;
     createdAt: string;
   }>;
+  loyaltyLedger: BackendLoyaltyEntry[];
+  loyaltyRules: BackendLoyaltyRules;
 };
 export type StaffPortalDay = {
   staff: BackendStaff & { commissionRate: number };
@@ -381,6 +424,8 @@ export type BackendSnapshot = {
   campaigns: BackendCampaign[];
   staff: BackendStaff[];
   categories: BackendCategory[];
+  coupons: BackendCoupon[];
+  settings: Record<string, unknown>;
   range: BackendRangeReport | null;
 };
 
@@ -406,6 +451,8 @@ const emptySnapshot: BackendSnapshot = {
   campaigns: [],
   staff: [],
   categories: [],
+  coupons: [],
+  settings: {},
   range: null,
 };
 
@@ -478,6 +525,8 @@ export const backendApi = {
       ["/campaigns", "campaigns"],
       ["/staff?branchId=main", "staff"],
       ["/services?branchId=main", "categories"],
+      ["/coupons?branchId=main", "coupons"],
+      ["/settings/main", "settings"],
       [
         `/reports/range?branchId=main&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
         "range",
@@ -511,7 +560,12 @@ export const backendApi = {
     return snapshot;
   },
   checkout: (token: string, payload: unknown) =>
-    request<{ number: string; id: string }>(
+    request<{
+      number: string;
+      id: string;
+      loyalty: { redeemedPoints: number; redeemedMinor: number; earnedPoints: number; balanceAfter: number | null };
+      coupon?: { code: string; discountMinor: number } | null;
+    }>(
       "/pos/checkout",
       { method: "POST", body: JSON.stringify(payload) },
       token,
@@ -543,6 +597,12 @@ export const backendApi = {
     ),
   customerDetail: (token: string, customerId: string) =>
     request<BackendCustomerDetail>(`/customers/${customerId}`, {}, token),
+  adjustLoyalty: (token: string, customerId: string, payload: { deltaPoints: number; reason: string }) =>
+    request<{ entry: BackendLoyaltyEntry; balanceAfter: number }>(
+      `/customers/${encodeURIComponent(customerId)}/loyalty/adjust`,
+      { method: "POST", body: JSON.stringify(payload) },
+      token,
+    ),
   createService: (
     token: string,
     payload: {
@@ -558,6 +618,30 @@ export const backendApi = {
     request<BackendService>(
       "/services",
       { method: "POST", body: JSON.stringify(payload) },
+      token,
+    ),
+  createServiceCategory: (
+    token: string,
+    payload: { name: string; gender?: "Male" | "Female" | "Unisex" | null; sortOrder?: number },
+  ) =>
+    request<BackendCategory>(
+      "/service-categories",
+      { method: "POST", body: JSON.stringify(payload) },
+      token,
+    ),
+  createCoupon: (
+    token: string,
+    payload: Omit<BackendCoupon, "id" | "usedCount" | "createdAt">,
+  ) =>
+    request<BackendCoupon>(
+      "/coupons",
+      { method: "POST", body: JSON.stringify(payload) },
+      token,
+    ),
+  updateCoupon: (token: string, couponId: string, payload: Partial<BackendCoupon>) =>
+    request<BackendCoupon>(
+      `/coupons/${encodeURIComponent(couponId)}`,
+      { method: "PATCH", body: JSON.stringify(payload) },
       token,
     ),
   createStaff: (
