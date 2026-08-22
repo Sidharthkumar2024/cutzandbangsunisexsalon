@@ -29,20 +29,25 @@
 - [x] Booking settings include interval, notice, waitlist, override, and cancellation window controls.
 - [x] Website content APIs read/write D1-backed services, testimonials, and membership plans.
 - [ ] Connect admin screens to cloud APIs and role permissions.
-- [ ] Add inventory, vendor bills, purchase movements, and low-stock workflows.
-- [ ] Add branded PDF invoice generation and email delivery.
+- [x] Add inventory, vendor bills, purchase movements, and low-stock workflows.
+- [x] Add branded PDF invoice generation and email delivery.
 
 ## Customer and staff portals
 
 - [x] Customer portal shows upcoming booking, history, preferences/notes, membership balance, ledger access, and invoices.
 - [x] Staff portal shows own day, client context, status changes, attendance, sales, and estimated commission.
-- [ ] Authenticate each portal and enforce server-side access control.
+- [x] Authenticate each portal and enforce server-side access control.
 
 ## Platform and safety
 
 - [x] Front end uses an API-origin environment variable and contains no provider secrets.
 - [x] UI includes responsive states, clear empty-state copy in POS, success feedback, and disabled submit states.
 - [x] Social preview metadata and a branded 1200×630 image are configured.
-- [ ] Cloud stack must implement RBAC, secure sessions, rate limits, upload validation, signed media, webhook verification, and encrypted secrets.
-- [ ] Cloud stack must implement persistent volumes, versioned migrations, backups, restore/rollback documentation, soft deletes, and immutable invoice/payment/membership audit records.
-- [ ] Add integration and end-to-end tests against stable backend APIs.
+- [x] Cloud stack code implements RBAC, secure sessions, rate limits, upload validation, signed media, webhook verification, and container-separated secrets.
+- [x] Cloud stack code implements persistent volumes, versioned migrations, backups, restore/rollback documentation, soft deletes, and immutable invoice/payment/membership audit records.
+- [x] Add integration and end-to-end tests against stable backend APIs.
+
+## Production deployment dependency
+
+- [ ] Deploy the backend stack to a real VPS/domain and configure the private Site `BACKEND_API_URL` with its public HTTPS origin.
+- [ ] Configure production SMTP, S3, WhatsApp, AI and payment-provider credentials; provider certification remains external-account work.

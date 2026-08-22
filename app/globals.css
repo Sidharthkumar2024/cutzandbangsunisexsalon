@@ -531,6 +531,55 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .checkout-error { margin: 6px 0; color: #a94e44; font-size: 7px; }
 .payment-mix-list { display: grid; gap: 10px; margin-top: 20px; }
 .payment-mix-list p { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #ece9e5; font-size: 8px; }
+.inventory-ops-grid { display: grid; grid-template-columns: .85fr 1.15fr; gap: 12px; margin-top: 12px; }
+.vendor-bill-workbench, .purchase-bill-list, .movement-list { padding: 15px; }
+.vendor-bill-workbench { display: flex; flex-direction: column; gap: 10px; }
+.vendor-bill-workbench label { display: flex; flex-direction: column; gap: 5px; color: #88847d; font-size: 6px; font-weight: 800; text-transform: uppercase; }
+.vendor-bill-workbench input, .vendor-bill-workbench select, .vendor-create input { min-width: 0; height: 33px; padding: 0 9px; border: 1px solid #ddd9d3; border-radius: 7px; background: #fbfaf8; color: #4b4945; font-size: 7px; }
+.vendor-create { display: grid; grid-template-columns: 1fr auto; gap: 7px; }
+.vendor-create button, .purchase-bill-list > div > button { padding: 0 10px; border: 1px solid #ddd8d2; border-radius: 7px; background: white; color: #83473e; font-size: 6px; font-weight: 800; }
+.purchase-bill-list > div:not(.card-head) { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 12px; min-height: 48px; border-bottom: 1px solid #ece9e4; }
+.purchase-bill-list > div > span { display: flex; flex-direction: column; gap: 3px; }
+.purchase-bill-list strong { font-size: 8px; }
+.purchase-bill-list small { color: #96918a; font-size: 6px; }
+.movement-list { margin-top: 12px; }
+.movement-list > div:not(.card-head) { display: grid; grid-template-columns: 1.4fr 1fr .5fr .6fr; align-items: center; min-height: 42px; border-bottom: 1px solid #ece9e4; font-size: 7px; }
+.movement-list em { font-style: normal; font-weight: 900; }
+.movement-list em.positive { color: #4e7951; }
+.movement-list em.negative { color: #ad564c; }
+.attendance-view { display: grid; gap: 12px; }
+.attendance-capture { display: grid; grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(130px, .55fr)) minmax(130px, .55fr) auto; align-items: end; gap: 11px; padding: 15px; }
+.attendance-capture h2 { margin: 3px 0 4px; font: 18px Georgia, serif; }
+.attendance-capture > div > p:last-child { max-width: 430px; color: #8e8a83; font-size: 6px; line-height: 1.5; }
+.attendance-capture label { display: flex; flex-direction: column; gap: 5px; color: #88847d; font-size: 6px; font-weight: 800; text-transform: uppercase; }
+.attendance-capture select, .attendance-capture input[type="file"] { height: 33px; padding: 0 7px; border: 1px solid #ddd9d3; border-radius: 7px; background: #fbfaf8; color: #4b4945; font-size: 6px; }
+.attendance-capture .consent-box { flex-direction: row; align-items: center; min-height: 33px; padding: 0 8px; border: 1px solid #ddd9d3; border-radius: 7px; background: #fbfaf8; }
+.attendance-capture .consent-box input { width: 14px; height: 14px; }
+.payroll-table { overflow: hidden; }
+.payroll-table > header, .payroll-table > div { display: grid; grid-template-columns: 1.2fr repeat(3, .75fr) 1fr 1fr; align-items: center; gap: 10px; min-height: 52px; padding: 8px 15px; border-bottom: 1px solid #ebe8e3; font-size: 8px; }
+.payroll-table > header { min-height: 38px; background: #f8f7f4; color: #918d86; font-size: 6px; font-weight: 800; text-transform: uppercase; }
+.payroll-table small { color: #96918a; font-size: 6px; }
+.portal-auth-shell { min-height: 100vh; display: grid; place-items: center; align-content: center; gap: 26px; padding: 40px 20px; background: radial-gradient(circle at 50% 10%, #fff8f1 0, #f5efe8 45%, #eee6de 100%); }
+.portal-auth-shell > .wordmark { font-size: 13px; }
+.portal-auth-card { width: min(430px, 100%); display: flex; flex-direction: column; gap: 12px; padding: 34px; border: 1px solid rgb(100 72 60 / 14%); border-radius: 18px; background: rgb(255 255 255 / 88%); box-shadow: 0 24px 70px rgb(75 53 44 / 12%); backdrop-filter: blur(16px); }
+.portal-auth-card h1 { margin: 2px 0; color: #3e3935; font: 34px/1.06 Georgia, serif; }
+.portal-auth-card h1 em { color: #a95f4f; font-weight: 400; }
+.portal-auth-card > p:not(.eyebrow) { margin: 0 0 8px; color: #8a837c; font-size: 9px; line-height: 1.6; }
+.portal-auth-card label { display: flex; flex-direction: column; gap: 5px; color: #7f7871; font-size: 7px; font-weight: 800; text-transform: uppercase; }
+.portal-auth-card input { height: 42px; padding: 0 12px; border: 1px solid #ddd6cf; border-radius: 9px; background: white; color: #403c38; font-size: 9px; outline: none; }
+.portal-auth-card input:focus { border-color: #c97964; box-shadow: 0 0 0 3px rgb(201 121 100 / 10%); }
+.portal-auth-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; padding: 4px; border-radius: 9px; background: #f1ece7; }
+.portal-auth-tabs button { height: 32px; border: 0; border-radius: 7px; background: transparent; color: #8c847d; font-size: 8px; font-weight: 800; }
+.portal-auth-tabs button.active { background: white; color: #84483f; box-shadow: 0 3px 10px rgb(66 47 39 / 8%); }
+.portal-auth-error { padding: 8px 10px; border-radius: 7px; background: #fff2ef; color: #a44f45; font-size: 7px; text-transform: capitalize; }
+.portal-profile > button, .staff-side-profile > button { border: 0; background: transparent; color: #9a5c50; font-size: 6px; font-weight: 800; cursor: pointer; }
+.staff-side-profile { flex-wrap: wrap; }
+.staff-side-profile > button { width: 100%; text-align: left; padding-left: 39px; }
+.checkin-card > a { padding: 6px 9px; border: 1px solid #ddd7d0; border-radius: 7px; color: #82483e; font-size: 6px; font-weight: 800; }
+.portal-invoice-row { min-height: 62px; display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 16px; padding: 10px 0; border-bottom: 1px solid #e9e1da; }
+.portal-invoice-row > span { display: flex; flex-direction: column; gap: 4px; }
+.portal-invoice-row strong { font-size: 10px; }
+.portal-invoice-row small, .portal-invoice-row i { color: #938b84; font-size: 7px; font-style: normal; }
 
 @media (max-width: 1100px) {
   .membership-plans-section { grid-template-columns: 1fr; }
@@ -543,6 +592,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .schedule-action-panel { grid-template-columns: 1fr 1fr; }
   .schedule-action-panel > div { grid-column: 1 / -1; }
   .waitlist-grid { grid-template-columns: 1fr 1fr; }
+  .attendance-capture { grid-template-columns: 1fr 1fr; }
+  .attendance-capture > div { grid-column: 1 / -1; }
 }
 
 @media (max-width: 780px) {
@@ -567,6 +618,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .membership-plan-grid { grid-template-columns: 1fr; }
   .schedule-action-panel, .waitlist-grid { grid-template-columns: 1fr; }
   .schedule-action-panel > div { grid-column: auto; }
+  .inventory-ops-grid, .attendance-capture { grid-template-columns: 1fr; }
+  .attendance-capture > div { grid-column: auto; }
+  .payroll-table > header, .payroll-table > div { grid-template-columns: 1.2fr .7fr .8fr; }
+  .payroll-table > header span:nth-child(3), .payroll-table > header span:nth-child(4), .payroll-table > header span:nth-child(5), .payroll-table > div span:nth-child(3), .payroll-table > div span:nth-child(4), .payroll-table > div span:nth-child(5) { display: none; }
 }
 
 @media (max-width: 520px) {
