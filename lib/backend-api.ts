@@ -5,6 +5,16 @@ export type BackendUser = {
   email: string;
   role: string;
   branchId: string;
+  twoFactorEnabled?: boolean;
+};
+export type BackendLoginResult =
+  | { token: string; user: BackendUser; twoFactorRequired?: false }
+  | { twoFactorRequired: true };
+export type BackendTwoFactorStatus = {
+  enabled: boolean;
+  enabledAt?: string | null;
+  setupPending: boolean;
+  recoveryCodesRemaining: number;
 };
 export type BackendToday = {
   appointments: number;
@@ -457,6 +467,8 @@ export type BackendSystemHealth = {
     providerSecretsEncrypted: boolean;
     strictAuthRateLimit: boolean;
     securityHeaders: boolean;
+    authenticator2faEnabled: boolean;
+    passwordResetConfigured: boolean;
   };
   failures24h: { email: number; automation: number };
 };
@@ -658,15 +670,16 @@ const emptySnapshot: BackendSnapshot = {
 async function request<T>(
   path: string,
   options: RequestInit = {},
-  token?: string,
+  _token?: string,
 ): Promise<T> {
+  void _token; // Kept in the public method signatures while auth lives in an HttpOnly cookie.
   const headers = new Headers(options.headers);
   if (options.body && !headers.has("content-type"))
     headers.set("content-type", "application/json");
-  if (token) headers.set("authorization", `Bearer ${token}`);
   const response = await fetch(`/api/backend${path}`, {
     ...options,
     headers,
+    credentials: "same-origin",
     cache: "no-store",
   });
   const data = await response.json().catch(() => ({}));
@@ -690,11 +703,13 @@ export const backendApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  login: (email: string, password: string) =>
-    request<{ token: string; user: BackendUser }>("/auth/login", {
+  login: (email: string, password: string, secondFactor?: { code?: string; recoveryCode?: string }) =>
+    request<BackendLoginResult>("/auth/login", {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, ...secondFactor }),
     }),
+  requestPasswordReset: (email: string) => request<{ accepted: true }>("/auth/password/forgot", { method: "POST", body: JSON.stringify({ email }) }),
+  resetPassword: (token: string, password: string) => request<unknown>("/auth/password/reset", { method: "POST", body: JSON.stringify({ token, password }) }),
   logout: (token: string) => request<unknown>("/auth/logout", { method: "POST", body: "{}" }, token),
   registerCustomer: (payload: {
     name: string;
@@ -708,6 +723,11 @@ export const backendApi = {
       body: JSON.stringify(payload),
     }),
   me: (token: string) => request<BackendUser>("/auth/me", {}, token),
+  twoFactorStatus: (token: string) => request<BackendTwoFactorStatus>("/auth/2fa/status", {}, token),
+  setupTwoFactor: (token: string) => request<{ qrDataUrl: string; manualKey: string; otpAuthUri: string }>("/auth/2fa/setup", { method: "POST", body: "{}" }, token),
+  enableTwoFactor: (token: string, code: string) => request<{ enabled: true; enabledAt: string; recoveryCodes: string[] }>("/auth/2fa/enable", { method: "POST", body: JSON.stringify({ code }) }, token),
+  rotateTwoFactorRecoveryCodes: (token: string, password: string, code: string) => request<{ recoveryCodes: string[] }>("/auth/2fa/recovery-codes", { method: "POST", body: JSON.stringify({ password, code }) }, token),
+  disableTwoFactor: (token: string, payload: { password: string; code?: string; recoveryCode?: string }) => request<{ enabled: false }>("/auth/2fa/disable", { method: "POST", body: JSON.stringify(payload) }, token),
   snapshot: async (token: string): Promise<BackendSnapshot> => {
     const now = new Date();
     const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();

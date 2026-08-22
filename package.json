@@ -12,7 +12,7 @@
     "build:all": "npm run build && corepack pnpm --dir backend db:generate && corepack pnpm --dir backend build",
     "test:backend": "corepack pnpm --dir backend test",
     "start": "vinext start",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "lint": "eslint app lib --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {

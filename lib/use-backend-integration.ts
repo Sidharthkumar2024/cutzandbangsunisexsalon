@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { backendApi, emptySnapshot, type BackendSnapshot } from './backend-api';
 
-const TOKEN_KEY = 'cutz-bangs-backend-token';
+export const SESSION_MARKER = 'cookie-session';
+const LEGACY_TOKEN_KEY = 'cutz-bangs-backend-token';
 
 export function useBackendIntegration() {
   const [token, setToken] = useState('');
@@ -16,38 +17,42 @@ export function useBackendIntegration() {
     try {
       const snapshot = await backendApi.snapshot(nextToken);
       setData(snapshot); setToken(nextToken); setStatus('connected');
-      sessionStorage.setItem(TOKEN_KEY, nextToken);
     } catch (cause) {
-      sessionStorage.removeItem(TOKEN_KEY); setToken(''); setData(emptySnapshot);
+      setToken(''); setData(emptySnapshot);
       setError(cause instanceof Error ? cause.message : 'Backend connection failed.');
       try { await backendApi.health(); setStatus('ready'); } catch { setStatus('offline'); }
     }
   }, []);
 
   useEffect(() => {
-    const saved = sessionStorage.getItem(TOKEN_KEY);
+    // Remove bearer tokens saved by older builds; sessions now live only in an
+    // HttpOnly cookie managed by the same-origin backend proxy.
+    sessionStorage.removeItem(LEGACY_TOKEN_KEY);
     const timer = window.setTimeout(() => {
-      if (saved) { void refresh(saved); return; }
-      backendApi.health().then(() => setStatus('ready')).catch(() => setStatus('offline'));
+      void refresh(SESSION_MARKER);
     }, 0);
     return () => window.clearTimeout(timer);
   }, [refresh]);
 
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, password: string, secondFactor?: { code?: string; recoveryCode?: string }) => {
     setStatus('checking'); setError('');
     try {
-      const session = await backendApi.login(email, password);
+      const session = await backendApi.login(email, password, secondFactor);
+      if ('twoFactorRequired' in session && session.twoFactorRequired) {
+        setStatus('ready');
+        return 'two_factor_required' as const;
+      }
       await refresh(session.token);
-      return true;
+      return 'connected' as const;
     } catch (cause) {
       setStatus('ready'); setError(cause instanceof Error ? cause.message : 'Login failed.');
-      return false;
+      return 'failed' as const;
     }
   };
 
   const logout = () => {
     if (token) void backendApi.logout(token).catch(() => undefined);
-    sessionStorage.removeItem(TOKEN_KEY); setToken(''); setData(emptySnapshot); setStatus('ready'); setError('');
+    setToken(''); setData(emptySnapshot); setStatus('ready'); setError('');
   };
   return { token, data, status, error, login, logout, refresh: () => token && refresh(token) };
 }

@@ -59,7 +59,9 @@ model User {
   phone        String?   @unique
   passwordHash String?
   role         RoleName  @default(CUSTOMER)
-  twoFaSecret  String? // encrypted at rest by the app layer
+  twoFaSecret        String?   // encrypted at rest by the app layer
+  twoFaEnabledAt     DateTime?
+  twoFaRecoveryCodes String[]  @default([]) // SHA-256 hashes, plaintext is shown once
   isActive     Boolean   @default(true)
   branchId     String?
   branch       Branch?   @relation(fields: [branchId], references: [id])
@@ -71,6 +73,7 @@ model User {
   customer  Customer?
   auditLogs AuditLog[]
   sessions  Session[]
+  passwordResetTokens PasswordResetToken[]
 
   @@index([role])
 }
@@ -86,6 +89,18 @@ model Session {
   createdAt DateTime @default(now())
 
   @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, expiresAt])
 }
 
 model Permission {

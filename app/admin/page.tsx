@@ -363,6 +363,13 @@ export default function AdminPage() {
   const total = subtotal + tax;
   const activeBranch = backend.data.branches.find((branch) => branch.id === (backend.data.user?.branchId ?? "main")) ?? backend.data.branches[0];
   const role = backend.data.user?.role;
+  const adminRoles = new Set(["OWNER", "ADMIN", "MANAGER", "RECEPTION"]);
+  if (backend.status !== "connected" || !backend.data.user) {
+    return <AdminAccessGate status={backend.status} error={backend.error} />;
+  }
+  if (!adminRoles.has(backend.data.user.role)) {
+    return <AdminAccessGate status="forbidden" error="This account does not have admin workspace access." onLogout={backend.logout} />;
+  }
   const allowedViews = new Set<View>(
     role === "RECEPTION"
       ? ["dashboard", "calendar", "pos", "customers", "memberships", "inbox", "cash"]
@@ -669,73 +676,52 @@ function BackendConnection({
 }: {
   backend: ReturnType<typeof useBackendIntegration>;
 }) {
-  const [email, setEmail] = useState("owner@cutzbangs.local");
-  const [password, setPassword] = useState("");
-  if (backend.status === "connected")
-    return (
-      <div className="backend-banner connected">
-        <span>●</span>
-        <div>
-          <strong>Signed in securely</strong>
-          <small>{prettyStatus(backend.data.user?.role ?? "team")} access · live salon data</small>
-        </div>
-        <button onClick={() => void backend.refresh()}>Refresh</button>
-        <button onClick={backend.logout}>Log out</button>
-      </div>
-    );
   return (
-    <form
-      className={`backend-banner ${backend.status}`}
-      onSubmit={async (event) => {
-        event.preventDefault();
-        await backend.login(email, password);
-        setPassword("");
-      }}
-    >
+    <div className="backend-banner connected">
       <span>●</span>
       <div>
-        <strong>
-          {backend.status === "offline"
-            ? "Backend offline"
-            : backend.status === "checking"
-              ? "Checking backend…"
-              : "Team sign in"}
-        </strong>
-        <small>
-          {backend.error ||
-            (backend.status === "offline"
-              ? "Start the API on port 4100. Demo data remains visible."
-              : "Owner, admin, manager and reception accounts use role-based access.")}
-        </small>
+        <strong>Signed in securely</strong>
+        <small>{prettyStatus(backend.data.user?.role ?? "team")} access · live salon data · HttpOnly session</small>
       </div>
-      <input
-        type="email"
-        value={email}
-        onChange={(event) => setEmail(event.target.value)}
-        aria-label="Backend account email"
-        placeholder="Email"
-        disabled={backend.status === "offline"}
-      />
-      <input
-        type="password"
-        value={password}
-        onChange={(event) => setPassword(event.target.value)}
-        aria-label="Backend account password"
-        placeholder="Password"
-        disabled={backend.status === "offline"}
-      />
-      <button
-        type="submit"
-        disabled={
-          backend.status === "checking" ||
-          backend.status === "offline" ||
-          !password
-        }
-      >
-        {backend.status === "checking" ? "Connecting…" : "Connect"}
-      </button>
-    </form>
+      <button onClick={() => void backend.refresh()}>Refresh</button>
+      <button onClick={backend.logout}>Log out</button>
+    </div>
   );
+}
+
+function AdminAccessGate({
+  status,
+  error,
+  onLogout,
+}: {
+  status: "checking" | "offline" | "ready" | "connected" | "forbidden";
+  error?: string;
+  onLogout?: () => void;
+}) {
+  const checking = status === "checking";
+  const offline = status === "offline";
+  return (
+    <main className="portal-auth-shell admin-access-gate">
+      <Link className="wordmark" href="/"><span>CUTZ</span><i>&</i><span>BANGS</span></Link>
+      <section className="portal-auth-card">
+        <p className="eyebrow">Protected admin workspace</p>
+        <h1>{checking ? <>Checking your<br /><em>secure session.</em></> : offline ? <>Backend is<br /><em>not reachable.</em></> : status === "forbidden" ? <>Access is<br /><em>not authorised.</em></> : <>Team login<br /><em>required.</em></>}</h1>
+        <p>{error ? readableAdminError(error) : checking ? "Verifying the encrypted session before any salon data is rendered." : offline ? "The operations API must be online before the admin workspace can open. No demo or customer data is exposed." : "Sign in with an owner, admin, manager or reception account. Google Authenticator verification is enforced when enabled."}</p>
+        {!checking && status !== "forbidden" && <Link className="button admin-primary" href="/admin/login">Open secure login</Link>}
+        {status === "forbidden" && <button className="button admin-primary" onClick={onLogout}>Sign out & use another account</button>}
+        <Link className="auth-mode-link" href="/">Return to public website</Link>
+      </section>
+    </main>
+  );
+}
+
+function readableAdminError(value: string) {
+  const map: Record<string, string> = {
+    unauthenticated: "Your secure session has ended. Sign in again to continue.",
+    backend_not_configured: "The production backend URL has not been connected yet.",
+    backend_unavailable: "The secure backend is temporarily unavailable.",
+  };
+  return map[value] ?? value.replaceAll("_", " ");
 }
 
 type ContentTab = "services" | "testimonials" | "memberships";
@@ -5321,6 +5307,8 @@ function SystemAndAudit({ token, data }: { token: string; data: BackendSnapshot 
     ["Encrypted provider secrets", health.security.providerSecretsEncrypted],
     ["Login rate limiting", health.security.strictAuthRateLimit],
     ["Security headers", health.security.securityHeaders],
+    ["Authenticator 2FA on this account", health.security.authenticator2faEnabled],
+    ["Secure password recovery URL", health.security.passwordResetConfigured],
     ["Independent production secret key", health.security.independentSecretsKey],
     ["Explicit production CORS", health.security.explicitCorsAllowlist],
     ["Production mode", health.security.productionMode],
@@ -5685,6 +5673,7 @@ function Settings({
   return (
     <div className="settings-stack">
       {message && <div className="calendar-message">{message}</div>}
+      <TwoFactorSettings token={token} />
       <article className="admin-card settings-card">
         <p className="eyebrow">Booking rules</p>
         <h2>Availability & scheduling</h2>
@@ -5842,5 +5831,115 @@ function Settings({
         <small>{data.channels.filter((channel) => channel.type.startsWith("WHATSAPP")).length} WhatsApp channel records · credentials remain server-side.</small>
       </article>
     </div>
+  );
+}
+
+function TwoFactorSettings({ token }: { token: string }) {
+  const [status, setStatus] = useState<Awaited<ReturnType<typeof backendApi.twoFactorStatus>> | null>(null);
+  const [setup, setSetup] = useState<Awaited<ReturnType<typeof backendApi.setupTwoFactor>> | null>(null);
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+  const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const loadStatus = async () => {
+    if (token) setStatus(await backendApi.twoFactorStatus(token));
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!token) return;
+    backendApi.twoFactorStatus(token)
+      .then((next) => { if (!cancelled) setStatus(next); })
+      .catch((cause) => { if (!cancelled) setMessage(cause instanceof Error ? prettyStatus(cause.message) : "2FA status unavailable."); });
+    return () => { cancelled = true; };
+  }, [token]);
+
+  const beginSetup = async () => {
+    setBusy(true); setMessage(""); setRecoveryCodes([]);
+    try {
+      setSetup(await backendApi.setupTwoFactor(token));
+      setCode("");
+      setMessage("Scan the QR, then enter the current six-digit code to confirm.");
+      await loadStatus();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "2FA setup could not start.");
+    } finally { setBusy(false); }
+  };
+
+  const enable = async () => {
+    setBusy(true); setMessage("");
+    try {
+      const result = await backendApi.enableTwoFactor(token, code);
+      setRecoveryCodes(result.recoveryCodes);
+      setSetup(null); setCode("");
+      setMessage("Two-step verification is active. Save the one-time recovery codes now.");
+      await loadStatus();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Authenticator code could not be verified.");
+    } finally { setBusy(false); }
+  };
+
+  const rotateRecoveryCodes = async () => {
+    setBusy(true); setMessage("");
+    try {
+      const result = await backendApi.rotateTwoFactorRecoveryCodes(token, password, code);
+      setRecoveryCodes(result.recoveryCodes); setPassword(""); setCode("");
+      setMessage("Old recovery codes were revoked. Save the new codes now.");
+      await loadStatus();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Recovery codes could not be rotated.");
+    } finally { setBusy(false); }
+  };
+
+  const disable = async () => {
+    setBusy(true); setMessage("");
+    try {
+      await backendApi.disableTwoFactor(token, { password, code });
+      setPassword(""); setCode(""); setRecoveryCodes([]); setSetup(null);
+      setMessage("Two-step verification has been disabled. Other signed-in devices were revoked.");
+      await loadStatus();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Two-step verification could not be disabled.");
+    } finally { setBusy(false); }
+  };
+
+  const copyRecoveryCodes = async () => {
+    try {
+      await navigator.clipboard.writeText(recoveryCodes.join("\n"));
+      setMessage("Recovery codes copied. Store them outside this device.");
+    } catch {
+      setMessage("Copy was blocked by the browser. Select and save each code manually.");
+    }
+  };
+
+  return (
+    <article className="admin-card provider-config-card two-factor-card">
+      <div className="card-head">
+        <div><p className="eyebrow">Account security</p><h2>Google Authenticator-compatible 2FA</h2><p>Password login plus a time-based one-time code. Secrets are encrypted; recovery codes are stored only as hashes.</p></div>
+        <span className={status?.enabled ? "integration-badge connected" : "integration-badge"}>{status?.enabled ? "Protected" : status ? "Not enabled" : "Checking…"}</span>
+      </div>
+      {!status?.enabled && !setup && (
+        <div className="two-factor-intro"><div><strong>Add a second sign-in step</strong><small>Works with Google Authenticator, Microsoft Authenticator, 1Password and compatible TOTP apps.</small></div><button className="button admin-primary" disabled={busy || !token} onClick={() => void beginSetup()}>{busy ? "Preparing…" : status?.setupPending ? "Restart secure setup" : "Set up authenticator"}</button></div>
+      )}
+      {setup && !status?.enabled && (
+        <div className="two-factor-setup">
+          <Image src={setup.qrDataUrl} alt="QR code for authenticator setup" width={280} height={280} unoptimized />
+          <div><strong>1. Scan this QR in your authenticator app</strong><small>If scanning is unavailable, enter this manual key:</small><code>{setup.manualKey}</code><label>2. Enter the current 6-digit code<input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/gu, "").slice(0, 6))} placeholder="000000" /></label><button className="button admin-primary" disabled={busy || code.length !== 6} onClick={() => void enable()}>{busy ? "Verifying…" : "Verify & enable 2FA"}</button></div>
+        </div>
+      )}
+      {status?.enabled && !recoveryCodes.length && (
+        <div className="two-factor-enabled">
+          <div><strong>✓ Two-step verification is active</strong><small>{status.recoveryCodesRemaining} unused recovery codes remain. Enter your password and current authenticator code to rotate codes or disable protection.</small></div>
+          <div className="two-factor-sensitive-fields"><label>Password<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label><label>Authenticator code<input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/gu, "").slice(0, 6))} /></label></div>
+          <div className="provider-actions"><button disabled={busy || !password || code.length !== 6} onClick={() => void rotateRecoveryCodes()}>Generate new recovery codes</button><button className="danger-action" disabled={busy || !password || code.length !== 6} onClick={() => void disable()}>Disable 2FA</button></div>
+        </div>
+      )}
+      {recoveryCodes.length > 0 && (
+        <div className="recovery-code-panel"><div><strong>Save these one-time recovery codes</strong><small>Each code works once. They will not be shown again after you leave or generate a new set.</small></div><div className="recovery-code-grid">{recoveryCodes.map((item) => <code key={item}>{item}</code>)}</div><button onClick={() => void copyRecoveryCodes()}>Copy all codes</button></div>
+      )}
+      {message && <p className="two-factor-message" role="status">{message}</p>}
+    </article>
   );
 }

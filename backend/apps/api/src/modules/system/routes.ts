@@ -23,7 +23,7 @@ export default async function systemRoutes(app: FastifyInstance) {
     const { branchId = req.user?.branchId ?? "main" } = req.query as Record<string, string>;
     if (req.user?.role === "MANAGER" && req.user.branchId !== branchId) return reply.code(403).send({ error: "forbidden" });
     const redis = makeConnection();
-    const [database, cache, providerConfig, failedEmail, failedAutomation] = await Promise.all([
+    const [database, cache, providerConfig, failedEmail, failedAutomation, currentUser] = await Promise.all([
       timed(async () => {
         await prisma.$queryRaw`SELECT 1`;
         return "reachable";
@@ -32,6 +32,7 @@ export default async function systemRoutes(app: FastifyInstance) {
       publicProviderSettings(branchId),
       prisma.emailLog.count({ where: { status: "failed", createdAt: { gte: new Date(Date.now() - 86_400_000) } } }),
       prisma.automationRun.count({ where: { status: "failed", createdAt: { gte: new Date(Date.now() - 86_400_000) } } }),
+      prisma.user.findUnique({ where: { id: req.user!.id }, select: { twoFaEnabledAt: true } }),
     ]).finally(() => redis.disconnect());
 
     const checks = {
@@ -48,6 +49,8 @@ export default async function systemRoutes(app: FastifyInstance) {
       providerSecretsEncrypted: true,
       strictAuthRateLimit: true,
       securityHeaders: true,
+      authenticator2faEnabled: Boolean(currentUser?.twoFaEnabledAt),
+      passwordResetConfigured: Boolean(process.env.PUBLIC_APP_URL),
     };
     return {
       status: checks.database.ok && checks.redis.ok ? "healthy" : "degraded",

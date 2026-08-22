@@ -16,6 +16,7 @@ Complete salon website and operations platform for Cutz & Bangs, Sector 15 Dwark
 - Unified inbox, official Meta WhatsApp and optional self-hosted WAHA QR connector
 - Consent-aware CSV campaigns with paced delivery, images/PDFs and engagement reporting
 - SMTP/provider settings, health checks, audit logs and responsive mobile UI
+- Dedicated `/admin/login`, HttpOnly browser sessions and Google Authenticator-compatible 2FA with one-time recovery codes
 
 The payment gateway is intentionally excluded. POS records the salon's existing payment methods.
 
@@ -29,6 +30,9 @@ backend/apps/worker/ BullMQ background worker
 backend/packages/db/ PostgreSQL/Prisma schema and migrations
 backend/packages/    Shared provider, queue and type packages
 ```
+
+The root `app/` is the production frontend. The older `backend/apps/web`
+prototype is retained only as reference and is excluded from production builds.
 
 ## Run the complete platform locally
 
@@ -57,3 +61,5 @@ npm run test:backend
 ```
 
 Production setup, credentials and VPS deployment are documented in `backend/DEPLOYMENT.md` and `backend/CREDENTIALS.md`. Real SMTP, official WhatsApp and object-storage delivery require the salon's provider credentials. The unofficial WhatsApp connector requires a one-time Linked Devices QR scan and can never be guaranteed against account restrictions.
+
+For a VPS that already hosts the GMB growth workload, use `backend/DEPLOYMENT_ISOLATED.md`; it deploys this backend on a separate loopback port and dedicated volumes without modifying the existing application.

@@ -20,6 +20,8 @@ export default function StaffPortal() {
     setMessage("");
     try {
       const session = await backendApi.login(email, password);
+      if ("twoFactorRequired" in session && session.twoFactorRequired)
+        throw new Error("two_factor_verification_required");
       if (session.user.role !== "STAFF")
         throw new Error("staff_account_required");
       setToken(session.token);
@@ -116,6 +118,7 @@ export default function StaffPortal() {
               placeholder="Staff account password"
             />
           </label>
+          <Link className="auth-mode-link" href="/forgot-password">Forgot password?</Link>
           {message && <span className="portal-auth-error">{message}</span>}
           <button
             className="button admin-primary"
@@ -215,7 +218,7 @@ export default function StaffPortal() {
                   : "—"}
               </strong>
             </p>
-            <Link href="/admin">Open attendance</Link>
+            <Link href="/admin/login">Open attendance</Link>
           </div>
         </header>
         <div className="staff-kpis">

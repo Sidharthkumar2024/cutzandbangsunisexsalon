@@ -5,9 +5,12 @@
 > maintenance cron, and monitoring. The steps that need **your** credentials or
 > manual provider actions are called out and detailed in [CREDENTIALS.md](CREDENTIALS.md).
 >
-> I (Claude) built and verified all the code and config below locally. I cannot
-> run these production steps for you because they need your server access and
-> real provider accounts — but every command is ready to paste.
+> The code and configuration below are locally verifiable. Production steps
+> still need authorised server access and real provider accounts.
+
+If the VPS already runs another application, use
+[DEPLOYMENT_ISOLATED.md](DEPLOYMENT_ISOLATED.md) instead. It avoids the existing
+ports, containers, database volumes and reverse proxy.
 
 ## 0. Prerequisites (YOU)
 - A VPS (2 vCPU / 4 GB RAM is plenty to start) with Docker + Docker Compose.

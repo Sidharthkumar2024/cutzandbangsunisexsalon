@@ -31,6 +31,8 @@ export default function CustomerPortal() {
               password,
               branchId: "main",
             });
+      if ("twoFactorRequired" in session && session.twoFactorRequired)
+        throw new Error("two_factor_verification_required");
       if (session.user.role !== "CUSTOMER")
         throw new Error("customer_account_required");
       setData(await backendApi.customerOverview(session.token));
@@ -132,6 +134,7 @@ export default function CustomerPortal() {
               }
             />
           </label>
+          {mode === "login" && <Link className="auth-mode-link" href="/forgot-password">Forgot password?</Link>}
           {message && <span className="portal-auth-error">{message}</span>}
           <button
             className="button admin-primary"

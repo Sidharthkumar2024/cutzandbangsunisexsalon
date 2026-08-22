@@ -1,0 +1,3 @@
+ALTER TABLE "User"
+  ADD COLUMN "twoFaEnabledAt" TIMESTAMP(3),
+  ADD COLUMN "twoFaRecoveryCodes" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];

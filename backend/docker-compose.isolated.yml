@@ -1,0 +1,98 @@
+name: cutz-bangs-v2
+
+# Production backend stack designed to coexist with an existing VPS workload.
+# It does not bind ports 80/443, does not reuse another database, and keeps all
+# state in explicitly named Cutz & Bangs v2 volumes.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - cutz_v2_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - cutz_v2_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+
+  api:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    restart: unless-stopped
+    env_file: ${CUTZ_SERVICE_ENV_FILE:-.env.isolated}
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    ports:
+      - "127.0.0.1:${CUTZ_API_PORT:-8410}:4000"
+    volumes:
+      - cutz_v2_media:/app/.storage
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+
+  worker:
+    build: { context: ., dockerfile: apps/worker/Dockerfile }
+    restart: unless-stopped
+    env_file: ${CUTZ_SERVICE_ENV_FILE:-.env.isolated}
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    volumes:
+      - cutz_v2_media:/app/.storage
+
+  waha:
+    image: devlikeapro/waha
+    profiles: ["unofficial-wa"]
+    restart: unless-stopped
+    environment:
+      WAHA_API_KEY: ${WAHA_API_KEY}
+      WAHA_API_KEY_PLAIN: ${WAHA_API_KEY}
+      WAHA_DASHBOARD_USERNAME: ${WAHA_DASHBOARD_USERNAME}
+      WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD}
+      WHATSAPP_SWAGGER_USERNAME: ${WAHA_DASHBOARD_USERNAME}
+      WHATSAPP_SWAGGER_PASSWORD: ${WAHA_DASHBOARD_PASSWORD}
+      WAHA_PRINT_QR: "false"
+    expose: ["3000"]
+    volumes:
+      - cutz_v2_waha_sessions:/app/.sessions
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "--header", "X-Api-Key: ${WAHA_API_KEY}", "http://localhost:3000/api/sessions"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["cloudflare"]
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run", "--token", "${CLOUDFLARE_TUNNEL_TOKEN}"]
+    depends_on:
+      api: { condition: service_healthy }
+
+volumes:
+  cutz_v2_pgdata:
+    name: cutz_bangs_v2_pgdata
+  cutz_v2_redisdata:
+    name: cutz_bangs_v2_redisdata
+  cutz_v2_media:
+    name: cutz_bangs_v2_media
+  cutz_v2_waha_sessions:
+    name: cutz_bangs_v2_waha_sessions
