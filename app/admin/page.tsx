@@ -64,6 +64,28 @@ const toDateTimeInput = (value: string) => {
     .toISOString()
     .slice(0, 16);
 };
+const parseCsv = (text: string) => {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === '"' && quoted && text[index + 1] === '"') { cell += '"'; index += 1; }
+    else if (char === '"') quoted = !quoted;
+    else if (char === "," && !quoted) { row.push(cell.trim()); cell = ""; }
+    else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && text[index + 1] === "\n") index += 1;
+      row.push(cell.trim());
+      if (row.some(Boolean)) rows.push(row);
+      row = [];
+      cell = "";
+    } else cell += char;
+  }
+  row.push(cell.trim());
+  if (row.some(Boolean)) rows.push(row);
+  return rows;
+};
 const appointmentRow = (item: BackendAppointment, index = 0) => ({
   time: new Date(item.startAt).toLocaleTimeString("en-IN", {
     hour: "2-digit",
@@ -4305,6 +4327,11 @@ function Campaigns({
   const [scheduledAt, setScheduledAt] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [waRisk, setWaRisk] = useState<BackendWhatsAppStatus["unofficial"]["risk"]>();
+  useEffect(() => {
+    if (!token) return;
+    backendApi.whatsappStatus(token).then((result) => setWaRisk(result.unofficial.risk)).catch(() => undefined);
+  }, [token, data.campaigns.length]);
   const attention = data.range
     ? data.range.customers.lapsed +
       data.customers.filter((item) => item.segments.includes("AT_RISK")).length
@@ -4404,6 +4431,40 @@ function Campaigns({
       setBusy(false);
     }
   };
+  const importContacts = async (file?: File) => {
+    if (!token || !file) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const rows = parseCsv(await file.text());
+      if (rows.length < 2) throw new Error("CSV needs a header and at least one contact");
+      const headers = rows[0].map((header) => header.toLowerCase().replace(/[^a-z]/g, ""));
+      const column = (...names: string[]) => headers.findIndex((header) => names.includes(header));
+      const nameAt = column("name", "fullname", "customername");
+      const phoneAt = column("phone", "mobile", "whatsapp", "whatsappnumber");
+      const emailAt = column("email", "emailaddress");
+      const waConsentAt = column("waconsent", "whatsappconsent", "optin", "whatsappoptin");
+      const emailConsentAt = column("emailconsent", "emailoptin");
+      const consentSourceAt = column("consentsource", "optinsource");
+      if (nameAt < 0 || phoneAt < 0) throw new Error("CSV must contain name and phone columns");
+      const yes = (value = "") => /^(1|true|yes|y|opted\s*in|consented)$/i.test(value.trim());
+      const contacts = rows.slice(1).map((values) => ({
+        name: values[nameAt] ?? "",
+        phone: values[phoneAt] ?? "",
+        ...(emailAt >= 0 && values[emailAt] ? { email: values[emailAt] } : {}),
+        waConsent: waConsentAt >= 0 && yes(values[waConsentAt]),
+        emailConsent: emailConsentAt >= 0 && yes(values[emailConsentAt]),
+        ...(consentSourceAt >= 0 && values[consentSourceAt] ? { consentSource: values[consentSourceAt] } : {}),
+      })).filter((row) => row.name && row.phone);
+      const result = await backendApi.importCampaignContacts(token, { branchId: "main", rows: contacts });
+      setMessage(`CSV imported: ${result.created} added, ${result.updated} updated, ${result.consented} WhatsApp opt-ins recorded, ${result.invalid} skipped.`);
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : "CSV import failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <div>
       {message && <div className="calendar-message">{message}</div>}
@@ -4417,8 +4478,22 @@ function Campaigns({
           {busy ? "Working…" : "Draft reactivation campaign"}
         </button>
       </div>
+      <section className="campaign-safety-grid">
+        <article className="admin-card csv-import-card">
+          <div><p className="eyebrow">Marketing audience</p><h2>Import contact CSV</h2><p>Use columns <code>name</code>, <code>phone</code>, optional <code>email</code>, <code>waConsent</code>, <code>emailConsent</code> and <code>consentSource</code>.</p></div>
+          <label className="csv-picker"><span>{busy ? "Importing…" : "Choose CSV file"}</span><input type="file" accept=".csv,text/csv" disabled={busy || !token} onChange={(event) => void importContacts(event.target.files?.[0])} /></label>
+          <small>Only rows with explicit WhatsApp consent enter WhatsApp campaigns. A contact list by itself is not consent.</small>
+        </article>
+        <article className={`admin-card campaign-risk-card risk-${waRisk?.label ?? "high"}`}>
+          <p className="eyebrow">Unofficial WhatsApp risk</p>
+          <div><strong>{waRisk?.score ?? "—"}/100</strong><span>{waRisk ? prettyStatus(waRisk.label) : "Awaiting WAHA status"}</span></div>
+          <progress max="100" value={waRisk?.score ?? 100} />
+          <p>{waRisk ? `${waRisk.safeguards.intervalSeconds}s spacing · ${waRisk.safeguards.dailyCap}/day · ${waRisk.safeguards.deliveryWindow}` : "Connect WAHA to calculate the current operational signal."}</p>
+          <small>This is a conservative heuristic, not a ban probability or guarantee. Unofficial access always retains meaningful account risk.</small>
+        </article>
+      </section>
       <section className="admin-card campaign-builder phase-one-form">
-        <div><p className="eyebrow">Approval-first delivery</p><h2>Create campaign</h2><small>Only customers who consented to the selected channel enter the audience snapshot.</small></div>
+        <div><p className="eyebrow">Approval-first delivery</p><h2>Create campaign</h2><small>Only customers who consented to the selected channel enter the audience snapshot. Unofficial campaigns automatically append “Reply STOP to opt out.”</small></div>
         <label>Name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="August comeback offer" /></label>
         <label>Audience<select value={segment} onChange={(event) => setSegment(event.target.value)}><option value="NEW">New</option><option value="REPEAT">Repeat</option><option value="VIP">VIP</option><option value="AT_RISK">At-risk</option><option value="LAPSED">Lapsed</option><option value="MEMBER">Members</option><option value="HIGH_SPEND">High spend</option></select></label>
         <label>Channel<select value={channel} onChange={(event) => setChannel(event.target.value as typeof channel)}><option value="WHATSAPP_OFFICIAL">WhatsApp Official</option><option value="WHATSAPP_UNOFFICIAL">WhatsApp Unofficial</option><option value="EMAIL">Email</option></select></label>
@@ -5090,13 +5165,25 @@ function Settings({
   const [providerConfig, setProviderConfig] = useState<BackendProviderConfig>({
     smtp: { enabled: false, host: "", port: 587, secure: false, user: "", from: "", hasPassword: false },
     whatsappOfficial: { enabled: false, phoneId: "", wabaId: "", graphVersion: "v23.0", hasToken: false, hasAppSecret: false, hasWebhookVerifyToken: false },
-    whatsappUnofficial: { enabled: false, baseUrl: "", hasSecret: false },
+    whatsappUnofficial: {
+      enabled: false,
+      baseUrl: "",
+      callbackUrl: "",
+      session: "cutz-bangs-main",
+      intervalSeconds: 90,
+      dailyCap: 75,
+      windowStartHour: 10,
+      windowEndHour: 20,
+      hasApiKey: false,
+      hasWebhookSecret: false,
+    },
   });
   const [smtpPassword, setSmtpPassword] = useState("");
   const [officialToken, setOfficialToken] = useState("");
   const [officialAppSecret, setOfficialAppSecret] = useState("");
   const [webhookVerifyToken, setWebhookVerifyToken] = useState("");
-  const [unofficialSecret, setUnofficialSecret] = useState("");
+  const [wahaApiKey, setWahaApiKey] = useState("");
+  const [wahaWebhookSecret, setWahaWebhookSecret] = useState("");
   const [emailTestTo, setEmailTestTo] = useState("");
   const [emailHealth, setEmailHealth] = useState<{ configured: boolean; connected: boolean; detail: string } | null>(null);
   const [bookingInterval, setBookingInterval] = useState(15);
@@ -5183,6 +5270,16 @@ function Settings({
       cancelled = true;
     };
   }, [token]);
+
+  useEffect(() => {
+    if (!token || !status?.unofficial.configured || status.unofficial.connected) return;
+    const timer = window.setInterval(() => {
+      backendApi.whatsappStatus(token)
+        .then(setStatus)
+        .catch(() => undefined);
+    }, 12_000);
+    return () => window.clearInterval(timer);
+  }, [status?.unofficial.configured, status?.unofficial.connected, token]);
 
   const saveBooking = async () => {
     if (!token) return;
@@ -5280,6 +5377,35 @@ function Settings({
       setBusy(false);
     }
   };
+  const controlWaha = async (action: "create" | "start" | "restart" | "stop" | "logout") => {
+    if (!token) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const next = await backendApi.controlWahaSession(token, action);
+      setStatus((current) => current ? { ...current, unofficial: { ...current.unofficial, ...next } } : current);
+      setMessage(action === "create" ? "WAHA session created. Scan the QR below; it refreshes automatically." : `WAHA session ${action} complete.`);
+      await loadIntegrations();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "WAHA session action failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const syncWahaContacts = async () => {
+    if (!token) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await backendApi.syncWahaContacts(token);
+      setMessage(`${result.fetched} WAHA contacts read: ${result.created} added, ${result.updated} updated. Synced contacts stay non-consented until you record permission.`);
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "WAHA contact sync failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
   const saveProviders = async () => {
     if (!token) return;
     setBusy(true);
@@ -5308,7 +5434,14 @@ function Settings({
         whatsappUnofficial: {
           enabled: providerConfig.whatsappUnofficial.enabled,
           baseUrl: providerConfig.whatsappUnofficial.baseUrl,
-          ...(unofficialSecret ? { secret: unofficialSecret } : {}),
+          callbackUrl: providerConfig.whatsappUnofficial.callbackUrl,
+          session: providerConfig.whatsappUnofficial.session,
+          intervalSeconds: providerConfig.whatsappUnofficial.intervalSeconds,
+          dailyCap: providerConfig.whatsappUnofficial.dailyCap,
+          windowStartHour: providerConfig.whatsappUnofficial.windowStartHour,
+          windowEndHour: providerConfig.whatsappUnofficial.windowEndHour,
+          ...(wahaApiKey ? { apiKey: wahaApiKey } : {}),
+          ...(wahaWebhookSecret ? { webhookSecret: wahaWebhookSecret } : {}),
         },
       });
       await Promise.all([
@@ -5321,7 +5454,8 @@ function Settings({
       setOfficialToken("");
       setOfficialAppSecret("");
       setWebhookVerifyToken("");
-      setUnofficialSecret("");
+      setWahaApiKey("");
+      setWahaWebhookSecret("");
       await loadIntegrations();
       onRefresh();
       setMessage("Email and WhatsApp credentials saved securely and applied to the backend.");
@@ -5451,12 +5585,19 @@ function Settings({
             <small className="webhook-hint">Webhook endpoint: <code>/api/v1/webhooks/whatsapp</code></small>
           </section>
           <section>
-            <header><div><strong>Unofficial connector</strong><small>Keep on a separately isolated service</small></div><button className={`toggle ${providerConfig.whatsappUnofficial.enabled ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, enabled: !current.whatsappUnofficial.enabled } }))}><i /></button></header>
+            <header><div><strong>WAHA · self-hosted unofficial API</strong><small>Free/open-source connector on an isolated private service</small></div><button className={`toggle ${providerConfig.whatsappUnofficial.enabled ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, enabled: !current.whatsappUnofficial.enabled } }))}><i /></button></header>
             <div className="provider-config-form">
-              <label>Connector base URL<input value={providerConfig.whatsappUnofficial.baseUrl} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, baseUrl: event.target.value } }))} placeholder="https://wa-connector.example.com" /></label>
-              <label>Internal shared secret<input type="password" value={unofficialSecret} onChange={(event) => setUnofficialSecret(event.target.value)} placeholder={providerConfig.whatsappUnofficial.hasSecret ? "Saved · enter only to replace" : "At least 12 characters"} /></label>
+              <label>WAHA base URL<input value={providerConfig.whatsappUnofficial.baseUrl} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, baseUrl: event.target.value } }))} placeholder="http://waha:3000" /></label>
+              <label>Backend webhook URL<input value={providerConfig.whatsappUnofficial.callbackUrl} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, callbackUrl: event.target.value } }))} placeholder="https://salon.example.com/api/v1/webhooks/whatsapp/unofficial" /></label>
+              <label>Session name<input value={providerConfig.whatsappUnofficial.session} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, session: event.target.value } }))} placeholder="cutz-bangs-main" /></label>
+              <label>WAHA API key<input type="password" value={wahaApiKey} onChange={(event) => setWahaApiKey(event.target.value)} placeholder={providerConfig.whatsappUnofficial.hasApiKey ? "Saved · enter only to replace" : "At least 24 characters"} /></label>
+              <label>Webhook secret<input type="password" value={wahaWebhookSecret} onChange={(event) => setWahaWebhookSecret(event.target.value)} placeholder={providerConfig.whatsappUnofficial.hasWebhookSecret ? "Saved · enter only to replace" : "Separate 24+ character secret"} /></label>
+              <label>Seconds between messages<select value={providerConfig.whatsappUnofficial.intervalSeconds} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, intervalSeconds: Number(event.target.value) } }))}><option value="60">60 seconds</option><option value="90">90 seconds · recommended</option><option value="120">120 seconds</option><option value="180">180 seconds</option></select></label>
+              <label>Daily recipient cap<input type="number" min="5" max="200" value={providerConfig.whatsappUnofficial.dailyCap} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, dailyCap: Number(event.target.value) } }))} /></label>
+              <label>Send from hour<input type="number" min="0" max="22" value={providerConfig.whatsappUnofficial.windowStartHour} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, windowStartHour: Number(event.target.value) } }))} /></label>
+              <label>Send until hour<input type="number" min="1" max="23" value={providerConfig.whatsappUnofficial.windowEndHour} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, windowEndHour: Number(event.target.value) } }))} /></label>
             </div>
-            <p className="provider-warning">Unofficial WhatsApp connections may violate provider terms. Keep this disabled unless you accept that operational risk.</p>
+            <p className="provider-warning">Unofficial access can still be restricted or banned. Pacing reduces burst volume; it does not make bulk messaging safe or compliant. Only message people with recorded opt-in.</p>
           </section>
         </div>
         <button className="button admin-primary" disabled={busy || !token} onClick={() => void saveProviders()}>{busy ? "Saving…" : "Save & apply provider credentials"}</button>
@@ -5470,10 +5611,24 @@ function Settings({
             return (
               <section key={key} className="provider-card">
                 <header><div><strong>{key === "official" ? "Official Meta Cloud API" : "Unofficial QR connector"}</strong><small>{item?.detail ?? "Checking configuration…"}</small></div><span className={item?.connected ? "connected" : "offline"}>{item?.connected ? "Connected" : item?.configured ? "Configured" : "Needs setup"}</span></header>
-                {key === "unofficial" && item?.qrDataUrl && <Image src={item.qrDataUrl} alt="Scan to link the unofficial WhatsApp session" width={220} height={220} unoptimized />}
+                {key === "unofficial" && item?.connected && (
+                  <div className="waha-connected"><b>✓ Connected</b><span>{item.accountName || "WhatsApp account"}{item.accountNumber ? ` · +${item.accountNumber}` : ""}</span><small>QR is hidden while the session is working.</small></div>
+                )}
+                {key === "unofficial" && !item?.connected && item?.qrDataUrl && <Image key={item.qrDataUrl.slice(-24)} src={item.qrDataUrl} alt="Scan to link the WAHA WhatsApp session" width={240} height={240} unoptimized />}
+                {key === "unofficial" && item?.risk && (
+                  <div className={`wa-risk wa-risk-${item.risk.label}`}>
+                    <div><strong>{item.risk.score}/100</strong><span>{prettyStatus(item.risk.label)} account-risk signal</span></div>
+                    <progress max="100" value={item.risk.score} />
+                    <small>Heuristic, not a ban probability · {item.risk.safeguards.intervalSeconds}s spacing · {item.risk.safeguards.dailyCap}/day · {item.risk.safeguards.deliveryWindow}</small>
+                  </div>
+                )}
                 <div className="provider-actions">
                   <button className={`toggle ${item?.active ? "active" : ""}`} disabled={busy || !token} onClick={() => void toggleChannel(type, !item?.active)}><i /></button>
                   {key === "official" && <button disabled={busy || !token} onClick={() => void syncTemplates()}>Sync templates</button>}
+                  {key === "unofficial" && !item?.connected && <button disabled={busy || !token || !providerConfig.whatsappUnofficial.enabled} onClick={() => void controlWaha("create")}>Generate / refresh QR</button>}
+                  {key === "unofficial" && item?.connected && <button disabled={busy || !token} onClick={() => void syncWahaContacts()}>Sync contacts</button>}
+                  {key === "unofficial" && item?.configured && <button disabled={busy || !token} onClick={() => void controlWaha("restart")}>Restart</button>}
+                  {key === "unofficial" && item?.connected && <button disabled={busy || !token} onClick={() => void controlWaha("logout")}>Disconnect</button>}
                   <button disabled={busy || !token || !testTo || !testMessage} onClick={() => void testProvider(type)}>Send test</button>
                 </div>
               </section>

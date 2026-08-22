@@ -34,6 +34,9 @@ Payment-gateway integration remains intentionally excluded. Real SMTP/Meta/AI/S3
 - [x] Add inventory, vendor bills, purchase movements, and low-stock workflows.
 - [x] Add branded PDF invoice generation and email delivery.
 - [x] Encrypt SMTP and WhatsApp secrets at rest, manage them from Admin → Settings, and never return saved secret values to the browser.
+- [x] Self-host WAHA privately for unofficial WhatsApp; create/restart/logout sessions from admin, auto-refresh QR until connected, hide QR after connection, and sync address-book contacts without assuming marketing consent.
+- [x] Gate campaign recipients on recorded consent at both approval and send time; pace unofficial delivery recipient-by-recipient, cap daily volume, respect a daytime window, append opt-out copy, and immediately honour incoming STOP requests.
+- [x] Import marketing contacts from CSV with explicit consent/source columns and show an auditable heuristic account-risk signal (never presented as a ban probability or guarantee).
 - [x] Add protected database/Redis/provider health checks, delivery-failure counts, production-security readiness, and searchable audit history.
 - [x] Apply branch isolation to campaigns, reports, inbox, waitlist and invoice delivery; require signed/secret webhooks and per-route public rate limits.
 

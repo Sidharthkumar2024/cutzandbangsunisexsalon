@@ -195,7 +195,32 @@ export type BackendChannel = {
 };
 export type BackendWhatsAppStatus = {
   official: { configured: boolean; connected: boolean; active: boolean; detail?: string };
-  unofficial: { configured: boolean; connected: boolean; active: boolean; detail?: string; qrDataUrl?: string };
+  unofficial: {
+    configured: boolean;
+    connected: boolean;
+    active: boolean;
+    status?: string;
+    detail?: string;
+    session?: string;
+    accountName?: string;
+    accountNumber?: string;
+    qrDataUrl?: string;
+    risk?: {
+      score: number;
+      label: "moderate" | "high" | "critical";
+      heuristic: boolean;
+      failureRate24h: number;
+      sent24h: number;
+      failed24h: number;
+      safeguards: {
+        consentRequired: boolean;
+        optOutHonoured: boolean;
+        intervalSeconds: number;
+        dailyCap: number;
+        deliveryWindow: string;
+      };
+    };
+  };
 };
 export type BackendMessage = {
   id: string;
@@ -214,6 +239,10 @@ export type BackendCampaign = {
   channel: string;
   segment?: string | null;
   status: string;
+  intervalSeconds?: number | null;
+  dailyCap?: number | null;
+  riskLevel?: string | null;
+  deliveryRisk?: { score: number; label: string };
   createdAt: string;
   _count: { recipients: number };
 };
@@ -346,7 +375,14 @@ export type BackendProviderConfig = {
   whatsappUnofficial: {
     enabled: boolean;
     baseUrl: string;
-    hasSecret: boolean;
+    callbackUrl: string;
+    session: string;
+    intervalSeconds: number;
+    dailyCap: number;
+    windowStartHour: number;
+    windowEndHour: number;
+    hasApiKey: boolean;
+    hasWebhookSecret: boolean;
   };
 };
 export type BackendSystemHealth = {
@@ -999,7 +1035,18 @@ export const backendApi = {
       branchId: string;
       smtp: { enabled: boolean; host: string; port: number; secure: boolean; user: string; password?: string; from: string };
       whatsappOfficial: { enabled: boolean; phoneId: string; wabaId: string; graphVersion: string; token?: string; appSecret?: string; webhookVerifyToken?: string };
-      whatsappUnofficial: { enabled: boolean; baseUrl: string; secret?: string };
+      whatsappUnofficial: {
+        enabled: boolean;
+        baseUrl: string;
+        callbackUrl: string;
+        session: string;
+        apiKey?: string;
+        webhookSecret?: string;
+        intervalSeconds: number;
+        dailyCap: number;
+        windowStartHour: number;
+        windowEndHour: number;
+      };
     },
   ) => request<BackendProviderConfig>("/integrations/config", { method: "PUT", body: JSON.stringify(payload) }, token),
   emailStatus: (token: string, branchId = "main") =>
@@ -1035,6 +1082,32 @@ export const backendApi = {
       { method: "POST", body: "{}" },
       token,
     ),
+  controlWahaSession: (
+    token: string,
+    action: "create" | "start" | "restart" | "stop" | "logout",
+    branchId = "main",
+  ) => request<BackendWhatsAppStatus["unofficial"]>(
+    "/integrations/whatsapp/unofficial/session",
+    { method: "POST", body: JSON.stringify({ branchId, action }) },
+    token,
+  ),
+  syncWahaContacts: (token: string, branchId = "main") =>
+    request<{ fetched: number; created: number; updated: number; skipped: number; consentImported: boolean }>(
+      "/integrations/whatsapp/unofficial/contacts/sync",
+      { method: "POST", body: JSON.stringify({ branchId, limit: 5_000 }) },
+      token,
+    ),
+  importCampaignContacts: (
+    token: string,
+    payload: {
+      branchId: string;
+      rows: Array<{ name: string; phone: string; email?: string; waConsent: boolean; emailConsent: boolean; consentSource?: string }>;
+    },
+  ) => request<{ rows: number; created: number; updated: number; invalid: number; consented: number }>(
+    "/campaigns/contacts/import",
+    { method: "POST", body: JSON.stringify(payload) },
+    token,
+  ),
   branchSettings: (token: string, branchId = "main") =>
     request<Record<string, unknown>>(`/settings/${branchId}`, {}, token),
   updateBranchSetting: (

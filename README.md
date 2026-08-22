@@ -14,7 +14,7 @@ A responsive front-end MVP for the Cutz & Bangs salon ERP/CRM brief. It includes
 
 The Site proxies protected business calls through `BACKEND_API_URL`, keeping the API origin and provider credentials server-side. When the owner signs in, the admin dashboard, calendar, POS, CRM, memberships, services, coupons, inventory, inbox, campaigns, reports, attendance, payroll foundation, settings, system health, and audit history use live backend data. Representative empty-state data remains visible only while the API is not connected.
 
-Admin → **Settings** manages retention and loyalty rules plus encrypted SMTP, official Meta WhatsApp, and isolated unofficial WhatsApp credentials. Admin → **System & audit** shows database/Redis/provider health, production-security readiness, delivery failures, and immutable changes.
+Admin → **Settings** manages retention and loyalty rules plus encrypted SMTP, official Meta WhatsApp, and a self-hosted WAHA connector. WAHA setup includes session creation, auto-refreshing QR, connected-state, contact sync, a separate webhook secret, a 60–300 second campaign interval, daily cap and delivery window. Admin → **Campaigns** accepts consent-aware CSV contact imports and shows a conservative unofficial-account risk signal. Admin → **System & audit** shows database/Redis/provider health, production-security readiness, delivery failures, and immutable changes.
 
 ## Website content management
 
