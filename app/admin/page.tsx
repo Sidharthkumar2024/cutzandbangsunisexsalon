@@ -49,6 +49,7 @@ type CartItem = {
   name: string;
   staff: string;
   staffId?: string;
+  companionId?: string;
   price: number;
   taxRateBps: number;
 };
@@ -82,7 +83,7 @@ function CashDenominationCounter({ value, onChange, expectedMinor, title = "Coun
     <div className="cash-denomination-counter">
       <header><div><strong>{title}</strong><small>Enter how many coins or notes are physically in the drawer.</small></div><span className={matches ? "matches" : "mismatch"}>{expectedMinor === undefined ? "Counted" : matches ? "Matched" : "Mismatch"}<b>{money(total)}</b></span></header>
       <div className="cash-denomination-grid">
-        {CASH_DENOMINATIONS.map((item) => <label key={item.value}><span><strong>₹{item.value}</strong><small>{item.kind}</small></span><input aria-label={`Number of ₹${item.value} ${item.kind.toLowerCase()}s`} type="number" min="0" step="1" value={value[String(item.value)] ?? 0} onChange={(event) => onChange({ ...value, [String(item.value)]: Math.max(0, Math.floor(Number(event.target.value) || 0)) })} /></label>)}
+        {CASH_DENOMINATIONS.map((item) => <label key={item.value}><span><strong>₹{item.value}</strong><small>{item.kind}</small></span><input aria-label={`Number of ₹${item.value} ${item.kind.toLowerCase()}s`} type="number" min="0" step="1" value={value[String(item.value)] || ""} placeholder="0" onChange={(event) => onChange({ ...value, [String(item.value)]: Math.max(0, Math.floor(Number(event.target.value) || 0)) })} /></label>)}
       </div>
       {expectedMinor !== undefined && <p className={matches ? "cash-match-message" : "cash-mismatch-message"}>{matches ? `✓ Physical count exactly matches expected drawer cash (${money(expectedMinor)}).` : `Counted ${money(total)} · expected ${money(expectedMinor)} · fix the count or record the missing expense before closing.`}</p>}
     </div>
@@ -201,6 +202,12 @@ const navGroups: Array<{
   },
 ];
 
+const viewPermission: Partial<Record<View, string>> = {
+  dashboard: "dashboard", calendar: "calendar", pos: "pos", customers: "customers", memberships: "memberships",
+  inbox: "inbox", services: "services", inventory: "inventory", cash: "cash", content: "website", coupons: "coupons",
+  campaigns: "campaigns", reports: "reports", staff: "staff", attendance: "staff", payroll: "payroll", system: "audit", settings: "settings",
+};
+
 const viewTitles: Record<View, [string, string]> = {
   dashboard: ["Good morning, Sana", "Here’s how Cutz & Bangs is doing today."],
   calendar: [
@@ -293,6 +300,13 @@ export default function AdminPage() {
           ? ["calendar", "customers"]
           : navGroups.flatMap((group) => group.items.map((item) => item.id)).concat("settings"),
   );
+  const granularPermissions = backend.data.user.permissionKeys ?? [];
+  if (granularPermissions.length && role !== "OWNER") {
+    for (const allowedView of [...allowedViews]) {
+      const permission = viewPermission[allowedView];
+      if (permission && !granularPermissions.includes(permission)) allowedViews.delete(allowedView);
+    }
+  }
 
   const selectView = (next: View) => {
     setView(next);
@@ -372,12 +386,12 @@ export default function AdminPage() {
             </div>
           ))}
         </nav>
-        <button
+        {allowedViews.has("settings") && <button
           className={`sidebar-settings ${view === "settings" ? "active" : ""}`}
           onClick={() => selectView("settings")}
         >
           <span>SE</span>Settings
-        </button>
+        </button>}
         <div className="admin-user">
           <span>SS</span>
           <div>
@@ -446,12 +460,12 @@ export default function AdminPage() {
               <span><strong>{prettyStatus(backend.data.user.role)}</strong><small>{backend.data.user.email}</small></span>
               <button onClick={backend.logout}>Log out</button>
             </div>
-            <button
+            {allowedViews.has("pos") && <button
               className="button admin-primary"
               onClick={() => selectView(view === "pos" ? "calendar" : "pos")}
             >
               {view === "pos" ? "+ New booking" : "+ New sale"}
-            </button>
+            </button>}
           </div>
         </header>
         <div className="admin-page">
@@ -475,6 +489,7 @@ export default function AdminPage() {
               addItem={addItem}
               addProduct={addProduct}
               assignStaff={(index, staffId) => setCart((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, staffId, staff: dataStaffName(backend.data, staffId) } : item))}
+              assignCompanion={(index, companionId) => setCart((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, companionId: companionId || undefined } : item))}
               removeItem={(index) =>
                 setCart((current) =>
                   current.filter((_, itemIndex) => itemIndex !== index),
@@ -1720,6 +1735,13 @@ function Calendar({
       onRangeActive={setRangeActive}
     />
   );
+  const advanceAppointments = calendarAppointments.filter((appointment) => new Date(appointment.startAt) > new Date() && !["COMPLETED", "CANCELLED", "NO_SHOW"].includes(appointment.status)).slice(0, 12);
+  const advanceBookingsPanel = (
+    <section className="admin-card advance-bookings-panel">
+      <div className="card-head"><div><p className="eyebrow">Future diary</p><h2>Advance bookings</h2><p>Upcoming confirmed and pending visits, separate from today’s agenda.</p></div><span className="count-badge">{advanceAppointments.length}</span></div>
+      <div>{advanceAppointments.map((appointment, index) => { const row = appointmentRow(appointment, index); return <article key={appointment.id}><time>{new Date(appointment.startAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}<b>{row.time}</b></time><span><strong>{row.name}</strong><small>{row.service} · {row.staff}</small></span><em>{row.status}</em><button onClick={() => { setSelectedDate(localDateKey(appointment.startAt)); setRangeActive(false); }}>Open date →</button></article>; })}{!advanceAppointments.length && <p className="empty-cart">No future bookings in this loaded calendar window.</p>}</div>
+    </section>
+  );
 
   const reschedule = async () => {
     const appointment = data.appointments.find(
@@ -1796,6 +1818,7 @@ function Calendar({
         </div>
         <div className="calendar-date-summary"><strong>{rangeActive ? `${new Date(`${rangeStart}T12:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })} — ${new Date(`${rangeEnd}T12:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}` : new Date(`${selectedDate}T12:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</strong><span>Month, year, day and cross-month ranges are available above.</span></div>
         <WalkInCreator key={selectedDate} token={token} data={data} selectedDate={selectedDate} onRefresh={onRefresh} />
+        {advanceBookingsPanel}
         <div className="admin-card waitlist-empty">
           This date is clear. Add a walk-in or move backward/forward to another day.
         </div>
@@ -1816,6 +1839,7 @@ function Calendar({
         </div>
         <div className="calendar-date-summary"><strong>{rangeActive ? `${new Date(`${rangeStart}T12:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })} — ${new Date(`${rangeEnd}T12:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}` : new Date(`${selectedDate}T12:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</strong><span>{selectedAppointments.filter((item) => item.isWalkIn).length} walk-ins · live backend calendar</span></div>
         <WalkInCreator key={selectedDate} token={token} data={data} selectedDate={selectedDate} onRefresh={onRefresh} />
+        {advanceBookingsPanel}
         {message && (
           <div
             className={`calendar-message ${message.includes("failed") || message.includes("Slot") ? "error" : ""}`}
@@ -2201,6 +2225,7 @@ function POS({
   addItem,
   addProduct,
   assignStaff,
+  assignCompanion,
   removeItem,
   resetCart,
   subtotal,
@@ -2221,6 +2246,7 @@ function POS({
   addItem: (item: SaleService) => void;
   addProduct: (item: BackendSnapshot["products"][number]) => void;
   assignStaff: (index: number, staffId: string) => void;
+  assignCompanion: (index: number, companionId: string) => void;
   removeItem: (index: number) => void;
   resetCart: () => void;
   subtotal: number;
@@ -2245,9 +2271,10 @@ function POS({
   const [customerDetail, setCustomerDetail] =
     useState<BackendCustomerDetail | null>(null);
   const [membershipId, setMembershipId] = useState("");
-  const [packageSelection, setPackageSelection] = useState("");
+  const [packageRedemptionEnabled, setPackageRedemptionEnabled] = useState(true);
   const [couponCode, setCouponCode] = useState("");
   const [loyaltyPoints, setLoyaltyPoints] = useState(0);
+  const [redeemLoyalty, setRedeemLoyalty] = useState(false);
   const [rewardMessage, setRewardMessage] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<
     "CASH" | "UPI" | "CARD" | "SPLIT"
@@ -2301,7 +2328,7 @@ function POS({
   const membership = customerDetail?.memberships.find(
     (item) => item.id === membershipId && item.isActive,
   );
-  const packageOptions = (customerDetail?.servicePackages ?? []).flatMap(
+  const packageEntitlements = (customerDetail?.servicePackages ?? []).flatMap(
     (enrollment) =>
       enrollment.package.items.flatMap((item) => {
         const balance = enrollment.ledger
@@ -2310,11 +2337,8 @@ function POS({
         const isExpired = enrollment.expiresAt
           ? new Date(enrollment.expiresAt) < new Date()
           : false;
-        const inCart = cart.some(
-          (line) =>
-            line.kind === "service" && line.serviceId === item.serviceId,
-        );
-        return enrollment.isActive && !isExpired && balance > 0 && inCart
+        const cartQty = cart.filter((line) => line.kind === "service" && line.serviceId === item.serviceId).length;
+        return enrollment.isActive && !isExpired && balance > 0
           ? [
               {
                 key: `${enrollment.id}:${item.serviceId}`,
@@ -2322,27 +2346,32 @@ function POS({
                 serviceId: item.serviceId,
                 label: `${enrollment.package.name} · ${item.service.name}`,
                 balance,
+                included: item.qty,
+                used: Math.max(0, item.qty - balance),
+                cartQty,
               },
             ]
           : [];
       }),
   );
-  const selectedPackage = packageOptions.find(
-    (option) => option.key === packageSelection,
-  );
-  const packageCartLine = selectedPackage
-    ? cart.find(
-        (line) =>
-          line.kind === "service" &&
-          line.serviceId === selectedPackage.serviceId,
-      )
-    : undefined;
-  const packageDiscountMinor = packageCartLine
-    ? packageCartLine.price * 100 +
-      Math.round(
-        (packageCartLine.price * 100 * packageCartLine.taxRateBps) / 10_000,
-      )
-    : 0;
+  const packageDemand = new Map<string, number>();
+  for (const line of cart) if (line.kind === "service" && line.serviceId) packageDemand.set(line.serviceId, (packageDemand.get(line.serviceId) ?? 0) + 1);
+  const packageRedemptions = packageRedemptionEnabled ? packageEntitlements.flatMap((option) => {
+    const demand = packageDemand.get(option.serviceId) ?? 0;
+    const qty = Math.min(demand, option.balance);
+    if (qty > 0) packageDemand.set(option.serviceId, demand - qty);
+    return qty ? [{ customerServicePackageId: option.customerServicePackageId, serviceId: option.serviceId, qty, label: option.label }] : [];
+  }) : [];
+  const coveredQtyByService = new Map<string, number>();
+  for (const redemption of packageRedemptions) coveredQtyByService.set(redemption.serviceId, (coveredQtyByService.get(redemption.serviceId) ?? 0) + redemption.qty);
+  const packageDiscountMinor = cart.reduce((sum, line) => {
+    if (line.kind !== "service" || !line.serviceId) return sum;
+    const remaining = coveredQtyByService.get(line.serviceId) ?? 0;
+    if (!remaining) return sum;
+    coveredQtyByService.set(line.serviceId, remaining - 1);
+    const base = line.price * 100;
+    return sum + base + Math.round((base * line.taxRateBps) / 10_000);
+  }, 0);
   const payableMinor = Math.max(0, total * 100 - packageDiscountMinor);
   const loyaltySettings = data.settings.loyalty as Record<string, unknown> | undefined;
   const loyaltyRules = {
@@ -2373,11 +2402,12 @@ function POS({
   const maxLoyaltyPoints = loyaltyRules.enabled
     ? Math.min(loyaltyBalance, Math.floor(afterCouponMinor / loyaltyRules.redeemMinorPerPoint))
     : 0;
+  const effectiveLoyaltyPoints = redeemLoyalty ? loyaltyPoints : 0;
   const loyaltyRedemptionValid =
-    loyaltyPoints === 0 ||
-    (loyaltyPoints >= loyaltyRules.minRedeemPoints && loyaltyPoints <= maxLoyaltyPoints);
-  const loyaltyMinor = loyaltyPoints > 0 && loyaltyRedemptionValid
-    ? loyaltyPoints * loyaltyRules.redeemMinorPerPoint
+    effectiveLoyaltyPoints === 0 ||
+    (effectiveLoyaltyPoints >= loyaltyRules.minRedeemPoints && effectiveLoyaltyPoints <= maxLoyaltyPoints);
+  const loyaltyMinor = effectiveLoyaltyPoints > 0 && loyaltyRedemptionValid
+    ? effectiveLoyaltyPoints * loyaltyRules.redeemMinorPerPoint
     : 0;
   const redeemMinor =
     memberCredit && membership
@@ -2397,7 +2427,11 @@ function POS({
             (item) => item.isActive && item.balanceMinor > 0,
           )?.id ?? "",
         );
-        setPackageSelection("");
+        setPackageRedemptionEnabled(true);
+        // Prepaid service entitlements apply automatically. Monetary membership
+        // credit remains an explicit cashier choice so an unrelated extra
+        // service is still billed unless the customer asks to use their credit.
+        setMemberCredit(false);
       })
       .catch(() => {
         if (!cancelled) setCustomerDetail(null);
@@ -2405,7 +2439,7 @@ function POS({
     return () => {
       cancelled = true;
     };
-  }, [customerId, token]);
+  }, [customerId, setMemberCredit, token]);
 
   const manualPayments = (amountMinor: number) => {
     if (amountMinor <= 0) return [];
@@ -2465,20 +2499,12 @@ function POS({
           unitMinor: item.price * 100,
           discountMinor: 0,
           taxRateBps: item.taxRateBps,
+          companionId: item.companionId,
         })),
         payments,
-        packageRedemptions: selectedPackage
-          ? [
-              {
-                customerServicePackageId:
-                  selectedPackage.customerServicePackageId,
-                serviceId: selectedPackage.serviceId,
-                qty: 1,
-              },
-            ]
-          : [],
+        packageRedemptions: packageRedemptions.map(({ customerServicePackageId, serviceId, qty }) => ({ customerServicePackageId, serviceId, qty })),
         couponCode: normalizedCouponCode || undefined,
-        loyaltyPointsToRedeem: loyaltyPoints,
+        loyaltyPointsToRedeem: effectiveLoyaltyPoints,
       });
       setInvoice(result.number);
       setInvoiceId(result.id);
@@ -2580,7 +2606,7 @@ function POS({
         </div>
         <div className="pos-day-gate-form">
           <CashDenominationCounter value={openingBreakdown} onChange={setOpeningBreakdown} title="Opening coins and notes" />
-          <label>Re-enter counted total to confirm (₹)<input type="number" min="0" step="1" value={openingConfirmation} onChange={(event) => setOpeningConfirmation(Math.max(0, Number(event.target.value)))} /></label>
+          <label>Re-enter counted total to confirm (₹)<input type="number" min="0" step="1" value={openingConfirmation || ""} placeholder="0" onChange={(event) => setOpeningConfirmation(Math.max(0, Number(event.target.value)))} /></label>
           <label className="consent-box"><input type="checkbox" checked={openingCountAcknowledged} onChange={(event) => setOpeningCountAcknowledged(event.target.checked)} /><span>I physically counted every coin and note</span></label>
           {!openingCountConfirmed && <p className="cash-mismatch-message">The confirmation amount must equal the denomination total ({money(openingCashMinor)}).</p>}
           <label>Opening note (optional)<input value={openingNote} onChange={(event) => setOpeningNote(event.target.value)} placeholder="Float counted by reception" /></label>
@@ -2681,9 +2707,10 @@ function POS({
               setCustomerId(event.target.value);
               setCustomerDetail(null);
               setMembershipId("");
-              setPackageSelection("");
+              setPackageRedemptionEnabled(true);
               setMemberCredit(false);
               setLoyaltyPoints(0);
+              setRedeemLoyalty(false);
             }}
             aria-label="Select POS customer"
           >
@@ -2702,9 +2729,10 @@ function POS({
                 <span>
                   <strong>{item.name}</strong>
                   <small>{item.kind === "service" ? `with ${item.staff}` : item.staffId ? `Retail by ${item.staff}` : "Assign staff for retail commission"}</small>
+                  {item.kind === "service" && customerDetail && <select value={item.companionId ?? ""} onChange={(event) => assignCompanion(index, event.target.value)} aria-label={`Service recipient for ${item.name}`}><option value="">For {customerDetail.name} (primary)</option>{customerDetail.companions.map((companion) => <option key={companion.id} value={companion.id}>For {companion.name}{companion.relation ? ` · ${companion.relation}` : ""}</option>)}</select>}
                   {item.kind === "product" && <select value={item.staffId ?? ""} onChange={(event) => assignStaff(index, event.target.value)} aria-label={`Assign staff for ${item.name}`}><option value="">No staff commission</option>{data.staff.map((staff) => <option key={staff.id} value={staff.id}>{staff.displayName}</option>)}</select>}
                 </span>
-                <strong>₹{item.price.toLocaleString("en-IN")}</strong>
+                <strong><small>MRP</small> ₹{item.price.toLocaleString("en-IN")}</strong>
                 <button
                   onClick={() => removeItem(index)}
                   aria-label={`Remove ${item.name}`}
@@ -2733,27 +2761,12 @@ function POS({
           </p>
           <i>{memberCredit ? "✓" : "+"}</i>
         </button>
-        <label className="package-redemption-select">
-          <span>Use a service package</span>
-          <select
-            value={packageSelection}
-            onChange={(event) => setPackageSelection(event.target.value)}
-            disabled={!packageOptions.length}
-          >
-            <option value="">
-              {customerId
-                ? packageOptions.length
-                  ? "Do not redeem a package"
-                  : "No matching package for this cart"
-                : "Choose a customer first"}
-            </option>
-            {packageOptions.map((option) => (
-              <option key={option.key} value={option.key}>
-                {option.label} · {option.balance} left
-              </option>
-            ))}
-          </select>
-        </label>
+        <section className="pos-entitlement-wallet">
+          <header><div><strong>Prepaid services</strong><small>Available services are matched to this cart automatically.</small></div><button type="button" className={`toggle ${packageRedemptionEnabled ? "active" : ""}`} disabled={!packageEntitlements.length} onClick={() => setPackageRedemptionEnabled((current) => !current)} aria-label="Use prepaid service entitlements"><i /></button></header>
+          {packageEntitlements.map((option) => <div key={option.key} className={option.cartQty ? "matched" : ""}><span><strong>{option.label}</strong><small>{option.used} used · {option.balance} remaining of {option.included}</small></span><b>{option.cartQty ? `${Math.min(option.cartQty, option.balance)} applies now` : "Available"}</b></div>)}
+          {customerId && !packageEntitlements.length && <p>No prepaid service balance is active for this customer.</p>}
+          {!customerId && <p>Search the customer to see membership and package balances.</p>}
+        </section>
         <div className="pos-reward-controls">
           <label>
             <span>Coupon code</span>
@@ -2763,11 +2776,12 @@ function POS({
             </datalist>
             {normalizedCouponCode && <small className={couponAvailable ? "valid" : "invalid"}>{couponAvailable ? `${selectedCoupon?.name} applied` : "Code is not currently eligible"}</small>}
           </label>
-          <label>
-            <span>Redeem loyalty points</span>
-            <input type="number" min="0" max={maxLoyaltyPoints} step="1" value={loyaltyPoints} onChange={(event) => setLoyaltyPoints(Math.max(0, Number(event.target.value)))} disabled={!customerId || !loyaltyRules.enabled} />
+          <div className="pos-loyalty-choice">
+            <span>Redeem loyalty points?</span>
+            <div><button type="button" className={!redeemLoyalty ? "active" : ""} onClick={() => { setRedeemLoyalty(false); setLoyaltyPoints(0); }}>No</button><button type="button" className={redeemLoyalty ? "active" : ""} disabled={!customerId || !loyaltyRules.enabled || !loyaltyBalance} onClick={() => setRedeemLoyalty(true)}>Yes</button></div>
+            {redeemLoyalty && <input aria-label="Loyalty points to redeem" type="number" min="0" max={maxLoyaltyPoints} step="1" value={loyaltyPoints || ""} placeholder="Points" onChange={(event) => setLoyaltyPoints(Math.max(0, Number(event.target.value)))} />}
             <small>{customerId ? `${loyaltyBalance} available · min ${loyaltyRules.minRedeemPoints} · max ${maxLoyaltyPoints}` : "Choose a customer first"}</small>
-          </label>
+          </div>
         </div>
         <div className="bill-lines">
           <p>
@@ -2800,7 +2814,7 @@ function POS({
           )}
           {loyaltyMinor > 0 && (
             <p className="discount-line">
-              <span>Loyalty tender · {loyaltyPoints} pts</span>
+              <span>Loyalty tender · {effectiveLoyaltyPoints} pts</span>
               <strong>−{money(loyaltyMinor)}</strong>
             </p>
           )}
@@ -2842,9 +2856,10 @@ function POS({
                 setInvoice("");
                 setInvoiceId("");
                 setDeliveryMessage("");
-                setPackageSelection("");
+                setPackageRedemptionEnabled(true);
                 setCouponCode("");
                 setLoyaltyPoints(0);
+                setRedeemLoyalty(false);
                 setRewardMessage("");
                 resetCart();
               }}
@@ -2906,12 +2921,22 @@ function Customers({
   const [referralPhone, setReferralPhone] = useState("");
   const [waConsent, setWaConsent] = useState(false);
   const [emailConsent, setEmailConsent] = useState(false);
+  const [addEarlierVisit, setAddEarlierVisit] = useState(false);
+  const [initialVisitDate, setInitialVisitDate] = useState("");
+  const [initialVisitService, setInitialVisitService] = useState("");
+  const [initialVisitAmount, setInitialVisitAmount] = useState(0);
+  const [initialVisitStaff, setInitialVisitStaff] = useState("");
+  const [companionName, setCompanionName] = useState("");
+  const [companionRelation, setCompanionRelation] = useState("");
+  const [newCompanions, setNewCompanions] = useState<Array<{ name: string; relation?: string }>>([]);
   const [detail, setDetail] = useState<BackendCustomerDetail | null>(null);
   const [duplicate, setDuplicate] = useState<Awaited<ReturnType<typeof backendApi.lookupCustomer>>>(null);
   const [historyDate, setHistoryDate] = useState("");
   const [historyService, setHistoryService] = useState("");
   const [historyAmount, setHistoryAmount] = useState(0);
   const [historyStaff, setHistoryStaff] = useState("");
+  const [detailCompanionName, setDetailCompanionName] = useState("");
+  const [detailCompanionRelation, setDetailCompanionRelation] = useState("");
   const [loyaltyDelta, setLoyaltyDelta] = useState(0);
   const [loyaltyReason, setLoyaltyReason] = useState("");
   const [message, setMessage] = useState("");
@@ -2966,6 +2991,13 @@ function Customers({
         referralPhone: source === "referral" ? referralPhone || undefined : undefined,
         waConsent,
         emailConsent,
+        companions: newCompanions.length ? newCompanions : undefined,
+        initialVisit: addEarlierVisit && initialVisitDate && initialVisitService.trim() ? {
+          visitedAt: new Date(`${initialVisitDate}T12:00:00`).toISOString(),
+          serviceName: initialVisitService.trim(),
+          amountMinor: Math.round(initialVisitAmount * 100),
+          staffName: initialVisitStaff.trim() || undefined,
+        } : undefined,
       });
       setName("");
       setPhone("");
@@ -2975,6 +3007,8 @@ function Customers({
       setReferralPhone("");
       setWaConsent(false);
       setEmailConsent(false);
+      setAddEarlierVisit(false); setInitialVisitDate(""); setInitialVisitService(""); setInitialVisitAmount(0); setInitialVisitStaff("");
+      setNewCompanions([]); setCompanionName(""); setCompanionRelation("");
       setShowCreate(false);
       const loyalty = data.settings.loyalty as Record<string, unknown> | undefined;
       const welcomePoints = Number(loyalty?.welcomePoints ?? 50);
@@ -3035,6 +3069,17 @@ function Customers({
       setHistoryDate(""); setHistoryService(""); setHistoryAmount(0); setHistoryStaff("");
       setMessage("Earlier visit added to this customer’s dated history."); onRefresh();
     } catch (cause) { setMessage(cause instanceof Error ? prettyStatus(cause.message) : "History could not be saved."); }
+    finally { setBusy(false); }
+  };
+  const addCompanion = async () => {
+    if (!token || !detail || !detailCompanionName.trim()) return;
+    setBusy(true); setMessage("");
+    try {
+      await backendApi.addCustomerCompanion(token, detail.id, { name: detailCompanionName.trim(), relation: detailCompanionRelation.trim() || undefined });
+      setDetail(await backendApi.customerDetail(token, detail.id));
+      setDetailCompanionName(""); setDetailCompanionRelation("");
+      setMessage("Family / group member added to this primary customer.");
+    } catch (cause) { setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Companion could not be saved."); }
     finally { setBusy(false); }
   };
 
@@ -3119,6 +3164,17 @@ function Customers({
             <label>Referred by<input value={referralName} onChange={(event) => setReferralName(event.target.value)} placeholder="Customer name" required /></label>
             <label>Referrer phone (optional)<input inputMode="tel" value={referralPhone} onChange={(event) => setReferralPhone(event.target.value)} placeholder="Phone number" /></label>
           </>}
+          <div className="customer-family-create">
+            <div><strong>Family / group members</strong><small>Keep one primary phone while recording who else visits under it.</small></div>
+            <label>Member name<input value={companionName} onChange={(event) => setCompanionName(event.target.value)} placeholder="Child / spouse name" /></label>
+            <label>Relation<input value={companionRelation} onChange={(event) => setCompanionRelation(event.target.value)} placeholder="Daughter, spouse, friend…" /></label>
+            <button type="button" disabled={!companionName.trim()} onClick={() => { setNewCompanions((current) => [...current, { name: companionName.trim(), relation: companionRelation.trim() || undefined }]); setCompanionName(""); setCompanionRelation(""); }}>+ Add person</button>
+            {newCompanions.map((companion, index) => <span key={`${companion.name}-${index}`}>{companion.name}{companion.relation ? ` · ${companion.relation}` : ""}<button type="button" aria-label={`Remove ${companion.name}`} onClick={() => setNewCompanions((current) => current.filter((_, itemIndex) => itemIndex !== index))}>×</button></span>)}
+          </div>
+          <div className="historical-customer-create">
+            <label className="consent-box"><input type="checkbox" checked={addEarlierVisit} onChange={(event) => setAddEarlierVisit(event.target.checked)} /><span>This is an existing customer; add their earlier visit now</span></label>
+            {addEarlierVisit && <><label>Earlier visit date<input type="date" max={new Date().toISOString().slice(0, 10)} value={initialVisitDate} onChange={(event) => setInitialVisitDate(event.target.value)} /></label><label>Earlier service<input value={initialVisitService} onChange={(event) => setInitialVisitService(event.target.value)} placeholder="Haircut + colour" /></label><label>Earlier sale (₹)<input type="number" min="0" value={initialVisitAmount || ""} placeholder="0" onChange={(event) => setInitialVisitAmount(Math.max(0, Number(event.target.value)))} /></label><label>Staff (optional)<input value={initialVisitStaff} onChange={(event) => setInitialVisitStaff(event.target.value)} /></label></>}
+          </div>
           <fieldset>
             <legend>Communication consent</legend>
             <label><input type="checkbox" checked={waConsent} onChange={(event) => setWaConsent(event.target.checked)} />WhatsApp</label>
@@ -3126,7 +3182,7 @@ function Customers({
           </fieldset>
           <button
             className="button admin-primary"
-            disabled={busy || !token || !name || Boolean(duplicate) || (source === "referral" && !referralName.trim())}
+            disabled={busy || !token || !name || Boolean(duplicate) || (source === "referral" && !referralName.trim()) || (addEarlierVisit && (!initialVisitDate || !initialVisitService.trim()))}
             onClick={() => void create()}
           >
             {busy ? "Saving…" : "Create customer"}
@@ -3229,7 +3285,7 @@ function Customers({
           </div>
           <div className="loyalty-adjustment">
             <div><strong>Adjust loyalty balance</strong><small>Use a positive number to grant points or a negative number to correct them. Every change is audited.</small></div>
-            <label>Points<input type="number" value={loyaltyDelta} onChange={(event) => setLoyaltyDelta(Number(event.target.value))} placeholder="+100 or -50" /></label>
+            <label>Points<input type="number" value={loyaltyDelta || ""} onChange={(event) => setLoyaltyDelta(Number(event.target.value))} placeholder="+100 or -50" /></label>
             <label>Reason<input value={loyaltyReason} onChange={(event) => setLoyaltyReason(event.target.value)} placeholder="Service recovery / correction" /></label>
             <button className="button admin-primary" disabled={busy || !loyaltyDelta || !loyaltyReason.trim()} onClick={() => void adjustLoyalty()}>Save adjustment</button>
           </div>
@@ -3237,9 +3293,16 @@ function Customers({
             <div><strong>Add earlier salon visit</strong><small>Use this for dated records from the previous system. It updates customer search and retention history without creating a fake invoice.</small></div>
             <label>Visit date<input type="date" max={new Date().toISOString().slice(0, 10)} value={historyDate} onChange={(event) => setHistoryDate(event.target.value)} /></label>
             <label>Service<input value={historyService} onChange={(event) => setHistoryService(event.target.value)} placeholder="Hair colour + cut" /></label>
-            <label>Sale amount (₹)<input type="number" min="0" value={historyAmount} onChange={(event) => setHistoryAmount(Number(event.target.value))} /></label>
+            <label>Sale amount (₹)<input type="number" min="0" value={historyAmount || ""} placeholder="0" onChange={(event) => setHistoryAmount(Number(event.target.value))} /></label>
             <label>Staff (optional)<input value={historyStaff} onChange={(event) => setHistoryStaff(event.target.value)} /></label>
             <button className="button admin-primary" disabled={busy || !historyDate || !historyService.trim()} onClick={() => void addHistory()}>Add dated visit</button>
+          </div>
+          <div className="customer-companion-manager">
+            <div><strong>Family / group profile</strong><small>Assign individual services to these people from POS while retaining one primary phone number.</small></div>
+            <label>Name<input value={detailCompanionName} onChange={(event) => setDetailCompanionName(event.target.value)} placeholder="Family member name" /></label>
+            <label>Relation<input value={detailCompanionRelation} onChange={(event) => setDetailCompanionRelation(event.target.value)} placeholder="Relation (optional)" /></label>
+            <button className="button admin-primary" disabled={busy || !detailCompanionName.trim()} onClick={() => void addCompanion()}>Add person</button>
+            <section>{detail.companions.map((companion) => <article key={companion.id}><strong>{companion.name}</strong><small>{companion.relation ?? "Group member"} · {companion.visitCount} visits{companion.lastVisitAt ? ` · last ${new Date(companion.lastVisitAt).toLocaleDateString("en-IN")}` : ""}</small></article>)}{!detail.companions.length && <p>No linked family or group members yet.</p>}</section>
           </div>
           <div className="customer-timeline">
             <h3>Chronological timeline</h3>
@@ -3924,14 +3987,14 @@ function Cashbook({ token, data, onRefresh }: { token: string; data: BackendSnap
     <div className="cashbook-grid">
       <section className="admin-card phase-one-form">
         <div><p className="eyebrow">Daily register</p><h2>{session ? "Close cash drawer" : "Open cash drawer"}</h2><small>{session ? `Business date ${session.businessDate}` : "Enter the physical cash available before the first sale."}</small></div>
-        {!session ? <><CashDenominationCounter value={openingBreakdown} onChange={setOpeningBreakdown} title="Opening coins and notes" /><label>Re-enter counted total to confirm (₹)<input type="number" min="0" value={openingConfirmation} onChange={(event) => setOpeningConfirmation(Math.max(0, Number(event.target.value)))} /></label><label className="consent-box"><input type="checkbox" checked={openingCountAcknowledged} onChange={(event) => setOpeningCountAcknowledged(event.target.checked)} /><span>I physically counted every coin and note</span></label>{!openingCountConfirmed && <p className="cash-mismatch-message">Enter {money(openingCashMinor)} and confirm the physical count.</p>}</> : <CashDenominationCounter value={closingBreakdown} onChange={setClosingBreakdown} expectedMinor={session.expectedCashMinor} title="Closing coins and notes" />}
+        {!session ? <><CashDenominationCounter value={openingBreakdown} onChange={setOpeningBreakdown} title="Opening coins and notes" /><label>Re-enter counted total to confirm (₹)<input type="number" min="0" value={openingConfirmation || ""} placeholder="0" onChange={(event) => setOpeningConfirmation(Math.max(0, Number(event.target.value)))} /></label><label className="consent-box"><input type="checkbox" checked={openingCountAcknowledged} onChange={(event) => setOpeningCountAcknowledged(event.target.checked)} /><span>I physically counted every coin and note</span></label>{!openingCountConfirmed && <p className="cash-mismatch-message">Enter {money(openingCashMinor)} and confirm the physical count.</p>}</> : <CashDenominationCounter value={closingBreakdown} onChange={setClosingBreakdown} expectedMinor={session.expectedCashMinor} title="Closing coins and notes" />}
         <button className="button admin-primary" disabled={busy || !token || (session ? !closingCountMatches : !openingCountConfirmed)} onClick={() => void operate(session ? "close" : "open")}>{busy ? "Saving…" : session ? "Close & reconcile" : "Open drawer"}</button>
       </section>
       <section className="admin-card phase-one-form">
         <div><p className="eyebrow">Operating expense</p><h2>Add daily expense</h2><small>Milk, refreshments, supplies, travel and other salon expenses.</small></div>
         <label>Category<select value={category} onChange={(event) => setCategory(event.target.value)}><option>Refreshments</option><option>Consumables</option><option>Utilities</option><option>Travel</option><option>Maintenance</option><option>Other</option></select></label>
         <label>Description<input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Milk and tea supplies" /></label>
-        <label>Amount (₹)<input type="number" min="1" value={amount} onChange={(event) => setAmount(Number(event.target.value))} /></label>
+        <label>Amount (₹)<input type="number" min="1" value={amount || ""} placeholder="0" onChange={(event) => setAmount(Number(event.target.value))} /></label>
         <label>Paid via<select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as typeof paymentMethod)}><option value="CASH">Cash</option><option value="UPI">UPI</option><option value="CARD">Card</option></select></label>
         <button className="button admin-primary" disabled={busy || !token || !description.trim() || amount <= 0 || (paymentMethod === "CASH" && !session)} onClick={() => void operate("expense")}>Record expense</button>
       </section>
@@ -4326,6 +4389,11 @@ function Inbox({
     const timer = window.setInterval(() => void poll(), 8_000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [selected?.id, token]);
+  useEffect(() => {
+    if (!token) return;
+    const timer = window.setInterval(onRefresh, 15_000);
+    return () => window.clearInterval(timer);
+  }, [onRefresh, token]);
   const send = async () => {
     if (!token || !selected || !body.trim()) return;
     setBusy(true);
@@ -4946,12 +5014,18 @@ function Staff({
   const [serviceIds, setServiceIds] = useState<string[]>([]);
   const [accountStaffId, setAccountStaffId] = useState("");
   const [accountEmail, setAccountEmail] = useState("");
-  const [accountPassword, setAccountPassword] = useState("");
-  const [accountRole, setAccountRole] = useState<"MANAGER" | "RECEPTION" | "STAFF">("STAFF");
+  const [accountRole, setAccountRole] = useState<"ADMIN" | "MANAGER" | "RECEPTION" | "STAFF">("STAFF");
   const [accountCommission, setAccountCommission] = useState(0);
+  const [accountPermissions, setAccountPermissions] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const services = data.categories.flatMap((category) => category.services);
+  const permissionOptions = [
+    ["dashboard", "Dashboard"], ["calendar", "Calendar & advance bookings"], ["pos", "Point of sale"], ["customers", "Customers & loyalty"],
+    ["memberships", "Memberships & packages"], ["inbox", "Inbox"], ["services", "Service catalogue"], ["inventory", "Inventory"],
+    ["cash", "Cash & expenses"], ["website", "Website content"], ["coupons", "Coupons"], ["campaigns", "Campaigns"],
+    ["reports", "Reports"], ["staff", "Staff & attendance"], ["payroll", "Payroll"], ["settings", "Integration settings"], ["audit", "System & audit"],
+  ] as const;
   const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   const minutesFromClock = (clock: string) => {
     const [hour = "0", minute = "0"] = clock.split(":");
@@ -5005,13 +5079,13 @@ function Staff({
       setBusy(false);
     }
   };
-  const setAccount = async () => {
-    if (!token || !accountStaffId || !accountEmail || accountPassword.length < 10) return;
+  const sendInvite = async () => {
+    if (!token || !accountStaffId || !accountEmail) return;
     setBusy(true); setMessage("");
     try {
-      await backendApi.setStaffAccount(token, accountStaffId, { email: accountEmail, password: accountPassword, role: accountRole, commissionRate: Math.round(accountCommission * 100) });
-      setAccountPassword(""); setMessage(`${prettyStatus(accountRole)} login enabled with ${accountCommission}% commission.`); onRefresh();
-    } catch (cause) { setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Team login could not be saved."); }
+      const invite = await backendApi.inviteStaff(token, accountStaffId, { email: accountEmail, role: accountRole, permissionKeys: accountPermissions, commissionRate: Math.round(accountCommission * 100) });
+      setMessage(`Secure ${prettyStatus(accountRole)} invitation queued to ${invite.email}. They will create their own password.`); onRefresh();
+    } catch (cause) { setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Team invitation could not be sent."); }
     finally { setBusy(false); }
   };
   const team = data.teamAccounts.length ? data.teamAccounts : data.staff;
@@ -5099,13 +5173,13 @@ function Staff({
         </section>
       )}
       <section className="admin-card phase-one-form team-access-form">
-        <div><p className="eyebrow">Role-based access</p><h2>Manager, reception & staff login</h2><small>Login IDs are visible below. For security, an existing password can never be viewed—enter a new temporary password here to create or reset it.</small></div>
-        <label>Team member<select value={accountStaffId} onChange={(event) => { const id = event.target.value; setAccountStaffId(id); const member = team.find((item) => item.id === id); setAccountEmail(member?.user?.email ?? ""); setAccountRole((member?.user?.role as typeof accountRole) ?? "STAFF"); setAccountCommission((member?.commissionRate ?? 0) / 100); }}><option value="">Select team member</option>{team.map((member) => <option key={member.id} value={member.id}>{member.displayName} · {member.user ? prettyStatus(member.user.role) : "No login"}</option>)}</select></label>
-        <label>Login role<select value={accountRole} onChange={(event) => setAccountRole(event.target.value as typeof accountRole)}><option value="MANAGER">Manager</option><option value="RECEPTION">Reception</option><option value="STAFF">Staff</option></select></label>
+        <div><p className="eyebrow">Role-based access</p><h2>Email a secure team invitation</h2><small>The employee creates their own password from a one-time 48-hour link. Passwords are never visible or shared by the owner.</small></div>
+        <label>Team member<select value={accountStaffId} onChange={(event) => { const id = event.target.value; setAccountStaffId(id); const member = team.find((item) => item.id === id); setAccountEmail(member?.user?.email ?? ""); setAccountRole((member?.user?.role as typeof accountRole) ?? "STAFF"); setAccountCommission((member?.commissionRate ?? 0) / 100); setAccountPermissions(member?.user?.permissionKeys?.length ? member.user.permissionKeys : ["dashboard"]); }}><option value="">Select team member</option>{team.map((member) => <option key={member.id} value={member.id}>{member.displayName} · {member.user ? prettyStatus(member.user.role) : "No login"}</option>)}</select></label>
+        <label>Login role<select value={accountRole} onChange={(event) => setAccountRole(event.target.value as typeof accountRole)}>{data.user?.role === "OWNER" && <option value="ADMIN">Admin</option>}<option value="MANAGER">Manager</option><option value="RECEPTION">Reception</option><option value="STAFF">Staff</option></select></label>
         <label>Email<input type="email" value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} /></label>
-        <label>New / reset password<input type="password" minLength={10} value={accountPassword} onChange={(event) => setAccountPassword(event.target.value)} placeholder="Minimum 10 characters" /><small>Share once, then ask the employee to change it.</small></label>
         <label>Commission %<input type="number" min="0" max="100" step="0.25" value={accountCommission} onChange={(event) => setAccountCommission(Number(event.target.value))} /></label>
-        <button className="button admin-primary" disabled={busy || !accountStaffId || !accountEmail || accountPassword.length < 10} onClick={() => void setAccount()}>Save login & commission</button>
+        <fieldset className="staff-permission-grid"><legend>Allowed sections (tick only what this account needs)</legend>{permissionOptions.map(([key, label]) => <label key={key}><input type="checkbox" checked={accountPermissions.includes(key)} disabled={key === "dashboard"} onChange={(event) => setAccountPermissions((current) => event.target.checked ? [...current, key] : current.filter((permission) => permission !== key))} />{label}</label>)}</fieldset>
+        <button className="button admin-primary" disabled={busy || !accountStaffId || !accountEmail || !accountPermissions.length} onClick={() => void sendInvite()}>{busy ? "Sending…" : "Email secure invitation"}</button>
       </section>
       <div className="staff-grid">
         {rows.map(([initials, name, role, skills, sales], index) => (
@@ -5132,6 +5206,7 @@ function Staff({
                 setAccountEmail(member.user?.email ?? "");
                 setAccountRole((member.user?.role as typeof accountRole) ?? "STAFF");
                 setAccountCommission((member.commissionRate ?? 0) / 100);
+                setAccountPermissions(member.user?.permissionKeys?.length ? member.user.permissionKeys : ["dashboard"]);
                 setEditingStaffId(member.id);
                 setDisplayName(member.displayName);
                 setPhone(member.phone ?? "");

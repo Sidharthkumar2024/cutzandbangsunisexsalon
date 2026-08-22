@@ -47,10 +47,16 @@ function q(name: string): Queue {
   return (_queues[name] ??= new Queue(name, { connection: conn() }));
 }
 
+// BullMQ reserves ':' inside custom job ids. Keep deterministic ids for
+// deduplication while normalising provider/module keys in one place.
+function safeJobId(value: string): string {
+  return value.replace(/:/gu, "-");
+}
+
 /** Enqueue a reminder with a deterministic id => safe to call repeatedly. */
 export async function enqueueReminder(job: ReminderJob, runAt: Date) {
   const opts: JobsOptions = {
-    jobId: `reminder:${job.appointmentId}:${job.type}`,
+    jobId: safeJobId(`reminder:${job.appointmentId}:${job.type}`),
     delay: Math.max(0, runAt.getTime() - Date.now()),
     removeOnComplete: true,
     attempts: 5,
@@ -62,14 +68,14 @@ export async function enqueueReminder(job: ReminderJob, runAt: Date) {
 /** Cancel reminders for an appointment (e.g. on cancel/reschedule). */
 export async function cancelReminders(appointmentId: string) {
   for (const type of ["prev_day", "hours_before"] as ReminderType[]) {
-    const job = await q(QUEUES.reminders).getJob(`reminder:${appointmentId}:${type}`);
+    const job = await q(QUEUES.reminders).getJob(safeJobId(`reminder:${appointmentId}:${type}`));
     if (job) await job.remove().catch(() => {});
   }
 }
 
 export async function enqueueEmail(job: EmailJob) {
   await q(QUEUES.email).add("send", job, {
-    jobId: job.dedupeKey, // dedupe when a key is provided
+    jobId: job.dedupeKey ? safeJobId(job.dedupeKey) : undefined, // dedupe when a key is provided
     removeOnComplete: true,
     attempts: 5,
     backoff: { type: "exponential", delay: 15_000 },
@@ -78,7 +84,7 @@ export async function enqueueEmail(job: EmailJob) {
 
 export async function enqueueCampaignRecipient(job: CampaignJob, runAt?: Date) {
   await q(QUEUES.campaigns).add("send-recipient", job, {
-    jobId: `campaign:${job.campaignId}:${job.recipientId}`,
+    jobId: safeJobId(`campaign:${job.campaignId}:${job.recipientId}`),
     delay: runAt ? Math.max(0, runAt.getTime() - Date.now()) : 0,
     removeOnComplete: true,
     attempts: 3,

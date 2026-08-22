@@ -10,6 +10,19 @@ import { applyProviderSettings, officialWebhookVerifyToken, publicProviderSettin
 const STAFF = ["OWNER", "ADMIN", "MANAGER", "RECEPTION"] as const;
 const WHATSAPP_CHANNELS = ["WHATSAPP_OFFICIAL", "WHATSAPP_UNOFFICIAL"] as const;
 
+async function safeProviderHealth(channel: typeof WHATSAPP_CHANNELS[number]) {
+  try {
+    return await providers.whatsapp(channel).health?.() ?? { configured: false, connected: false, detail: "Health check unavailable" };
+  } catch (error) {
+    return {
+      configured: true,
+      connected: false,
+      status: "UNREACHABLE",
+      detail: error instanceof Error ? `Provider unavailable: ${error.message}` : "Provider unavailable",
+    };
+  }
+}
+
 async function ensureChannels() {
   await Promise.all([
     prisma.channel.upsert({
@@ -149,8 +162,8 @@ export default async function inboxRoutes(app: FastifyInstance) {
     await applyProviderSettings(branchId);
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const [official, unofficial, channels, settings, deliveryRows] = await Promise.all([
-      providers.whatsapp("WHATSAPP_OFFICIAL").health?.(),
-      providers.whatsapp("WHATSAPP_UNOFFICIAL").health?.(),
+      safeProviderHealth("WHATSAPP_OFFICIAL"),
+      safeProviderHealth("WHATSAPP_UNOFFICIAL"),
       prisma.channel.findMany({ where: { type: { in: [...WHATSAPP_CHANNELS] } } }),
       publicProviderSettings(branchId),
       prisma.campaignRecipient.findMany({

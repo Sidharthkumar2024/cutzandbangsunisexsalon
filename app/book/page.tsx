@@ -109,6 +109,7 @@ export default function BookingPage() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  const [waConsent, setWaConsent] = useState(true);
   const [reference, setReference] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -269,7 +270,7 @@ export default function BookingPage() {
           timeZone: timezone,
         }),
         startAt: time,
-        customer: { name, phone, email },
+        customer: { name, phone, email, waConsent },
       });
       setReference(result.reference);
       setStep(4);
@@ -565,7 +566,7 @@ export default function BookingPage() {
                   />
                 </label>
                 <label className="consent-row">
-                  <input type="checkbox" defaultChecked />
+                  <input type="checkbox" checked={waConsent} onChange={(event) => setWaConsent(event.target.checked)} />
                   <span>
                     Send appointment updates and reminders on WhatsApp/SMS.
                   </span>

@@ -13,6 +13,7 @@ export default function WebsiteChat() {
   const [phone, setPhone] = useState("");
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState<WebsiteChatMessage[]>([]);
+  const [activeThread, setActiveThread] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const unread = useMemo(() => messages.filter((message) => message.direction === "out").length, [messages]);
@@ -36,18 +37,20 @@ export default function WebsiteChat() {
   useEffect(() => {
     if (!open || !threadId) return;
     let cancelled = false;
+    let timer: number | undefined;
     const refresh = async () => {
       try {
         const thread = await backendApi.websiteChatThread(threadId);
-        if (!cancelled) setMessages(thread.messages);
+        if (!cancelled) { setMessages(thread.messages); setActiveThread(true); }
       } catch (cause) {
         if (!cancelled && cause instanceof Error && cause.message !== "chat_not_found") setError("Chat could not be refreshed.");
       }
     };
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 8_000);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, [open, threadId]);
+    void refresh().then(() => {
+      if (!cancelled && activeThread) timer = window.setInterval(() => void refresh(), 8_000);
+    });
+    return () => { cancelled = true; if (timer) window.clearInterval(timer); };
+  }, [activeThread, open, threadId]);
 
   const send = async (event: FormEvent) => {
     event.preventDefault();
@@ -60,6 +63,7 @@ export default function WebsiteChat() {
       setDraft("");
       const thread = await backendApi.websiteChatThread(threadId);
       setMessages(thread.messages);
+      setActiveThread(true);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message.replaceAll("_", " ") : "Message could not be sent.");
     } finally {

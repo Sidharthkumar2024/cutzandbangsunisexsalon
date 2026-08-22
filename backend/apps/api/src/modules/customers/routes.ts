@@ -8,6 +8,19 @@ import { audit } from "../../lib/audit.js";
 import { getLoyaltyRules, postLoyaltyEntry } from "../loyalty/ledger.js";
 
 const STAFF_ROLES = ["OWNER", "ADMIN", "MANAGER", "RECEPTION", "STAFF"] as const;
+const companionSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  relation: z.string().trim().max(80).optional(),
+  phone: z.string().trim().max(30).optional(),
+  notes: z.string().trim().max(500).optional(),
+});
+const initialVisitSchema = z.object({
+  visitedAt: z.coerce.date(),
+  serviceName: z.string().trim().min(2).max(200),
+  amountMinor: z.number().int().nonnegative().default(0),
+  staffName: z.string().trim().max(150).optional(),
+  notes: z.string().trim().max(1000).optional(),
+});
 
 export default async function customerRoutes(app: FastifyInstance) {
   // List + search + segment filter
@@ -82,17 +95,45 @@ export default async function customerRoutes(app: FastifyInstance) {
         notes: z.string().optional(),
         waConsent: z.boolean().optional(),
         emailConsent: z.boolean().optional(),
+        companions: z.array(companionSchema).max(12).optional(),
+        initialVisit: initialVisitSchema.optional(),
       })
       .parse(req.body);
     if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user!.branchId !== body.branchId) return reply.code(403).send({ error: "forbidden" });
+    if (body.initialVisit && body.initialVisit.visitedAt > new Date()) {
+      return reply.code(400).send({ error: "historical_visit_cannot_be_future" });
+    }
+    const { companions = [], initialVisit, ...profile } = body;
     const normalized = {
-      ...body,
+      ...profile,
       phone: body.phone ? body.phone.replace(/\D/g, "") : undefined,
       referralPhone: body.referralPhone ? body.referralPhone.replace(/\D/g, "") : undefined,
     };
     try {
       const c = await prisma.$transaction(async (tx) => {
         const customer = await tx.customer.create({ data: normalized });
+        if (companions.length) {
+          await tx.customerCompanion.createMany({
+            data: companions.map((companion) => ({
+              ...companion,
+              customerId: customer.id,
+              phone: companion.phone ? companion.phone.replace(/\D/g, "") : undefined,
+            })),
+          });
+        }
+        if (initialVisit) {
+          await tx.customerHistoryEntry.create({
+            data: { customerId: customer.id, ...initialVisit, actorUserId: req.user?.id },
+          });
+          await tx.customer.update({
+            where: { id: customer.id },
+            data: {
+              visitCount: { increment: 1 },
+              totalSpent: { increment: initialVisit.amountMinor },
+              lastVisitAt: initialVisit.visitedAt,
+            },
+          });
+        }
         const rules = await getLoyaltyRules(tx, body.branchId);
         if (rules.enabled && rules.welcomePoints > 0) {
           await postLoyaltyEntry(tx, {
@@ -105,10 +146,13 @@ export default async function customerRoutes(app: FastifyInstance) {
         }
         await audit("customer.create", "Customer", customer.id, {
           actorUserId: req.user?.id,
-          after: { ...normalized, welcomePoints: rules.enabled ? rules.welcomePoints : 0 },
+          after: { ...normalized, companions: companions.length, initialVisit, welcomePoints: rules.enabled ? rules.welcomePoints : 0 },
           ip: req.ip,
         }, tx);
-        return tx.customer.findUniqueOrThrow({ where: { id: customer.id } });
+        return tx.customer.findUniqueOrThrow({
+          where: { id: customer.id },
+          include: { companions: { where: { deletedAt: null } }, historyEntries: { orderBy: { visitedAt: "desc" }, take: 10 } },
+        });
       });
       return reply.code(201).send(c);
     } catch (e) {
@@ -142,11 +186,49 @@ export default async function customerRoutes(app: FastifyInstance) {
         walletLedger: { orderBy: { createdAt: "desc" } },
         loyaltyLedger: { orderBy: { createdAt: "desc" } },
         historyEntries: { orderBy: { visitedAt: "desc" }, take: 200 },
+        companions: { where: { deletedAt: null }, orderBy: { createdAt: "asc" } },
       },
     });
     if (!c) return reply.code(404).send({ error: "not_found" });
     if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user!.branchId !== c.branchId) return reply.code(403).send({ error: "forbidden" });
     return c;
+  });
+
+  app.post("/customers/:id/companions", { preHandler: authorize("OWNER", "ADMIN", "MANAGER", "RECEPTION") }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = companionSchema.parse(req.body);
+    const customer = await prisma.customer.findUnique({ where: { id } });
+    if (!customer) return reply.code(404).send({ error: "not_found" });
+    if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user!.branchId !== customer.branchId) return reply.code(403).send({ error: "forbidden" });
+    const companion = await prisma.customerCompanion.create({
+      data: { ...body, customerId: id, phone: body.phone ? body.phone.replace(/\D/g, "") : undefined },
+    });
+    await audit("customer.companion.create", "CustomerCompanion", companion.id, { actorUserId: req.user?.id, after: body, ip: req.ip });
+    return reply.code(201).send(companion);
+  });
+
+  app.patch("/customers/:id/companions/:companionId", { preHandler: authorize("OWNER", "ADMIN", "MANAGER", "RECEPTION") }, async (req, reply) => {
+    const { id, companionId } = req.params as { id: string; companionId: string };
+    const body = companionSchema.partial().parse(req.body);
+    const companion = await prisma.customerCompanion.findFirst({ where: { id: companionId, customerId: id, deletedAt: null }, include: { customer: true } });
+    if (!companion) return reply.code(404).send({ error: "companion_not_found" });
+    if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user!.branchId !== companion.customer.branchId) return reply.code(403).send({ error: "forbidden" });
+    const updated = await prisma.customerCompanion.update({
+      where: { id: companionId },
+      data: { ...body, phone: body.phone ? body.phone.replace(/\D/g, "") : body.phone },
+    });
+    await audit("customer.companion.update", "CustomerCompanion", companionId, { actorUserId: req.user?.id, before: companion, after: body, ip: req.ip });
+    return updated;
+  });
+
+  app.delete("/customers/:id/companions/:companionId", { preHandler: authorize("OWNER", "ADMIN", "MANAGER") }, async (req, reply) => {
+    const { id, companionId } = req.params as { id: string; companionId: string };
+    const companion = await prisma.customerCompanion.findFirst({ where: { id: companionId, customerId: id, deletedAt: null }, include: { customer: true } });
+    if (!companion) return reply.code(404).send({ error: "companion_not_found" });
+    if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user!.branchId !== companion.customer.branchId) return reply.code(403).send({ error: "forbidden" });
+    await prisma.customerCompanion.update({ where: { id: companionId }, data: { deletedAt: new Date() } });
+    await audit("customer.companion.archive", "CustomerCompanion", companionId, { actorUserId: req.user?.id, ip: req.ip });
+    return reply.code(204).send();
   });
 
   // Import a dated visit from the salon's previous system without inventing an

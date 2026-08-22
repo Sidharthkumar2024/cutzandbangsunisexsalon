@@ -3,7 +3,7 @@ import { z } from "zod";
 import { randomBytes } from "node:crypto";
 import QRCode from "qrcode";
 import { prisma } from "@cutz/db";
-import { decryptSecret, encryptSecret } from "@cutz/providers";
+import { decryptSecret, encryptSecret, passwordResetEmail } from "@cutz/providers";
 import { enqueueEmail } from "@cutz/queue";
 import { hashPassword, verifyPassword } from "../../lib/password.js";
 import { audit } from "../../lib/audit.js";
@@ -94,6 +94,7 @@ export default async function authRoutes(app: FastifyInstance) {
         email: user.email,
         role: user.role,
         branchId: user.branchId,
+        permissionKeys: user.permissionKeys,
         twoFactorEnabled: Boolean(user.twoFaEnabledAt),
       },
     };
@@ -155,7 +156,7 @@ export default async function authRoutes(app: FastifyInstance) {
     const email = rawEmail.trim().toLowerCase();
     const user = await prisma.user.findUnique({
       where: { email },
-      select: { id: true, email: true, branchId: true, isActive: true },
+      select: { id: true, email: true, branchId: true, isActive: true, staff: { select: { displayName: true } } },
     });
     const publicAppUrl = process.env.PUBLIC_APP_URL?.replace(/\/$/u, "");
     if (user?.email && user.isActive && publicAppUrl) {
@@ -176,7 +177,7 @@ export default async function authRoutes(app: FastifyInstance) {
         branchId: user.branchId ?? "main",
         to: user.email,
         subject: "Reset your Cutz & Bangs password",
-        html: `<p>A password reset was requested for your Cutz & Bangs account.</p><p><a href="${resetUrl}">Reset password</a></p><p>This link expires in 30 minutes. If you did not request it, ignore this email.</p>`,
+        html: passwordResetEmail(user.staff?.displayName, resetUrl),
         dedupeKey: `password-reset:${tokenHash}`,
       }).catch((error) => app.log.error({ err: error }, "password reset email could not be queued"));
     }
@@ -224,6 +225,47 @@ export default async function authRoutes(app: FastifyInstance) {
     return reply.code(204).send();
   });
 
+  app.get("/auth/staff-invite/preview", { config: { rateLimit: { max: 20, timeWindow: "15 minutes" } } }, async (req, reply) => {
+    const { token } = z.object({ token: z.string().min(32).max(200) }).parse(req.query);
+    const invite = await prisma.staffInvite.findUnique({
+      where: { tokenHash: hashToken(token) },
+      include: { staff: { select: { displayName: true, designation: true } } },
+    });
+    if (!invite || invite.acceptedAt || invite.expiresAt <= new Date()) return reply.code(400).send({ error: "invalid_or_expired_invitation" });
+    return { email: invite.email, role: invite.role, permissionKeys: invite.permissionKeys, staff: invite.staff, expiresAt: invite.expiresAt };
+  });
+
+  app.post("/auth/staff-invite/accept", { config: { rateLimit: { max: 8, timeWindow: "1 hour" } } }, async (req, reply) => {
+    const { token, password } = z.object({ token: z.string().min(32).max(200), password: z.string().min(10).max(128) }).parse(req.body);
+    const tokenHash = hashToken(token);
+    const invite = await prisma.staffInvite.findUnique({ where: { tokenHash }, include: { staff: true } });
+    if (!invite || invite.acceptedAt || invite.expiresAt <= new Date()) return reply.code(400).send({ error: "invalid_or_expired_invitation" });
+    const passwordHash = await hashPassword(password);
+    try {
+      const user = await prisma.$transaction(async (tx) => {
+        const claimed = await tx.staffInvite.updateMany({
+          where: { id: invite.id, acceptedAt: null, expiresAt: { gt: new Date() } },
+          data: { acceptedAt: new Date() },
+        });
+        if (claimed.count !== 1) throw new Error("invite_claimed");
+        const existing = invite.staff.userId
+          ? await tx.user.findUnique({ where: { id: invite.staff.userId } })
+          : await tx.user.findUnique({ where: { email: invite.email } });
+        const account = existing
+          ? await tx.user.update({ where: { id: existing.id }, data: { email: invite.email, passwordHash, role: invite.role, permissionKeys: { set: invite.permissionKeys }, branchId: invite.staff.branchId, isActive: true } })
+          : await tx.user.create({ data: { email: invite.email, passwordHash, role: invite.role, permissionKeys: invite.permissionKeys, branchId: invite.staff.branchId, isActive: true } });
+        await tx.staff.update({ where: { id: invite.staffId }, data: { userId: account.id } });
+        await tx.session.deleteMany({ where: { userId: account.id } });
+        await tx.staffInvite.updateMany({ where: { staffId: invite.staffId, id: { not: invite.id }, acceptedAt: null }, data: { acceptedAt: new Date() } });
+        await audit("staff.invite.accept", "Staff", invite.staffId, { actorUserId: account.id, after: { role: invite.role, permissionKeys: invite.permissionKeys }, ip: req.ip }, tx);
+        return account;
+      });
+      return reply.code(201).send({ accepted: true, email: user.email, role: user.role });
+    } catch {
+      return reply.code(400).send({ error: "invalid_or_expired_invitation" });
+    }
+  });
+
   app.post("/auth/logout", async (req, reply) => {
     const header = req.headers.authorization;
     if (header?.startsWith("Bearer ")) {
@@ -236,7 +278,7 @@ export default async function authRoutes(app: FastifyInstance) {
     if (!req.user) return reply.code(401).send({ error: "unauthenticated" });
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
-      select: { id: true, email: true, phone: true, role: true, branchId: true, twoFaEnabledAt: true },
+      select: { id: true, email: true, phone: true, role: true, branchId: true, permissionKeys: true, twoFaEnabledAt: true },
     });
     if (!user) return reply.code(401).send({ error: "unauthenticated" });
     return {
@@ -245,6 +287,7 @@ export default async function authRoutes(app: FastifyInstance) {
       phone: user.phone,
       role: user.role,
       branchId: user.branchId,
+      permissionKeys: user.permissionKeys,
       twoFactorEnabled: Boolean(user.twoFaEnabledAt),
     };
   });

@@ -60,6 +60,7 @@ model User {
   phone              String?   @unique
   passwordHash       String?
   role               RoleName  @default(CUSTOMER)
+  permissionKeys     String[]  @default([]) // optional per-account workspace grants; empty uses role defaults
   twoFaSecret        String? // encrypted at rest by the app layer
   twoFaEnabledAt     DateTime?
   twoFaRecoveryCodes String[]  @default([]) // SHA-256 hashes, plaintext is shown once
@@ -75,6 +76,7 @@ model User {
   auditLogs           AuditLog[]
   sessions            Session[]
   passwordResetTokens PasswordResetToken[]
+  staffInvitesSent    StaffInvite[]        @relation("StaffInviteSender")
 
   @@index([role])
 }
@@ -146,8 +148,27 @@ model Staff {
   invoiceItems     InvoiceItem[]
   soldMemberships  Membership[]             @relation("MembershipSales")
   soldPackages     CustomerServicePackage[] @relation("PackageSales")
+  invites          StaffInvite[]
 
   @@index([branchId])
+}
+
+model StaffInvite {
+  id              String    @id @default(cuid())
+  staffId         String
+  staff           Staff     @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  email           String
+  role            RoleName
+  permissionKeys  String[]  @default([])
+  tokenHash       String    @unique
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  invitedByUserId String?
+  invitedBy       User?     @relation("StaffInviteSender", fields: [invitedByUserId], references: [id])
+  createdAt       DateTime  @default(now())
+
+  @@index([staffId, expiresAt])
+  @@index([email, expiresAt])
 }
 
 model StaffSkill {
@@ -274,9 +295,28 @@ model Customer {
   couponRedemptions CouponRedemption[]
   conversations     Conversation[]
   historyEntries    CustomerHistoryEntry[]
+  companions        CustomerCompanion[]
 
   @@unique([branchId, phone])
   @@index([branchId, lastVisitAt])
+}
+
+model CustomerCompanion {
+  id           String        @id @default(cuid())
+  customerId   String
+  customer     Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  name         String
+  relation     String?
+  phone        String?
+  notes        String?
+  visitCount   Int           @default(0)
+  lastVisitAt  DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  deletedAt    DateTime?
+  invoiceItems InvoiceItem[]
+
+  @@index([customerId, deletedAt])
 }
 
 model CustomerHistoryEntry {
@@ -474,6 +514,7 @@ model Invoice {
   totalMinor    Int           @default(0)
   paidMinor     Int           @default(0)
   notes         String?
+  partySize     Int           @default(1)
   pdfUrl        String?
   issuedAt      DateTime?
   createdAt     DateTime      @default(now())
@@ -488,23 +529,27 @@ model Invoice {
 }
 
 model InvoiceItem {
-  id             String  @id @default(cuid())
+  id             String             @id @default(cuid())
   invoiceId      String
-  invoice        Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice        Invoice            @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   kind           String // "service" | "product"
   serviceId      String?
   productId      String?
   staffId        String?
-  staff          Staff?  @relation(fields: [staffId], references: [id])
+  staff          Staff?             @relation(fields: [staffId], references: [id])
+  companionId    String?
+  companion      CustomerCompanion? @relation(fields: [companionId], references: [id])
+  servedFor      String?
   description    String
-  qty            Int     @default(1)
+  qty            Int                @default(1)
   unitMinor      Int
-  discountMinor  Int     @default(0)
-  taxRateBps     Int     @default(0)
-  taxMinor       Int     @default(0)
+  discountMinor  Int                @default(0)
+  taxRateBps     Int                @default(0)
+  taxMinor       Int                @default(0)
   lineTotalMinor Int // (unit*qty - discount) + tax
 
   @@index([invoiceId])
+  @@index([companionId])
 }
 
 model Payment {

@@ -9,7 +9,7 @@
 import { Worker } from "bullmq";
 import { prisma } from "@cutz/db";
 import { makeConnection, QUEUES, ReminderJob, EmailJob, CampaignJob } from "@cutz/queue";
-import { decryptSecret, providers } from "@cutz/providers";
+import { appointmentEmail, appointmentWhatsAppText, decryptSecret, providers } from "@cutz/providers";
 
 const connection = makeConnection();
 
@@ -18,7 +18,7 @@ new Worker<ReminderJob>(
   QUEUES.reminders,
   async (job) => {
     const { appointmentId, type } = job.data;
-    const appt = await prisma.appointment.findUnique({ where: { id: appointmentId }, include: { customer: true } });
+    const appt = await prisma.appointment.findUnique({ where: { id: appointmentId }, include: { customer: true, items: { include: { service: { select: { name: true } } } } } });
     if (!appt || ["CANCELLED", "NO_SHOW", "COMPLETED"].includes(appt.status)) return;
 
     const dedupeKey = `reminder:${appointmentId}:${type}`;
@@ -27,20 +27,32 @@ new Worker<ReminderJob>(
     const run = existingRun ?? await prisma.automationRun.create({ data: { ruleId: await reminderRuleId(), dedupeKey, status: "queued" } });
 
     const to = appt.customer?.email ?? appt.guestEmail;
-    const when = appt.startAt.toLocaleString("en-IN");
-    if (!to) {
+    const phone = appt.customer?.phone ?? appt.guestPhone;
+    const name = appt.customer?.name ?? appt.guestName ?? undefined;
+    const services = appt.items.map((item) => item.service.name);
+    const waConsent = Boolean(appt.customer?.waConsent || /WhatsApp consent:\s*yes/iu.test(appt.notes ?? ""));
+    if (!to && (!phone || !waConsent)) {
       await prisma.automationRun.update({ where: { id: run.id }, data: { status: "skipped" } });
       return;
     }
     try {
       await applyStoredProviderSettings(appt.branchId);
-      const result = await providers.email().send({
-        to,
-        subject: "Reminder: your upcoming appointment",
-        html: `<p>Hi ${appt.customer?.name ?? appt.guestName ?? "there"}, this is a reminder for your appointment on <b>${when}</b>.</p>`,
-        dedupeKey: `email-${dedupeKey}`,
-      });
-      if (result.status === "failed") throw new Error(result.error ?? "reminder_email_failed");
+      if (to) {
+        const result = await providers.email().send({ to, subject: "Reminder: your Cutz & Bangs appointment", html: appointmentEmail({ name, when: appt.startAt, services, kind: "reminder" }), dedupeKey: `email-${dedupeKey}` });
+        if (result.status === "failed") throw new Error(result.error ?? "reminder_email_failed");
+      }
+      if (phone && waConsent) {
+        const channels = await prisma.channel.findMany({ where: { type: { in: ["WHATSAPP_UNOFFICIAL", "WHATSAPP_OFFICIAL"] }, isActive: true } });
+        const channel = channels.some((item) => item.type === "WHATSAPP_UNOFFICIAL")
+          ? ("WHATSAPP_UNOFFICIAL" as const)
+          : channels.some((item) => item.type === "WHATSAPP_OFFICIAL")
+            ? ("WHATSAPP_OFFICIAL" as const)
+            : undefined;
+        if (channel) {
+          const result = await providers.whatsapp(channel).send({ to: phone, body: appointmentWhatsAppText({ name, when: appt.startAt, services, kind: "reminder" }) });
+          if (result.status === "failed") throw new Error(result.error ?? "reminder_whatsapp_failed");
+        }
+      }
       await prisma.automationRun.update({ where: { id: run.id }, data: { status: "sent" } });
     } catch (error) {
       await prisma.automationRun.update({ where: { id: run.id }, data: { status: "failed" } }).catch(() => {});

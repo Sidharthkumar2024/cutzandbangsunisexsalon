@@ -14,6 +14,7 @@ import { enqueueReminder } from "@cutz/queue";
 import { resolveBooking, SlotUnavailableError, SlotRequest } from "../bookings/availability.js";
 import { parseDisplayDateTime } from "../../lib/tz.js";
 import { audit } from "../../lib/audit.js";
+import { notifyAppointment } from "../../lib/appointmentNotifications.js";
 
 const DEFAULT_BRANCH = process.env.DEFAULT_BRANCH_ID ?? "main";
 
@@ -28,6 +29,7 @@ const payloadSchema = z.object({
     name: z.string().min(1),
     phone: z.string().min(1),
     email: z.string().email().optional().or(z.literal("")),
+    waConsent: z.boolean().optional(),
   }),
 }).superRefine((value, ctx) => {
   if (!value.startAt && (!value.date || !value.time)) {
@@ -86,7 +88,7 @@ export default async function integrationRoutes(app: FastifyInstance) {
               status: "CONFIRMED", // online bookings are auto-confirmed
               startAt: slots[0].startAt,
               endAt,
-              notes: body.audience ? `Audience: ${body.audience}` : undefined,
+              notes: [body.audience ? `Audience: ${body.audience}` : "", body.customer.waConsent ? "WhatsApp consent: yes" : ""].filter(Boolean).join(" · ") || undefined,
               items: {
                 create: slots.map((s) => ({
                   serviceId: s.serviceId,
@@ -106,6 +108,7 @@ export default async function integrationRoutes(app: FastifyInstance) {
       // Fire reminders (idempotent job ids).
       await enqueueReminder({ appointmentId: appt.id, type: "prev_day" }, new Date(appt.startAt.getTime() - 24 * 3600_000));
       await enqueueReminder({ appointmentId: appt.id, type: "hours_before" }, new Date(appt.startAt.getTime() - 2 * 3600_000));
+      await notifyAppointment(appt.id, "confirmation");
       await audit("appointment.create", "Appointment", appt.id, { after: { branchId: branch.id, startAt: appt.startAt, endAt: appt.endAt, source: "web" }, ip: req.ip });
 
       const reference = `CB-${appt.id.slice(-6).toUpperCase()}`;

@@ -4,7 +4,7 @@ export type BookingPayload = {
   date: string;
   time: string;
   startAt?: string;
-  customer: { name: string; phone: string; email?: string };
+  customer: { name: string; phone: string; email?: string; waConsent?: boolean };
 };
 
 export async function submitBooking(payload: BookingPayload) {

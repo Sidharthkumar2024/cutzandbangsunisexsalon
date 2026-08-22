@@ -58,3 +58,4 @@ export const providers = {
 export { SmtpEmailProvider, WhatsAppOfficialProvider, WhatsAppUnofficialProvider };
 export type { SmtpEmailConfig, WhatsAppOfficialConfig, WhatsAppUnofficialConfig };
 export { encryptSecret, decryptSecret } from "./secrets.js";
+export { salonEmailLayout, passwordResetEmail, staffInvitationEmail, appointmentEmail, invoiceEmail, appointmentWhatsAppText } from "./salon-templates.js";

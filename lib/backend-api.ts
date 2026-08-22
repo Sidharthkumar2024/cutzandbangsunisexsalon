@@ -5,6 +5,7 @@ export type BackendUser = {
   email: string;
   role: string;
   branchId: string;
+  permissionKeys?: string[];
   twoFactorEnabled?: boolean;
 };
 export type BackendLoginResult =
@@ -323,7 +324,8 @@ export type BackendStaff = {
   weeklyOff?: number[];
   shifts?: BackendShift[];
   leaves?: BackendLeave[];
-  user?: { id: string; email?: string | null; role: string; isActive: boolean } | null;
+  user?: { id: string; email?: string | null; role: string; isActive: boolean; permissionKeys?: string[] } | null;
+  invites?: Array<{ id: string; email: string; role: string; permissionKeys: string[]; expiresAt: string; createdAt: string }>;
 };
 export type BackendCashSession = {
   id: string;
@@ -561,6 +563,10 @@ export type BackendInvoice = {
     description: string;
     qty: number;
     lineTotalMinor: number;
+    unitMinor?: number;
+    discountMinor?: number;
+    companionId?: string | null;
+    servedFor?: string | null;
     staffId?: string | null;
   }>;
   payments: Array<{
@@ -601,6 +607,15 @@ export type BackendCustomerDetail = Omit<BackendCustomer, "segments"> & {
   }>;
   loyaltyLedger: BackendLoyaltyEntry[];
   historyEntries: BackendCustomerHistoryEntry[];
+  companions: Array<{
+    id: string;
+    name: string;
+    relation?: string | null;
+    phone?: string | null;
+    notes?: string | null;
+    visitCount: number;
+    lastVisitAt?: string | null;
+  }>;
 };
 export type PublicCatalog = Array<{
   id: string;
@@ -787,6 +802,8 @@ export const backendApi = {
     }),
   requestPasswordReset: (email: string) => request<{ accepted: true }>("/auth/password/forgot", { method: "POST", body: JSON.stringify({ email }) }),
   resetPassword: (token: string, password: string) => request<unknown>("/auth/password/reset", { method: "POST", body: JSON.stringify({ token, password }) }),
+  previewStaffInvite: (token: string) => request<{ email: string; role: string; permissionKeys: string[]; expiresAt: string; staff: { displayName: string; designation: string } }>(`/auth/staff-invite/preview?token=${encodeURIComponent(token)}`),
+  acceptStaffInvite: (token: string, password: string) => request<{ accepted: true; email: string; role: string }>("/auth/staff-invite/accept", { method: "POST", body: JSON.stringify({ token, password }) }),
   logout: (token: string) => request<unknown>("/auth/logout", { method: "POST", body: "{}" }, token),
   registerCustomer: (payload: {
     name: string;
@@ -900,6 +917,8 @@ export const backendApi = {
       notes?: string;
       waConsent?: boolean;
       emailConsent?: boolean;
+      companions?: Array<{ name: string; relation?: string; phone?: string; notes?: string }>;
+      initialVisit?: { visitedAt: string; serviceName: string; amountMinor: number; staffName?: string; notes?: string };
     },
   ) =>
     request<BackendCustomer>(
@@ -921,6 +940,8 @@ export const backendApi = {
       { method: "POST", body: JSON.stringify(payload) },
       token,
     ),
+  addCustomerCompanion: (token: string, customerId: string, payload: { name: string; relation?: string; phone?: string; notes?: string }) =>
+    request<BackendCustomerDetail["companions"][number]>(`/customers/${encodeURIComponent(customerId)}/companions`, { method: "POST", body: JSON.stringify(payload) }, token),
   adjustLoyalty: (token: string, customerId: string, payload: { deltaPoints: number; reason: string }) =>
     request<{ entry: BackendLoyaltyEntry; balanceAfter: number }>(
       `/customers/${encodeURIComponent(customerId)}/loyalty/adjust`,
@@ -993,12 +1014,14 @@ export const backendApi = {
       { method: "POST", body: JSON.stringify(payload) },
       token,
     ),
-  setStaffAccount: (token: string, staffId: string, payload: { email: string; password: string; role: "MANAGER" | "RECEPTION" | "STAFF"; commissionRate?: number }) =>
+  setStaffAccount: (token: string, staffId: string, payload: { email: string; password: string; role: "MANAGER" | "RECEPTION" | "STAFF"; commissionRate?: number; permissionKeys?: string[] }) =>
     request<BackendUser>(
       `/staff/${encodeURIComponent(staffId)}/account`,
       { method: "POST", body: JSON.stringify(payload) },
       token,
     ),
+  inviteStaff: (token: string, staffId: string, payload: { email: string; role: "ADMIN" | "MANAGER" | "RECEPTION" | "STAFF"; commissionRate?: number; permissionKeys: string[] }) =>
+    request<{ invited: true; email: string; role: string; permissionKeys: string[]; expiresAt: string }>(`/staff/${encodeURIComponent(staffId)}/invite`, { method: "POST", body: JSON.stringify(payload) }, token),
   updateStaffProfile: (token: string, staffId: string, payload: Partial<Omit<BackendStaff, "id" | "branchId" | "user" | "leaves">> & { shifts?: BackendShift[] }) =>
     request<BackendStaff>(
       `/staff/${encodeURIComponent(staffId)}/profile`,

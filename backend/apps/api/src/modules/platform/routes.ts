@@ -1,7 +1,10 @@
 import { FastifyInstance } from "fastify";
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { prisma } from "@cutz/db";
-import { authorize } from "../../plugins/auth.js";
+import { staffInvitationEmail } from "@cutz/providers";
+import { enqueueEmail } from "@cutz/queue";
+import { authorize, hashToken, WORKSPACE_PERMISSIONS } from "../../plugins/auth.js";
 import { audit } from "../../lib/audit.js";
 import { hashPassword } from "../../lib/password.js";
 import { getLoyaltyRules } from "../loyalty/ledger.js";
@@ -70,7 +73,8 @@ export default async function platformRoutes(app: FastifyInstance) {
       where: { deletedAt: null, ...(req.user?.role === "MANAGER" ? { branchId: req.user.branchId ?? "__none__" } : {}) },
       orderBy: { displayName: "asc" },
       include: {
-        user: { select: { id: true, email: true, role: true, isActive: true } },
+        user: { select: { id: true, email: true, role: true, isActive: true, permissionKeys: true } },
+        invites: { where: { acceptedAt: null, expiresAt: { gt: new Date() } }, orderBy: { createdAt: "desc" }, take: 1, select: { id: true, email: true, role: true, permissionKeys: true, expiresAt: true, createdAt: true } },
         shifts: { orderBy: [{ weekday: "asc" }, { startMin: "asc" }] },
         leaves: { orderBy: { startDate: "desc" }, take: 20 },
       },
@@ -106,6 +110,7 @@ export default async function platformRoutes(app: FastifyInstance) {
       email: z.string().email(),
       password: z.string().min(10),
       role: z.enum(["MANAGER", "RECEPTION", "STAFF"]).default("STAFF"),
+      permissionKeys: z.array(z.enum(WORKSPACE_PERMISSIONS)).max(WORKSPACE_PERMISSIONS.length).default([]),
       commissionRate: z.number().int().min(0).max(10_000).optional(),
     }).parse(req.body);
     const staff = await prisma.staff.findUnique({ where: { id } });
@@ -114,12 +119,56 @@ export default async function platformRoutes(app: FastifyInstance) {
     if (duplicate && duplicate.id !== staff.userId) return reply.code(409).send({ error: "email_taken" });
     const passwordHash = await hashPassword(body.password);
     const user = staff.userId
-      ? await prisma.user.update({ where: { id: staff.userId }, data: { email: body.email, passwordHash, role: body.role, branchId: staff.branchId, isActive: true } })
-      : await prisma.user.create({ data: { email: body.email, passwordHash, role: body.role, branchId: staff.branchId, staff: { connect: { id: staff.id } } } });
+      ? await prisma.user.update({ where: { id: staff.userId }, data: { email: body.email, passwordHash, role: body.role, permissionKeys: { set: body.permissionKeys }, branchId: staff.branchId, isActive: true } })
+      : await prisma.user.create({ data: { email: body.email, passwordHash, role: body.role, permissionKeys: body.permissionKeys, branchId: staff.branchId, staff: { connect: { id: staff.id } } } });
     if (body.commissionRate !== undefined) await prisma.staff.update({ where: { id }, data: { commissionRate: body.commissionRate } });
     await prisma.session.deleteMany({ where: { userId: user.id } });
     await audit("staff.account_set", "Staff", id, { actorUserId: req.user?.id, after: { userId: user.id, email: user.email, role: user.role, commissionRate: body.commissionRate }, ip: req.ip });
-    return reply.code(staff.userId ? 200 : 201).send({ id: user.id, email: user.email, role: user.role });
+    return reply.code(staff.userId ? 200 : 201).send({ id: user.id, email: user.email, role: user.role, permissionKeys: user.permissionKeys });
+  });
+
+  app.post("/staff/:id/invite", { preHandler: authorize("OWNER", "ADMIN") }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z.object({
+      email: z.string().email(),
+      role: z.enum(["ADMIN", "MANAGER", "RECEPTION", "STAFF"]).default("STAFF"),
+      permissionKeys: z.array(z.enum(WORKSPACE_PERMISSIONS)).max(WORKSPACE_PERMISSIONS.length).default([]),
+      commissionRate: z.number().int().min(0).max(10_000).optional(),
+    }).parse(req.body);
+    if (body.role === "ADMIN" && req.user?.role !== "OWNER") return reply.code(403).send({ error: "only_owner_can_grant_admin" });
+    const email = body.email.trim().toLowerCase();
+    const staff = await prisma.staff.findFirst({ where: { id, deletedAt: null } });
+    if (!staff) return reply.code(404).send({ error: "staff_not_found" });
+    const duplicate = await prisma.user.findUnique({ where: { email }, include: { staff: { select: { id: true } } } });
+    if (duplicate?.staff && duplicate.staff.id !== id) return reply.code(409).send({ error: "email_taken" });
+    const token = randomBytes(32).toString("base64url");
+    const expiresAt = new Date(Date.now() + 48 * 60 * 60_000);
+    const invite = await prisma.$transaction(async (tx) => {
+      let userId = staff.userId;
+      if (duplicate && !userId) userId = duplicate.id;
+      if (!userId) {
+        const account = await tx.user.create({ data: { email, role: body.role, permissionKeys: body.permissionKeys, branchId: staff.branchId, isActive: false } });
+        userId = account.id;
+      } else {
+        await tx.user.update({ where: { id: userId }, data: { email, role: body.role, permissionKeys: { set: body.permissionKeys }, branchId: staff.branchId, isActive: false } });
+        await tx.session.deleteMany({ where: { userId } });
+      }
+      await tx.staff.update({ where: { id }, data: { userId, ...(body.commissionRate === undefined ? {} : { commissionRate: body.commissionRate }) } });
+      await tx.staffInvite.updateMany({ where: { staffId: id, acceptedAt: null }, data: { acceptedAt: new Date() } });
+      const created = await tx.staffInvite.create({ data: { staffId: id, email, role: body.role, permissionKeys: body.permissionKeys, tokenHash: hashToken(token), expiresAt, invitedByUserId: req.user?.id } });
+      await audit("staff.invite.send", "Staff", id, { actorUserId: req.user?.id, after: { email, role: body.role, permissionKeys: body.permissionKeys, expiresAt }, ip: req.ip }, tx);
+      return created;
+    });
+    const baseUrl = (process.env.PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/u, "");
+    const acceptUrl = `${baseUrl}/staff/accept-invite?token=${encodeURIComponent(token)}`;
+    await enqueueEmail({
+      branchId: staff.branchId,
+      to: email,
+      subject: "Your Cutz & Bangs team invitation",
+      html: staffInvitationEmail({ name: staff.displayName, role: body.role, acceptUrl, expiresAt }),
+      dedupeKey: `staff-invite:${invite.id}`,
+    });
+    return reply.code(201).send({ invited: true, id: invite.id, email, role: body.role, permissionKeys: body.permissionKeys, expiresAt });
   });
 
   // Customer portal: server-owned identity, never a customerId supplied by the browser.

@@ -47,7 +47,7 @@ export default async function Home() {
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData).replace(/</g, '\\u003c') }} />
       <nav className="topbar" aria-label="Main navigation">
         <a className="wordmark brand-image-link" href="#top" aria-label="Cutz and Bangs home"><BrandLogo priority /></a>
-        <div className="nav-links"><a href="#services">Services</a><a href="#studio">Our studio</a><a href="#membership">Membership</a><a href="#visit">Visit</a></div>
+        <div className="nav-links"><a href="#services">Services</a><a href="#studio">Our studio</a><a href="#membership">Membership</a><a href="#visit">Visit</a><a href="/contact">Contact</a></div>
         <div className="nav-actions"><a className="staff-login" href="/customer">Sign in</a><a className="staff-login" href="/admin/login">Team login</a><a className="button button-dark nav-book" href="/book">Book a visit</a></div>
       </nav>
 
@@ -93,7 +93,7 @@ export default async function Home() {
       </section>
 
       <section className="booking-peek" id="book"><div><p className="eyebrow">Your time, beautifully spent</p><h2>Ready for a refresh?</h2></div><a className="button button-light" href="/book">Start booking <span>→</span></a></section>
-      <footer className="footer"><a className="wordmark brand-image-link" href="#top"><BrandLogo /></a><p>Sector 15 Dwarka · New Delhi 110059</p><div><a href="/book">Book</a><a href="/customer">My account</a><a href="/staff">Staff</a><a href="/admin/login">Admin</a></div></footer>
+      <footer className="footer"><a className="wordmark brand-image-link" href="#top"><BrandLogo /></a><p>Sector 15 Dwarka · New Delhi 110059</p><div><a href="/book">Book</a><a href="/contact">Contact</a><a href="/customer">My account</a><a href="/staff">Staff</a><a href="/admin/login">Admin</a></div></footer>
       <WebsiteChat />
     </main>
   );

@@ -65,7 +65,15 @@ export default async function providerConfigRoutes(app: FastifyInstance) {
     const { branchId = req.user?.branchId ?? "main" } = req.query as Record<string, string>;
     if (req.user?.role === "MANAGER" && req.user.branchId !== branchId) return reply.code(403).send({ error: "forbidden" });
     await applyProviderSettings(branchId);
-    return providers.email().health?.() ?? { configured: false, connected: false, detail: "Health check unavailable" };
+    try {
+      return await providers.email().health?.() ?? { configured: false, connected: false, detail: "Health check unavailable" };
+    } catch (error) {
+      return {
+        configured: true,
+        connected: false,
+        detail: error instanceof Error ? `SMTP unavailable: ${error.message}` : "SMTP unavailable",
+      };
+    }
   });
 
   app.post("/integrations/email/test", { preHandler: authorize("OWNER", "ADMIN") }, async (req, reply) => {

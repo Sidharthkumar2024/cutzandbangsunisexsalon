@@ -6,6 +6,7 @@ import { enqueueReminder, cancelReminders } from "@cutz/queue";
 import { authorize } from "../../plugins/auth.js";
 import { resolveBooking, SlotUnavailableError, SlotRequest } from "./availability.js";
 import { audit } from "../../lib/audit.js";
+import { notifyAppointment } from "../../lib/appointmentNotifications.js";
 
 /** Schedule prev-day + hours-before reminders for a confirmed appointment. */
 async function scheduleReminders(appointmentId: string, startAt: Date) {
@@ -19,7 +20,7 @@ const bookingSchema = z.object({
   branchId: z.string(),
   customerId: z.string().optional(),
   guest: z
-    .object({ name: z.string(), phone: z.string(), email: z.string().email().optional() })
+    .object({ name: z.string(), phone: z.string(), email: z.string().email().optional(), waConsent: z.boolean().optional() })
     .optional(),
   isWalkIn: z.boolean().default(false),
   // Manager override: book past a conflict. Requires a manager+ session.
@@ -116,6 +117,7 @@ export default async function bookingRoutes(app: FastifyInstance) {
               guestName: body.guest?.name,
               guestPhone: body.guest?.phone,
               guestEmail: body.guest?.email,
+              notes: body.guest?.waConsent ? "WhatsApp consent: yes" : undefined,
               isWalkIn: body.isWalkIn,
               status: body.isWalkIn ? "CHECKED_IN" : "PENDING",
               startAt,
@@ -147,6 +149,7 @@ export default async function bookingRoutes(app: FastifyInstance) {
       // Reminders are scheduled after the booking commits. Idempotent job ids
       // mean this is safe even if the request is retried.
       if (!body.isWalkIn) await scheduleReminders(appt.id, appt.startAt);
+      if (!body.isWalkIn) await notifyAppointment(appt.id, "confirmation");
       await audit("appointment.create", "Appointment", appt.id, { actorUserId: req.user?.id, after: { branchId: body.branchId, startAt: appt.startAt, endAt: appt.endAt, isWalkIn: body.isWalkIn }, ip: req.ip });
 
       return reply.code(201).send(appt);
@@ -203,6 +206,7 @@ export default async function bookingRoutes(app: FastifyInstance) {
       if (["CANCELLED", "NO_SHOW", "COMPLETED"].includes(status)) {
         await cancelReminders(id);
       }
+      if (status === "COMPLETED" && existing.status !== "COMPLETED") await notifyAppointment(id, "thank_you");
       await audit("appointment.status", "Appointment", id, { actorUserId: req.user?.id, before: { status: existing.status }, after: { status }, ip: req.ip });
       return updated;
     },

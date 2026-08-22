@@ -6,7 +6,7 @@ import { authorize } from "../../plugins/auth.js";
 import { computeLine, computeInvoiceTotals, allocateProportional } from "../../lib/money.js";
 import { redeem, InsufficientCreditError } from "../memberships/ledger.js";
 import { renderInvoicePdf } from "../../lib/invoicePdf.js";
-import { providers } from "@cutz/providers";
+import { invoiceEmail, providers } from "@cutz/providers";
 import { enqueueEmail } from "@cutz/queue";
 import { audit } from "../../lib/audit.js";
 import { calculateRedemptionMinor, earnForPaidInvoice, getLoyaltyRules, postLoyaltyEntry } from "../loyalty/ledger.js";
@@ -19,6 +19,7 @@ const paymentSchema = z.object({
   reference: z.string().optional(),
   membershipId: z.string().optional(),
 });
+const moneyText = (minor: number) => `₹${(minor / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const posSchema = z.object({
   branchId: z.string(),
@@ -31,6 +32,7 @@ const posSchema = z.object({
         serviceId: z.string().optional(),
         productId: z.string().optional(),
         staffId: z.string().optional(),
+        companionId: z.string().optional(),
         description: z.string(),
         qty: z.number().int().positive().default(1),
         unitMinor: z.number().int().nonnegative(),
@@ -110,17 +112,22 @@ export default async function posRoutes(app: FastifyInstance) {
       }
       const serviceIds = [...new Set(body.lines.filter((line) => line.kind === "service").map((line) => line.serviceId).filter((id): id is string => Boolean(id)))];
       const productIds = [...new Set(body.lines.filter((line) => line.kind === "product").map((line) => line.productId).filter((id): id is string => Boolean(id)))];
+      const companionIds = [...new Set(body.lines.flatMap((line) => line.companionId ? [line.companionId] : []))];
       if (serviceIds.length !== new Set(body.lines.filter((line) => line.kind === "service").map((line) => line.serviceId)).size || body.lines.some((line) => line.kind === "service" && !line.serviceId)) {
         return reply.code(400).send({ error: "service_id_required" });
       }
       if (productIds.length !== new Set(body.lines.filter((line) => line.kind === "product").map((line) => line.productId)).size || body.lines.some((line) => line.kind === "product" && !line.productId)) {
         return reply.code(400).send({ error: "product_id_required" });
       }
-      const [branch, customer, appointment, staffCount, services, products, cashSession] = await Promise.all([
+      const [branch, customer, appointment, staffCount, companions, services, products, cashSession] = await Promise.all([
         prisma.branch.findFirst({ where: { id: body.branchId, deletedAt: null }, select: { id: true } }),
-        body.customerId ? prisma.customer.findFirst({ where: { id: body.customerId, branchId: body.branchId, deletedAt: null }, select: { id: true, loyaltyPoints: true } }) : null,
+        body.customerId ? prisma.customer.findFirst({ where: { id: body.customerId, branchId: body.branchId, deletedAt: null }, select: { id: true, name: true, email: true, phone: true, waConsent: true, loyaltyPoints: true } }) : null,
         body.appointmentId ? prisma.appointment.findFirst({ where: { id: body.appointmentId, branchId: body.branchId, deletedAt: null }, select: { id: true } }) : null,
         prisma.staff.count({ where: { id: { in: body.lines.flatMap((line) => line.staffId ? [line.staffId] : []) }, branchId: body.branchId, deletedAt: null } }),
+        prisma.customerCompanion.findMany({
+          where: { id: { in: companionIds }, customerId: body.customerId ?? "__none__", deletedAt: null },
+          select: { id: true, name: true },
+        }),
         prisma.service.findMany({ where: { id: { in: serviceIds }, isActive: true, deletedAt: null } }),
         prisma.product.findMany({ where: { id: { in: productIds }, isActive: true, deletedAt: null } }),
         prisma.cashSession.findFirst({ where: { branchId: body.branchId, status: "OPEN" }, select: { id: true } }),
@@ -128,6 +135,8 @@ export default async function posRoutes(app: FastifyInstance) {
       if (!branch) return reply.code(404).send({ error: "branch_not_found" });
       if (!cashSession) return reply.code(409).send({ error: "open_cash_session_required" });
       if (body.customerId && !customer) return reply.code(400).send({ error: "customer_branch_mismatch" });
+      if (companionIds.length && !body.customerId) return reply.code(400).send({ error: "customer_required_for_companion" });
+      if (companions.length !== companionIds.length) return reply.code(400).send({ error: "companion_customer_mismatch" });
       if (body.packageRedemptions.length && !body.customerId) return reply.code(400).send({ error: "customer_required_for_package" });
       if (body.loyaltyPointsToRedeem && !body.customerId) return reply.code(400).send({ error: "customer_required_for_loyalty" });
       if (body.appointmentId && !appointment) return reply.code(400).send({ error: "appointment_branch_mismatch" });
@@ -138,6 +147,7 @@ export default async function posRoutes(app: FastifyInstance) {
 
       const serviceById = new Map(services.map((service) => [service.id, service]));
       const productById = new Map(products.map((product) => [product.id, product]));
+      const companionById = new Map(companions.map((companion) => [companion.id, companion]));
       const redemptionRemaining = new Map<string, number>();
       for (const redemption of body.packageRedemptions) {
         redemptionRemaining.set(redemption.serviceId, (redemptionRemaining.get(redemption.serviceId) ?? 0) + redemption.qty);
@@ -151,6 +161,7 @@ export default async function posRoutes(app: FastifyInstance) {
         const input = {
           ...line,
           description: catalog!.name,
+          servedFor: line.companionId ? companionById.get(line.companionId)?.name : body.customerId ? "Primary customer" : "Walk-in",
           unitMinor: line.kind === "service" ? serviceById.get(line.serviceId!)!.priceMinor : productById.get(line.productId!)!.sellMinor,
           taxRateBps: catalog!.taxRateBps,
           // Catalog prices are authoritative. Package redemptions are the only
@@ -259,6 +270,7 @@ export default async function posRoutes(app: FastifyInstance) {
               taxMinor: totals.taxMinor,
               totalMinor: totals.totalMinor,
               paidMinor,
+              partySize: Math.max(1, companionIds.length + (body.customerId ? 1 : 0)),
               issuedAt: new Date(),
               items: {
                 create: computed.map((c) => ({
@@ -266,6 +278,8 @@ export default async function posRoutes(app: FastifyInstance) {
                   serviceId: c.input.serviceId,
                   productId: c.input.productId,
                   staffId: c.input.staffId,
+                  companionId: c.input.companionId,
+                  servedFor: c.input.servedFor,
                   description: c.input.description,
                   qty: c.calc.qty,
                   unitMinor: c.calc.unitMinor,
@@ -395,6 +409,12 @@ export default async function posRoutes(app: FastifyInstance) {
               },
             });
           }
+          for (const companionId of companionIds) {
+            await tx.customerCompanion.update({
+              where: { id: companionId },
+              data: { visitCount: { increment: 1 }, lastVisitAt: new Date() },
+            });
+          }
 
           const earned = body.customerId && status === "PAID"
             ? await earnForPaidInvoice(tx, {
@@ -431,6 +451,23 @@ export default async function posRoutes(app: FastifyInstance) {
           };
         });
 
+        if (result.invoice.status === "PAID" && customer?.email) {
+          try {
+            const pdf = await buildAndStorePdf(result.invoice.id);
+            if (pdf) await enqueueEmail({ branchId: body.branchId, to: customer.email, subject: `Your Cutz & Bangs invoice ${result.invoice.number}`, html: invoiceEmail({ name: customer.name, invoiceNumber: result.invoice.number, totalMinor: result.invoice.totalMinor }), attachments: [{ filename: `${result.invoice.number}.pdf`, storageKey: pdf.key }], dedupeKey: `invoice-auto:${result.invoice.id}:email` });
+          } catch (error) {
+            app.log.error({ err: error, invoiceId: result.invoice.id }, "automatic invoice email could not be queued");
+          }
+        }
+        if (result.invoice.status === "PAID" && customer?.phone && customer.waConsent) {
+          try {
+            await applyProviderSettings(body.branchId);
+            const channel = await prisma.channel.findFirst({ where: { type: "WHATSAPP_UNOFFICIAL", isActive: true } });
+            if (channel) await providers.whatsapp("WHATSAPP_UNOFFICIAL").send({ to: customer.phone, body: `Thank you ${customer.name} for visiting Cutz & Bangs. Invoice ${result.invoice.number} · ${moneyText(result.invoice.totalMinor)}. Your PDF is available from the salon desk.` });
+          } catch (error) {
+            app.log.warn({ err: error, invoiceId: result.invoice.id }, "automatic WhatsApp receipt was skipped");
+          }
+        }
         return reply.code(201).send({
           ...result.invoice,
           loyalty: result.loyalty,
@@ -548,6 +585,8 @@ export default async function posRoutes(app: FastifyInstance) {
         description: it.description,
         qty: it.qty,
         unitMinor: it.unitMinor,
+        discountMinor: it.discountMinor,
+        servedFor: it.servedFor,
         taxMinor: it.taxMinor,
         lineTotalMinor: it.lineTotalMinor,
       })),
@@ -636,7 +675,7 @@ export default async function posRoutes(app: FastifyInstance) {
           branchId: inv.branchId,
           to,
           subject: `Your invoice ${inv.number}`,
-          html: `<p>Thank you for visiting. Your invoice ${inv.number} is attached.</p>`,
+          html: invoiceEmail({ name: inv.customer?.name, invoiceNumber: inv.number, totalMinor: inv.totalMinor }),
           // The worker resolves this storage key to bytes — works with S3 or local disk.
           attachments: [{ filename: `${inv.number}.pdf`, storageKey: key }],
           dedupeKey: `invoice-email-${inv.id}`,
