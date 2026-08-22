@@ -5,8 +5,9 @@ export type BackendToday = { appointments: number; walkIns: number; bills: numbe
 export type BackendAppointment = {
   id: string; status: string; startAt: string; endAt: string; guestName?: string | null; guestPhone?: string | null;
   customer?: { id: string; name: string; phone?: string | null } | null;
-  items: Array<{ serviceId: string; staffId: string; service: { name: string }; staff: { displayName: string } }>;
+  items: Array<{ serviceId: string; staffId: string; startAt: string; endAt: string; service: { name: string }; staff: { displayName: string } }>;
 };
+export type BackendWaitlistEntry = { id: string; status: string; serviceId: string; staffId?: string | null; customerId?: string | null; guestName?: string | null; guestPhone?: string | null; desiredDate: string; note?: string | null; createdAt: string };
 export type BackendCustomer = { id: string; name: string; phone?: string | null; visitCount: number; totalSpent: number; lastVisitAt?: string | null; segments: string[] };
 export type BackendMembershipPlan = { id: string; name: string; payMinor: number; creditMinor: number; validityDays?: number | null; memberDiscountBps: number };
 export type BackendProduct = { id: string; name: string; brand?: string | null; sku?: string | null; stockQty: number; reorderLevel: number; sellMinor: number };
@@ -21,6 +22,7 @@ export type BackendSnapshot = {
   user: BackendUser | null;
   today: BackendToday | null;
   appointments: BackendAppointment[];
+  waitlist: BackendWaitlistEntry[];
   customers: BackendCustomer[];
   membershipPlans: BackendMembershipPlan[];
   products: BackendProduct[];
@@ -31,7 +33,7 @@ export type BackendSnapshot = {
   range: BackendRangeReport | null;
 };
 
-const emptySnapshot: BackendSnapshot = { user: null, today: null, appointments: [], customers: [], membershipPlans: [], products: [], conversations: [], campaigns: [], staff: [], categories: [], range: null };
+const emptySnapshot: BackendSnapshot = { user: null, today: null, appointments: [], waitlist: [], customers: [], membershipPlans: [], products: [], conversations: [], campaigns: [], staff: [], categories: [], range: null };
 
 async function request<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
   const headers = new Headers(options.headers);
@@ -52,7 +54,7 @@ export const backendApi = {
     const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
     const to = new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString();
     const paths = [
-      ['/reports/today?branchId=main', 'today'], ['/appointments?branchId=main', 'appointments'], ['/customers?branchId=main&take=200', 'customers'],
+      ['/reports/today?branchId=main', 'today'], ['/appointments?branchId=main', 'appointments'], ['/waitlist?branchId=main&status=WAITING', 'waitlist'], ['/customers?branchId=main&take=200', 'customers'],
       ['/membership-plans', 'membershipPlans'], ['/products', 'products'], ['/inbox', 'conversations'], ['/campaigns', 'campaigns'],
       ['/staff?branchId=main', 'staff'], ['/services?branchId=main', 'categories'], [`/reports/range?branchId=main&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, 'range'],
     ] as const;
@@ -62,6 +64,8 @@ export const backendApi = {
     return snapshot;
   },
   checkout: (token: string, payload: unknown) => request<{ number: string; id: string }>('/pos/checkout', { method: 'POST', body: JSON.stringify(payload) }, token),
+  rescheduleAppointment: (token: string, appointmentId: string, payload: { items: Array<{ serviceId: string; staffId: string; startAt: string }>; override: boolean }) => request<BackendAppointment>(`/appointments/${appointmentId}/reschedule`, { method: 'PATCH', body: JSON.stringify(payload) }, token),
+  promoteWaitlist: (token: string, waitlistId: string, payload: { staffId: string; startAt: string }) => request<BackendAppointment>(`/waitlist/${waitlistId}/promote`, { method: 'POST', body: JSON.stringify(payload) }, token),
 };
 
 export { emptySnapshot };

@@ -491,12 +491,35 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .backend-banner button { height: 31px; padding: 0 12px; border: 1px solid #dedad4; border-radius: 7px; background: white; color: #754239; font-size: 7px; font-weight: 800; cursor: pointer; }
 .backend-banner.connected { grid-template-columns: auto 1fr auto auto; border-color: #cfe0d0; background: #f8fcf8; }
 .live-agenda { overflow: hidden; }
-.live-agenda > header, .live-agenda > div { display: grid; grid-template-columns: 90px 1.4fr 1fr 100px; align-items: center; gap: 15px; min-height: 56px; padding: 9px 16px; border-bottom: 1px solid #ebe8e3; }
+.live-agenda > header, .live-agenda > div { display: grid; grid-template-columns: 90px 1.4fr 1fr 100px 84px; align-items: center; gap: 15px; min-height: 56px; padding: 9px 16px; border-bottom: 1px solid #ebe8e3; }
 .live-agenda > header { min-height: 38px; background: #f8f7f4; color: #928e87; font-size: 6px; font-weight: 800; text-transform: uppercase; }
 .live-agenda > div > strong { font-size: 9px; }
 .live-agenda > div > span { display: flex; flex-direction: column; gap: 3px; font-size: 8px; }
 .live-agenda > div small { color: #96918a; font-size: 6px; }
 .live-agenda em { width: max-content; padding: 4px 7px; border-radius: 10px; background: #f0eaf7; color: #674e82; font-size: 6px; font-style: normal; font-weight: 800; }
+.live-agenda > div > button { padding: 6px 8px; border: 1px solid #ded9d2; border-radius: 6px; background: white; color: #82473e; font-size: 6px; font-weight: 800; cursor: pointer; }
+.calendar-message { margin-bottom: 10px; padding: 9px 12px; border: 1px solid #cfe1d1; border-radius: 8px; background: #f7fcf7; color: #47704c; font-size: 7px; }
+.calendar-message.error { border-color: #e6cac6; background: #fff8f7; color: #a34f46; }
+.schedule-action-panel { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(155px, .65fr) minmax(130px, .5fr) auto auto; align-items: end; gap: 12px; margin-top: 12px; padding: 15px; border-color: #d7b2a7; }
+.schedule-action-panel h3 { margin: 3px 0 4px; font: 18px Georgia, serif; }
+.schedule-action-panel small { display: block; max-width: 460px; color: #8f8a83; font-size: 6px; line-height: 1.5; }
+.schedule-action-panel label { display: flex; flex-direction: column; gap: 5px; color: #85817a; font-size: 6px; font-weight: 800; text-transform: uppercase; }
+.schedule-action-panel input, .schedule-action-panel select { height: 32px; padding: 0 8px; border: 1px solid #ddd8d2; border-radius: 7px; background: #fbfaf8; color: #4b4945; font-size: 7px; }
+.schedule-action-panel .override-check { flex-direction: row; align-items: center; min-height: 32px; padding: 0 9px; border: 1px solid #ddd8d2; border-radius: 7px; background: #fbfaf8; }
+.schedule-action-panel .override-check input { width: 14px; height: 14px; }
+.schedule-action-panel > button { height: 32px; padding: 0 12px; border: 1px solid #ddd8d2; border-radius: 7px; background: white; color: #7d463d; font-size: 7px; font-weight: 800; cursor: pointer; }
+.waitlist-section { margin-top: 22px; }
+.waitlist-section > .card-head { margin-bottom: 10px; }
+.waitlist-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.waitlist-grid > article { display: flex; flex-direction: column; gap: 11px; padding: 14px; }
+.waitlist-grid > article > div { display: flex; align-items: center; gap: 9px; }
+.waitlist-grid > article > div > span { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; background: #f1e6e1; color: #884a40; font-size: 7px; font-weight: 900; }
+.waitlist-grid p { margin: 0; color: #807c75; font-size: 7px; }
+.waitlist-grid p strong, .waitlist-grid p small { display: block; }
+.waitlist-grid p strong { margin-bottom: 3px; color: #403e3a; font-size: 8px; }
+.waitlist-grid p small { color: #96918a; font-size: 6px; }
+.waitlist-grid button { padding: 7px 9px; border: 1px solid #ded9d2; border-radius: 7px; background: white; color: #82473e; font-size: 6px; font-weight: 800; cursor: pointer; }
+.waitlist-empty { padding: 26px; color: #8f8b84; font-size: 8px; text-align: center; }
 .membership-plan-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 .membership-plan-grid .plan-card { min-height: 240px; }
 .inventory-table { overflow: hidden; }
@@ -517,6 +540,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .backend-banner { grid-template-columns: auto 1fr auto; }
   .backend-banner input { grid-row: 2; }
   .membership-plan-grid { grid-template-columns: 1fr 1fr; }
+  .schedule-action-panel { grid-template-columns: 1fr 1fr; }
+  .schedule-action-panel > div { grid-column: 1 / -1; }
+  .waitlist-grid { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 780px) {
@@ -536,9 +562,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .content-savebar { left: 14px; right: 14px; bottom: 10px; }
   .backend-banner, .backend-banner.connected { grid-template-columns: auto 1fr; }
   .backend-banner input, .backend-banner button { grid-column: 2; width: 100%; }
-  .live-agenda > header, .live-agenda > div { grid-template-columns: 70px 1fr 90px; }
-  .live-agenda > header span:nth-child(3), .live-agenda > div > span:nth-child(3) { display: none; }
+  .live-agenda > header, .live-agenda > div { grid-template-columns: 70px 1fr 84px; }
+  .live-agenda > header span:nth-child(3), .live-agenda > div > span:nth-child(3), .live-agenda > header span:nth-child(4), .live-agenda > div > em { display: none; }
   .membership-plan-grid { grid-template-columns: 1fr; }
+  .schedule-action-panel, .waitlist-grid { grid-template-columns: 1fr; }
+  .schedule-action-panel > div { grid-column: auto; }
 }
 
 @media (max-width: 520px) {

@@ -10,6 +10,10 @@ type CartItem = { id: string; name: string; staff: string; price: number };
 
 const money = (minor: number) => `₹${Math.round(minor / 100).toLocaleString('en-IN')}`;
 const prettyStatus = (value: string) => value.toLowerCase().split('_').map(word => word[0].toUpperCase() + word.slice(1)).join(' ');
+const toDateTimeInput = (value: string) => {
+  const date = new Date(value);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+};
 const appointmentRow = (item: BackendAppointment, index = 0) => ({
   time: new Date(item.startAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
   name: item.customer?.name ?? item.guestName ?? 'Walk-in',
@@ -95,7 +99,7 @@ export default function AdminPage() {
         <div className="admin-page">
           <BackendConnection backend={backend} />
           {view === 'dashboard' && <Dashboard onView={selectView} data={backend.data} />}
-          {view === 'calendar' && <Calendar items={backend.data.appointments} />}
+          {view === 'calendar' && <Calendar token={backend.token} data={backend.data} onRefresh={() => void backend.refresh()} />}
           {view === 'pos' && <POS cart={cart} services={pointOfSaleServices} token={backend.token} data={backend.data} addItem={addItem} removeItem={index => setCart(current => current.filter((_, itemIndex) => itemIndex !== index))} subtotal={subtotal} credit={credit} tax={tax} total={total} memberCredit={memberCredit} setMemberCredit={setMemberCredit} paid={paid} setPaid={setPaid} />}
           {view === 'customers' && <Customers search={search} setSearch={setSearch} items={filteredCustomers} />}
           {view === 'memberships' && <Memberships plans={backend.data.membershipPlans} />}
@@ -203,8 +207,49 @@ function Dashboard({ onView, data }: { onView: (view: View) => void; data: Backe
   </div>;
 }
 
-function Calendar({ items }: { items: BackendAppointment[] }) {
-  if (items.length) return <div className="calendar-view"><div className="calendar-toolbar"><div className="view-switch"><button className="active">Live agenda</button></div><div><button className="today-button">All appointments</button></div><button className="filter-button">{items.length} from backend</button></div><article className="admin-card live-agenda"><header><span>Time</span><span>Customer & service</span><span>Artist</span><span>Status</span></header>{items.map((item, index) => { const row = appointmentRow(item, index); return <div key={item.id}><strong>{row.time}</strong><span><b>{row.name}</b><small>{row.service}</small></span><span>{row.staff}</span><em className={row.tone}>{row.status}</em></div>; })}</article></div>;
+function Calendar({ token, data, onRefresh }: { token: string; data: BackendSnapshot; onRefresh: () => void }) {
+  const [rescheduleId, setRescheduleId] = useState('');
+  const [nextStart, setNextStart] = useState('');
+  const [override, setOverride] = useState(false);
+  const [promoteId, setPromoteId] = useState('');
+  const [promoteStart, setPromoteStart] = useState('');
+  const [promoteStaff, setPromoteStaff] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const services = new Map(data.categories.flatMap(category => category.services).map(service => [service.id, service.name]));
+
+  const reschedule = async () => {
+    const appointment = data.appointments.find(item => item.id === rescheduleId);
+    if (!appointment || !nextStart || !token) return;
+    const originalBase = new Date(appointment.items[0]?.startAt ?? appointment.startAt).getTime();
+    const nextBase = new Date(nextStart).getTime();
+    setBusy(true); setMessage('');
+    try {
+      await backendApi.rescheduleAppointment(token, appointment.id, { override, items: appointment.items.map(item => ({ serviceId: item.serviceId, staffId: item.staffId, startAt: new Date(nextBase + (new Date(item.startAt).getTime() - originalBase)).toISOString() })) });
+      setMessage(override ? 'Appointment moved with a manager override; the audit event was saved.' : 'Appointment rescheduled and reminders were updated.');
+      setRescheduleId(''); onRefresh();
+    } catch (cause) { setMessage(cause instanceof Error ? prettyStatus(cause.message) : 'Reschedule failed.'); }
+    finally { setBusy(false); }
+  };
+
+  const promote = async () => {
+    if (!promoteId || !promoteStart || !promoteStaff || !token) return;
+    setBusy(true); setMessage('');
+    try {
+      await backendApi.promoteWaitlist(token, promoteId, { staffId: promoteStaff, startAt: new Date(promoteStart).toISOString() });
+      setMessage('Waitlist guest promoted to a confirmed appointment.'); setPromoteId(''); onRefresh();
+    } catch (cause) { setMessage(cause instanceof Error ? prettyStatus(cause.message) : 'Promotion failed.'); }
+    finally { setBusy(false); }
+  };
+
+  if (data.appointments.length) return <div className="calendar-view">
+    <div className="calendar-toolbar"><div className="view-switch"><button className="active">Live agenda</button></div><div><button className="today-button">Appointments & waitlist</button></div><button className="filter-button">{data.appointments.length} from backend</button></div>
+    {message && <div className={`calendar-message ${message.includes('failed') || message.includes('Slot') ? 'error' : ''}`}>{message}</div>}
+    <article className="admin-card live-agenda"><header><span>Time</span><span>Customer & service</span><span>Artist</span><span>Status</span><span>Action</span></header>{data.appointments.map((item, index) => { const row = appointmentRow(item, index); return <div key={item.id}><strong>{row.time}</strong><span><b>{row.name}</b><small>{row.service}</small></span><span>{row.staff}</span><em className={row.tone}>{row.status}</em><button onClick={() => { setRescheduleId(item.id); setNextStart(toDateTimeInput(item.startAt)); setMessage(''); }}>Reschedule</button></div>; })}</article>
+    {rescheduleId && <section className="admin-card schedule-action-panel"><div><p className="eyebrow">Conflict-checked scheduling</p><h3>Move appointment</h3><small>Normal moves protect staff overlaps, shifts, breaks and leave. Manager override permits only the overlap and records an audit event.</small></div><label>New start<input type="datetime-local" value={nextStart} onChange={event => setNextStart(event.target.value)}/></label><label className="override-check"><input type="checkbox" checked={override} onChange={event => setOverride(event.target.checked)}/><span>Manager override</span></label><button onClick={() => setRescheduleId('')}>Cancel</button><button className="button admin-primary" disabled={busy || !nextStart} onClick={() => void reschedule()}>{busy ? 'Checking…' : 'Save new time'}</button></section>}
+    <section className="waitlist-section"><div className="card-head"><div><h2>Waitlist</h2><p>Oldest requests first · promote only after a free slot is chosen.</p></div><span className="count-badge">{data.waitlist.length}</span></div>{data.waitlist.length ? <div className="waitlist-grid">{data.waitlist.map(entry => <article className="admin-card" key={entry.id}><div><span>WL</span><p><strong>{entry.guestName ?? data.customers.find(customer => customer.id === entry.customerId)?.name ?? 'Customer'}</strong><small>{services.get(entry.serviceId) ?? entry.serviceId} · wants {new Date(entry.desiredDate).toLocaleDateString('en-IN')}</small></p></div><p>{entry.note || 'No note'}</p><button onClick={() => { setPromoteId(entry.id); setPromoteStart(toDateTimeInput(entry.desiredDate)); setPromoteStaff(entry.staffId ?? data.staff[0]?.id ?? ''); setMessage(''); }}>Promote to booking →</button></article>)}</div> : <div className="admin-card waitlist-empty">No customers are waiting right now.</div>}</section>
+    {promoteId && <section className="admin-card schedule-action-panel"><div><p className="eyebrow">Waitlist promotion</p><h3>Confirm the available slot</h3><small>The backend runs the full conflict engine before creating the appointment.</small></div><label>Artist<select value={promoteStaff} onChange={event => setPromoteStaff(event.target.value)}>{data.staff.map(staff => <option value={staff.id} key={staff.id}>{staff.displayName}</option>)}</select></label><label>Start<input type="datetime-local" value={promoteStart} onChange={event => setPromoteStart(event.target.value)}/></label><button onClick={() => setPromoteId('')}>Cancel</button><button className="button admin-primary" disabled={busy || !promoteStart || !promoteStaff} onClick={() => void promote()}>{busy ? 'Checking…' : 'Confirm booking'}</button></section>}
+  </div>;
   return <div className="calendar-view"><div className="calendar-toolbar"><div className="view-switch"><button className="active">Day</button><button>Week</button><button>Month</button></div><div><button>‹</button><button className="today-button">Today</button><button>›</button></div><button className="filter-button">Filters · All staff</button></div><article className="admin-card calendar-card"><div className="calendar-grid"><div className="calendar-times"><span/><span>10 AM</span><span>11 AM</span><span>12 PM</span><span>1 PM</span><span>2 PM</span><span>3 PM</span><span>4 PM</span><span>5 PM</span><span>6 PM</span></div>{[['RS','Riya Sen'],['AK','Arjun Khanna'],['MM','Meher Malik'],['PP','Priya Pal']].map(([initials,name], col) => <div className="staff-column" key={name}><header><span>{initials}</span><strong>{name}</strong></header><div className="schedule-lines">{Array.from({length:9}).map((_,i)=><i key={i}/>)}</div>{col === 0 && <><div className="calendar-event colour-event" style={{top:'12%',height:'22%'}}><strong>Aanya Mehta</strong><span>Global colour · 2h</span></div><div className="calendar-event spa-event" style={{top:'56%',height:'15%'}}><strong>Neha Kapoor</strong><span>Hair spa · 1h 15m</span></div></>}{col === 1 && <><div className="calendar-event cut-event" style={{top:'27%',height:'18%'}}><strong>Kabir Sethi</strong><span>Cut + beard · 1h 30m</span></div><div className="calendar-event walkin-event" style={{top:'70%',height:'12%'}}><strong>Walk-in</strong><span>Cut · 1h</span></div></>}{col === 2 && <div className="calendar-event skin-event" style={{top:'40%',height:'17%'}}><strong>Diya Rao</strong><span>Skin reset · 1h 15m</span></div>}</div>)}</div></article></div>;
 }
 
