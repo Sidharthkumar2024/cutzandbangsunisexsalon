@@ -3,15 +3,17 @@ export type BookingPayload = {
   services: Array<{ id: string; staffId: string }>;
   date: string;
   time: string;
+  startAt?: string;
   customer: { name: string; phone: string; email?: string };
 };
 
 export async function submitBooking(payload: BookingPayload) {
-  const response = await fetch('/api/bookings', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+  const response = await fetch("/api/bookings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error('We could not confirm that time. Please try again.');
+  if (!response.ok)
+    throw new Error("We could not confirm that time. Please try again.");
   return response.json() as Promise<{ reference: string; status: string }>;
 }
