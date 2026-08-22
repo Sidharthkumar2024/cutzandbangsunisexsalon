@@ -33,13 +33,15 @@ rename, recreate, or edit the existing GMB containers or script.
 git clone https://github.com/Sidharthkumar2024/cutzandbangsunisexsalon.git /opt/cutz-bangs-v2
 cd /opt/cutz-bangs-v2/backend
 cp .env.isolated.example .env.isolated
-# Fill strong database, encryption, maintenance and provider secrets.
+# Fill strong database, encryption, maintenance, provider and SEED_OWNER secrets.
 docker compose --project-name cutz-bangs-v2 --env-file .env.isolated -f docker-compose.isolated.yml up -d --build db redis api worker
 docker compose --project-name cutz-bangs-v2 --env-file .env.isolated -f docker-compose.isolated.yml exec api pnpm --filter @cutz/db exec prisma migrate deploy
 docker compose --project-name cutz-bangs-v2 --env-file .env.isolated -f docker-compose.isolated.yml exec api pnpm --filter @cutz/db exec tsx prisma/seed.ts
 ```
 
 Verify locally on the VPS: `curl -fsS http://127.0.0.1:8410/health`.
+After the first successful owner login, remove `SEED_OWNER_PASSWORD` from
+`.env.isolated`; later seed runs never overwrite an existing owner's password.
 
 ## Cloudflare without touching the current reverse proxy
 

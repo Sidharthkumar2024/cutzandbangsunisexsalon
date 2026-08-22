@@ -4,6 +4,15 @@ import argon2 from "argon2";
 const prisma = new PrismaClient();
 
 async function main() {
+  const ownerEmail = process.env.SEED_OWNER_EMAIL?.trim().toLowerCase() || "owner@cutzbangs.local";
+  const ownerPassword = process.env.SEED_OWNER_PASSWORD || "changeme123";
+  if (process.env.NODE_ENV === "production" && (!process.env.SEED_OWNER_EMAIL || !process.env.SEED_OWNER_PASSWORD)) {
+    throw new Error("SEED_OWNER_EMAIL and SEED_OWNER_PASSWORD are required for a production seed");
+  }
+  if ((process.env.NODE_ENV === "production" || process.env.SEED_OWNER_PASSWORD) && ownerPassword.length < 12) {
+    throw new Error("SEED_OWNER_PASSWORD must be at least 12 characters");
+  }
+
   const branch = await prisma.branch.upsert({
     where: { id: "main" },
     create: { id: "main", name: "Cutz & Bangs — Sector 15 Dwarka", timezone: "Asia/Kolkata", currency: "INR", address: "First Floor, Plot No. 118, Main Kakrola Road, Patel Garden, Sector 15 Dwarka, New Delhi, Delhi 110059", latitude: 28.6166967, longitude: 77.0283703 },
@@ -11,12 +20,12 @@ async function main() {
   });
 
   const owner = await prisma.user.upsert({
-    where: { email: "owner@cutzbangs.local" },
+    where: { email: ownerEmail },
     create: {
-      email: "owner@cutzbangs.local",
+      email: ownerEmail,
       role: "OWNER",
       branchId: branch.id,
-      passwordHash: await argon2.hash("changeme123", { type: argon2.argon2id }),
+      passwordHash: await argon2.hash(ownerPassword, { type: argon2.argon2id }),
     },
     update: {},
   });
