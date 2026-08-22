@@ -14,6 +14,7 @@ export default function StaffPortal() {
   const [data, setData] = useState<StaffPortalDay | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [rangeDays, setRangeDays] = useState(1);
   const signIn = async () => {
     setBusy(true);
     setMessage("");
@@ -47,6 +48,34 @@ export default function StaffPortal() {
           ? cause.message.replaceAll("_", " ")
           : "Status update failed.",
       );
+    } finally {
+      setBusy(false);
+    }
+  };
+  const loadRange = async (days: number) => {
+    if (!token) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const from = new Date();
+      from.setHours(0, 0, 0, 0);
+      const to = new Date(from.getTime() + days * 86_400_000);
+      setData(await backendApi.staffMyDay(token, from.toISOString(), to.toISOString()));
+      setRangeDays(days);
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message.replaceAll("_", " ") : "Schedule could not be loaded.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const viewCustomerHistory = async (customerId?: string) => {
+    if (!token || !customerId) return;
+    setBusy(true);
+    try {
+      const customer = await backendApi.customerDetail(token, customerId);
+      setMessage(`${customer.name}: ${customer.visitCount} visits · ${customer.loyaltyPoints} loyalty points · ${customer.appointments.length} appointments in history.`);
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message.replaceAll("_", " ") : "Customer history could not be loaded.");
     } finally {
       setBusy(false);
     }
@@ -215,9 +244,11 @@ export default function StaffPortal() {
           <div className="section-heading">
             <div>
               <p className="eyebrow">Your schedule</p>
-              <h2>Today, at a glance</h2>
+              <h2>{rangeDays === 1 ? "Today, at a glance" : "Your next 7 days"}</h2>
             </div>
-            <button>Full calendar →</button>
+            <button disabled={busy} onClick={() => void loadRange(rangeDays === 1 ? 7 : 1)}>
+              {rangeDays === 1 ? "Full week →" : "Today only"}
+            </button>
           </div>
           <div className="staff-timeline">
             {data.appointments.map((item) => {
@@ -270,8 +301,16 @@ export default function StaffPortal() {
                       </p>
                     </div>
                     <footer>
-                      <button>View history</button>
-                      <button>Message</button>
+                      <button disabled={!item.customer?.id || busy} onClick={() => void viewCustomerHistory(item.customer?.id)}>View history</button>
+                      <button
+                        disabled={!item.customer?.phone && !item.guestPhone}
+                        onClick={() => {
+                          const phone = (item.customer?.phone ?? item.guestPhone ?? "").replace(/\D/g, "");
+                          if (phone) window.open(`https://wa.me/${phone.startsWith("91") ? phone : `91${phone}`}`, "_blank", "noopener,noreferrer");
+                        }}
+                      >
+                        Message
+                      </button>
                       <button
                         className="primary"
                         disabled={busy}

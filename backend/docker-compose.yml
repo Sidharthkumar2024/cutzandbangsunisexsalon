@@ -1,0 +1,101 @@
+# Cutz & Bangs — VPS deployment.
+# App containers are replaceable; the database lives on a named volume so
+# `docker compose up -d --build` never touches production data.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data # persistent — survives deployments
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+
+  api:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_started }
+    volumes:
+      - media:/app/.storage
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build: { context: ., dockerfile: apps/worker/Dockerfile }
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_started }
+    volumes:
+      - media:/app/.storage
+
+  web:
+    build: { context: ., dockerfile: apps/web/Dockerfile }
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      api: { condition: service_started }
+
+  # OPTIONAL, isolated WAHA service. Off by default (profile).
+  # It is intentionally not published on a host port; only the API can reach it.
+  waha:
+    image: devlikeapro/waha
+    profiles: ["unofficial-wa"]
+    restart: unless-stopped
+    environment:
+      WAHA_API_KEY: ${WAHA_API_KEY}
+      WAHA_API_KEY_PLAIN: ${WAHA_API_KEY}
+      WAHA_DASHBOARD_USERNAME: ${WAHA_DASHBOARD_USERNAME}
+      WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD}
+      WHATSAPP_SWAGGER_USERNAME: ${WAHA_DASHBOARD_USERNAME}
+      WHATSAPP_SWAGGER_PASSWORD: ${WAHA_DASHBOARD_PASSWORD}
+      WAHA_PRINT_QR: "false"
+    expose: ["3000"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "--header", "X-Api-Key: ${WAHA_API_KEY}", "http://localhost:3000/api/sessions"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - waha_sessions:/app/.sessions
+
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      - web
+      - api
+
+volumes:
+  pgdata:
+  redisdata:
+  waha_sessions:
+  caddydata:
+  caddyconfig:
+  media:

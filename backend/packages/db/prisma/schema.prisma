@@ -1,0 +1,1040 @@
+// Cutz & Bangs — Salon ERP/CRM/POS Prisma schema
+// Conventions:
+//  - All money is stored as INTEGER minor units (paise). Never floats.
+//  - Financial history is append-only: invoices, payments, membership_ledger,
+//    wallet_ledger, inventory_movements and audit_logs are never mutated in place.
+//  - Important entities are soft-deleted via `deletedAt`.
+//  - All timestamps are UTC; the salon's display timezone lives in Settings.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Auth, roles & tenancy
+// ---------------------------------------------------------------------------
+
+enum RoleName {
+  OWNER
+  ADMIN
+  MANAGER
+  RECEPTION
+  STAFF
+  CUSTOMER
+  SUPERADMIN // future SaaS
+}
+
+model Branch {
+  id        String    @id @default(cuid())
+  name      String
+  timezone  String    @default("Asia/Kolkata")
+  currency  String    @default("INR")
+  address   String?
+  phone     String?
+  latitude  Float?
+  longitude Float?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  users        User[]
+  staff        Staff[]
+  customers    Customer[]
+  appointments Appointment[]
+  invoices     Invoice[]
+  coupons      Coupon[]
+  campaigns    Campaign[]
+  cashSessions CashSession[]
+  expenses     Expense[]
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String?   @unique
+  phone        String?   @unique
+  passwordHash String?
+  role         RoleName  @default(CUSTOMER)
+  twoFaSecret  String? // encrypted at rest by the app layer
+  isActive     Boolean   @default(true)
+  branchId     String?
+  branch       Branch?   @relation(fields: [branchId], references: [id])
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  staff     Staff?
+  customer  Customer?
+  auditLogs AuditLog[]
+  sessions  Session[]
+
+  @@index([role])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  userAgent String?
+  ip        String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Permission {
+  id    String @id @default(cuid())
+  key   String @unique // e.g. "pos.refund", "membership.adjust"
+  label String
+}
+
+// ---------------------------------------------------------------------------
+// Staff, attendance & skills
+// ---------------------------------------------------------------------------
+
+model Staff {
+  id             String    @id @default(cuid())
+  userId         String?   @unique
+  user           User?     @relation(fields: [userId], references: [id])
+  branchId       String
+  branch         Branch    @relation(fields: [branchId], references: [id])
+  displayName    String
+  phone          String?
+  commissionRate Int       @default(0) // basis points, e.g. 1000 = 10%
+  weeklyOff      Int[]     @default([]) // 0=Sun..6=Sat
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  skills           StaffSkill[]
+  shifts           Shift[]
+  leaves           Leave[]
+  attendance       Attendance[]
+  serviceStaff     ServiceStaff[]
+  appointmentItems AppointmentItem[]
+  invoiceItems     InvoiceItem[]
+
+  @@index([branchId])
+}
+
+model StaffSkill {
+  id        String  @id @default(cuid())
+  staffId   String
+  staff     Staff   @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([staffId, serviceId])
+}
+
+model Shift {
+  id            String @id @default(cuid())
+  staffId       String
+  staff         Staff  @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  weekday       Int // 0=Sun..6=Sat
+  startMin      Int // minutes from midnight (salon tz)
+  endMin        Int
+  breakStartMin Int?
+  breakEndMin   Int?
+
+  @@index([staffId, weekday])
+}
+
+model Leave {
+  id        String   @id @default(cuid())
+  staffId   String
+  staff     Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  startDate DateTime
+  endDate   DateTime
+  reason    String?
+  approved  Boolean  @default(false)
+
+  @@index([staffId])
+}
+
+model Attendance {
+  id                String    @id @default(cuid())
+  staffId           String
+  staff             Staff     @relation(fields: [staffId], references: [id])
+  checkInAt         DateTime?
+  checkOutAt        DateTime?
+  checkInLat        Float?
+  checkInLng        Float?
+  checkOutLat       Float?
+  checkOutLng       Float?
+  selfieUrl         String? // signed storage key; consent required
+  checkOutSelfieUrl String?
+  consentAt         DateTime?
+  lateMinutes       Int       @default(0)
+  overtimeMin       Int       @default(0)
+  createdAt         DateTime  @default(now())
+
+  @@index([staffId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Customers (CRM / Customer 360)
+// ---------------------------------------------------------------------------
+
+enum CustomerSegment {
+  NEW
+  REPEAT
+  VIP
+  AT_RISK
+  LAPSED
+  MEMBER
+  HIGH_SPEND
+}
+
+model Customer {
+  id            String    @id @default(cuid())
+  userId        String?   @unique
+  user          User?     @relation(fields: [userId], references: [id])
+  branchId      String
+  branch        Branch    @relation(fields: [branchId], references: [id])
+  name          String
+  phone         String?
+  email         String?
+  gender        String?
+  source        String?
+  notes         String?
+  tags          String[]  @default([])
+  smsConsent    Boolean   @default(false)
+  waConsent     Boolean   @default(false)
+  emailConsent  Boolean   @default(false)
+  lastVisitAt   DateTime?
+  totalSpent    Int       @default(0) // paise, denormalized cache
+  visitCount    Int       @default(0)
+  loyaltyPoints Int       @default(0) // denormalized cache = SUM(loyaltyLedger.deltaPoints)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  appointments      Appointment[]
+  invoices          Invoice[]
+  memberships       Membership[]
+  servicePackages   CustomerServicePackage[]
+  walletLedger      WalletLedger[]
+  loyaltyLedger     LoyaltyLedger[]
+  couponRedemptions CouponRedemption[]
+  conversations     Conversation[]
+  historyEntries    CustomerHistoryEntry[]
+
+  @@unique([branchId, phone])
+  @@index([branchId, lastVisitAt])
+}
+
+model CustomerHistoryEntry {
+  id           String   @id @default(cuid())
+  customerId   String
+  customer     Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  visitedAt    DateTime
+  serviceName  String
+  amountMinor  Int      @default(0)
+  staffName    String?
+  notes        String?
+  source       String   @default("historical_import")
+  actorUserId  String?
+  createdAt    DateTime @default(now())
+
+  @@index([customerId, visitedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Services
+// ---------------------------------------------------------------------------
+
+model ServiceCategory {
+  id        String    @id @default(cuid())
+  name      String
+  gender    String? // Male / Female / Unisex
+  sortOrder Int       @default(0)
+  services  Service[]
+}
+
+model Service {
+  id          String          @id @default(cuid())
+  categoryId  String
+  category    ServiceCategory @relation(fields: [categoryId], references: [id])
+  name        String
+  durationMin Int
+  bufferMin   Int             @default(0)
+  priceMinor  Int // paise
+  taxRateBps  Int             @default(0) // basis points, e.g. 1800 = 18% GST
+  isActive    Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  deletedAt   DateTime?
+
+  serviceStaff     ServiceStaff[]
+  staffSkills      StaffSkill[]
+  appointmentItems AppointmentItem[]
+  packageItems     ServicePackageItem[]
+  packageLedger    ServicePackageLedger[]
+
+  @@index([categoryId])
+}
+
+model ServiceStaff {
+  id        String  @id @default(cuid())
+  serviceId String
+  service   Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  staffId   String
+  staff     Staff   @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@unique([serviceId, staffId])
+}
+
+// ---------------------------------------------------------------------------
+// Appointments (booking engine)
+// ---------------------------------------------------------------------------
+
+enum AppointmentStatus {
+  PENDING
+  CONFIRMED
+  CHECKED_IN
+  IN_SERVICE
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+model Appointment {
+  id         String            @id @default(cuid())
+  branchId   String
+  branch     Branch            @relation(fields: [branchId], references: [id])
+  customerId String?
+  customer   Customer?         @relation(fields: [customerId], references: [id])
+  // Guest booking support when no customer account exists yet:
+  guestName  String?
+  guestPhone String?
+  guestEmail String?
+  status     AppointmentStatus @default(PENDING)
+  startAt    DateTime // UTC
+  endAt      DateTime // UTC, derived from items (max end)
+  isWalkIn   Boolean           @default(false)
+  notes      String?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  deletedAt  DateTime?
+
+  items   AppointmentItem[]
+  events  AppointmentEvent[]
+  invoice Invoice?
+
+  @@index([branchId, startAt])
+  @@index([customerId])
+}
+
+model AppointmentItem {
+  id            String      @id @default(cuid())
+  appointmentId String
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  serviceId     String
+  service       Service     @relation(fields: [serviceId], references: [id])
+  staffId       String
+  staff         Staff       @relation(fields: [staffId], references: [id])
+  startAt       DateTime // per-service slot (multi-service, different staff)
+  endAt         DateTime
+  priceMinor    Int // snapshot of price at booking time
+
+  @@index([staffId, startAt])
+  @@index([appointmentId])
+}
+
+model AppointmentEvent {
+  id            String      @id @default(cuid())
+  appointmentId String
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  type          String // status_change, reschedule, override, note
+  fromStatus    String?
+  toStatus      String?
+  actorUserId   String?
+  meta          Json?
+  createdAt     DateTime    @default(now())
+
+  @@index([appointmentId])
+}
+
+enum WaitlistStatus {
+  WAITING
+  NOTIFIED
+  BOOKED
+  CANCELLED
+}
+
+// Customers who wanted a slot that was full — promotable when capacity opens.
+model Waitlist {
+  id          String         @id @default(cuid())
+  branchId    String
+  serviceId   String
+  staffId     String? // optional preferred staff
+  customerId  String?
+  guestName   String?
+  guestPhone  String?
+  guestEmail  String?
+  desiredDate DateTime // the day the customer wanted (salon-local date, stored UTC midnight)
+  note        String?
+  status      WaitlistStatus @default(WAITING)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([branchId, status, desiredDate])
+}
+
+// ---------------------------------------------------------------------------
+// POS, billing & invoices (immutable financial records)
+// ---------------------------------------------------------------------------
+
+enum PaymentMethod {
+  CASH
+  UPI
+  CARD
+  SPLIT
+  MEMBERSHIP_CREDIT
+  WALLET
+  LOYALTY_POINTS
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PAID
+  PARTIALLY_PAID
+  VOID
+}
+
+model Invoice {
+  id            String        @id @default(cuid())
+  number        String        @unique // human-facing, e.g. CB-2026-000123
+  branchId      String
+  branch        Branch        @relation(fields: [branchId], references: [id])
+  customerId    String?
+  customer      Customer?     @relation(fields: [customerId], references: [id])
+  appointmentId String?       @unique
+  appointment   Appointment?  @relation(fields: [appointmentId], references: [id])
+  status        InvoiceStatus @default(DRAFT)
+  subtotalMinor Int           @default(0)
+  discountMinor Int           @default(0)
+  taxMinor      Int           @default(0)
+  totalMinor    Int           @default(0)
+  paidMinor     Int           @default(0)
+  notes         String?
+  pdfUrl        String?
+  issuedAt      DateTime?
+  createdAt     DateTime      @default(now())
+  // No updatedAt beyond status/paid transitions; issued invoices are immutable.
+
+  items            InvoiceItem[]
+  payments         Payment[]
+  couponRedemption CouponRedemption?
+
+  @@index([branchId, createdAt])
+  @@index([customerId])
+}
+
+model InvoiceItem {
+  id             String  @id @default(cuid())
+  invoiceId      String
+  invoice        Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  kind           String // "service" | "product"
+  serviceId      String?
+  productId      String?
+  staffId        String?
+  staff          Staff?  @relation(fields: [staffId], references: [id])
+  description    String
+  qty            Int     @default(1)
+  unitMinor      Int
+  discountMinor  Int     @default(0)
+  taxRateBps     Int     @default(0)
+  taxMinor       Int     @default(0)
+  lineTotalMinor Int // (unit*qty - discount) + tax
+
+  @@index([invoiceId])
+}
+
+model Payment {
+  id              String        @id @default(cuid())
+  invoiceId       String
+  invoice         Invoice       @relation(fields: [invoiceId], references: [id])
+  method          PaymentMethod
+  amountMinor     Int
+  reference       String? // UPI txn ref, card auth, etc.
+  membershipId    String? // when method = MEMBERSHIP_CREDIT
+  createdAt       DateTime      @default(now())
+  createdByUserId String?
+
+  @@index([invoiceId])
+}
+
+enum ReconciliationStatus {
+  PENDING
+  MATCHED
+  MISMATCH
+}
+
+model PaymentReconciliation {
+  id          String               @id @default(cuid())
+  provider    String
+  externalRef String
+  amountMinor Int
+  status      ReconciliationStatus @default(PENDING)
+  paymentId   String?
+  payload     Json?
+  createdAt   DateTime             @default(now())
+
+  @@unique([provider, externalRef])
+  @@index([status, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Membership & credit engine (append-only ledger)
+// ---------------------------------------------------------------------------
+
+model MembershipPlan {
+  id                  String   @id @default(cuid())
+  name                String
+  payMinor            Int // e.g. 300000 (₹3,000)
+  creditMinor         Int // e.g. 500000 (₹5,000)
+  validityDays        Int? // null = no expiry
+  memberDiscountBps   Int      @default(0)
+  eligibleCategoryIds String[] @default([])
+  excludedServiceIds  String[] @default([])
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+
+  memberships Membership[]
+}
+
+model Membership {
+  id           String         @id @default(cuid())
+  planId       String
+  plan         MembershipPlan @relation(fields: [planId], references: [id])
+  customerId   String
+  customer     Customer       @relation(fields: [customerId], references: [id])
+  balanceMinor Int            @default(0) // denormalized cache = SUM(ledger.deltaMinor)
+  startAt      DateTime       @default(now())
+  expiresAt    DateTime?
+  isActive     Boolean        @default(true)
+  createdAt    DateTime       @default(now())
+
+  ledger MembershipLedger[]
+
+  @@index([customerId])
+}
+
+enum LedgerEntryType {
+  CREDIT // initial grant / top-up
+  REDEEM // used on invoice
+  ADJUST // manual correction (permissioned + audited)
+  EXPIRE
+  REFUND
+}
+
+model MembershipLedger {
+  id           String          @id @default(cuid())
+  membershipId String
+  membership   Membership      @relation(fields: [membershipId], references: [id])
+  type         LedgerEntryType
+  deltaMinor   Int // +grant, -redeem; sum == balance
+  balanceAfter Int // running balance snapshot for auditability
+  invoiceId    String?
+  reason       String?
+  actorUserId  String?
+  createdAt    DateTime        @default(now())
+  // Append-only: rows are never updated or deleted.
+
+  @@index([membershipId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Prepaid service packages (for example 3 haircuts + 2 shampoos)
+// ---------------------------------------------------------------------------
+
+model ServicePackagePlan {
+  id           String    @id @default(cuid())
+  name         String
+  priceMinor   Int
+  validityDays Int?
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  deletedAt    DateTime?
+
+  items       ServicePackageItem[]
+  enrollments CustomerServicePackage[]
+}
+
+model ServicePackageItem {
+  id        String             @id @default(cuid())
+  packageId String
+  package   ServicePackagePlan @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   Service            @relation(fields: [serviceId], references: [id])
+  qty       Int
+
+  @@unique([packageId, serviceId])
+}
+
+model CustomerServicePackage {
+  id         String             @id @default(cuid())
+  packageId  String
+  package    ServicePackagePlan @relation(fields: [packageId], references: [id])
+  customerId String
+  customer   Customer           @relation(fields: [customerId], references: [id])
+  startAt    DateTime           @default(now())
+  expiresAt  DateTime?
+  isActive   Boolean            @default(true)
+  createdAt  DateTime           @default(now())
+
+  ledger ServicePackageLedger[]
+
+  @@index([customerId, isActive])
+}
+
+enum ServicePackageLedgerType {
+  GRANT
+  REDEEM
+  ADJUST
+  EXPIRE
+  REFUND
+}
+
+model ServicePackageLedger {
+  id                       String                   @id @default(cuid())
+  customerServicePackageId String
+  customerServicePackage   CustomerServicePackage   @relation(fields: [customerServicePackageId], references: [id])
+  serviceId                String
+  service                  Service                  @relation(fields: [serviceId], references: [id])
+  type                     ServicePackageLedgerType
+  qtyDelta                 Int
+  balanceAfter             Int
+  invoiceId                String?
+  reason                   String?
+  actorUserId              String?
+  createdAt                DateTime                 @default(now())
+
+  @@index([customerServicePackageId, serviceId, createdAt])
+}
+
+model WalletLedger {
+  id           String          @id @default(cuid())
+  customerId   String
+  customer     Customer        @relation(fields: [customerId], references: [id])
+  type         LedgerEntryType
+  deltaMinor   Int
+  balanceAfter Int
+  invoiceId    String?
+  reason       String?
+  createdAt    DateTime        @default(now())
+
+  @@index([customerId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Loyalty points engine (append-only ledger, branch rules live in Setting)
+// ---------------------------------------------------------------------------
+
+enum LoyaltyLedgerType {
+  WELCOME
+  EARN
+  REDEEM
+  ADJUST
+  EXPIRE
+  REFUND
+}
+
+model LoyaltyLedger {
+  id           String            @id @default(cuid())
+  customerId   String
+  customer     Customer          @relation(fields: [customerId], references: [id])
+  type         LoyaltyLedgerType
+  deltaPoints  Int
+  balanceAfter Int
+  invoiceId    String?
+  reason       String?
+  actorUserId  String?
+  createdAt    DateTime          @default(now())
+  // Append-only: entries are never updated or deleted.
+
+  @@unique([invoiceId, type])
+  @@index([customerId, createdAt])
+}
+
+enum CouponType {
+  PERCENTAGE
+  FIXED
+}
+
+model Coupon {
+  id               String     @id @default(cuid())
+  branchId         String
+  branch           Branch     @relation(fields: [branchId], references: [id])
+  code             String
+  name             String
+  type             CouponType
+  value            Int // basis points for PERCENTAGE, paise for FIXED
+  minSpendMinor    Int        @default(0)
+  maxDiscountMinor Int?
+  usageLimit       Int?
+  perCustomerLimit Int?       @default(1)
+  usedCount        Int        @default(0)
+  startsAt         DateTime?
+  endsAt           DateTime?
+  isActive         Boolean    @default(true)
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  deletedAt        DateTime?
+
+  redemptions CouponRedemption[]
+
+  @@unique([branchId, code])
+  @@index([branchId, isActive, endsAt])
+}
+
+model CouponRedemption {
+  id            String    @id @default(cuid())
+  couponId      String
+  coupon        Coupon    @relation(fields: [couponId], references: [id])
+  customerId    String?
+  customer      Customer? @relation(fields: [customerId], references: [id])
+  invoiceId     String    @unique
+  invoice       Invoice   @relation(fields: [invoiceId], references: [id])
+  discountMinor Int
+  createdAt     DateTime  @default(now())
+
+  @@index([couponId, customerId])
+}
+
+// ---------------------------------------------------------------------------
+// Inventory & vendors
+// ---------------------------------------------------------------------------
+
+model Product {
+  id            String    @id @default(cuid())
+  name          String
+  brand         String?
+  sku           String?   @unique
+  barcode       String?   @unique
+  purchaseMinor Int       @default(0)
+  sellMinor     Int       @default(0)
+  mrpMinor      Int       @default(0)
+  discountBps   Int       @default(0)
+  commissionBps Int       @default(0)
+  taxRateBps    Int       @default(0)
+  stockQty      Int       @default(0) // denormalized = SUM(movements.qtyDelta)
+  reorderLevel  Int       @default(0)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  deletedAt     DateTime?
+
+  movements     InventoryMovement[]
+  purchaseItems PurchaseItem[]
+}
+
+model Vendor {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String?
+  email     String?
+  createdAt DateTime @default(now())
+
+  purchaseBills PurchaseBill[]
+}
+
+model PurchaseBill {
+  id          String    @id @default(cuid())
+  vendorId    String
+  vendor      Vendor    @relation(fields: [vendorId], references: [id])
+  billNumber  String?
+  totalMinor  Int       @default(0)
+  photoUrl    String? // vendor bill photo for OCR
+  ocrRaw      Json? // extracted candidate, pending human review
+  confirmedAt DateTime? // stock only updates after confirmation
+  createdAt   DateTime  @default(now())
+
+  items PurchaseItem[]
+}
+
+model PurchaseItem {
+  id             String       @id @default(cuid())
+  purchaseBillId String
+  purchaseBill   PurchaseBill @relation(fields: [purchaseBillId], references: [id], onDelete: Cascade)
+  productId      String
+  product        Product      @relation(fields: [productId], references: [id])
+  qty            Int
+  unitMinor      Int
+  batch          String?
+  expiry         DateTime?
+}
+
+enum MovementReason {
+  PURCHASE
+  SALE
+  CONSUMPTION
+  WASTAGE
+  ADJUSTMENT
+}
+
+model InventoryMovement {
+  id          String         @id @default(cuid())
+  productId   String
+  product     Product        @relation(fields: [productId], references: [id])
+  reason      MovementReason
+  qtyDelta    Int // +in / -out
+  stockAfter  Int
+  refType     String? // invoice / purchase / manual
+  refId       String?
+  actorUserId String?
+  createdAt   DateTime       @default(now())
+
+  @@index([productId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Daily cash drawer & operating expenses
+// ---------------------------------------------------------------------------
+
+model CashSession {
+  id                 String   @id @default(cuid())
+  branchId           String
+  branch             Branch   @relation(fields: [branchId], references: [id])
+  businessDate       String
+  openingCashMinor   Int
+  closingCashMinor   Int?
+  expectedCashMinor  Int?
+  varianceMinor      Int?
+  status             String   @default("OPEN")
+  openingNote        String?
+  closingNote        String?
+  openedByUserId     String
+  closedByUserId     String?
+  openedAt           DateTime @default(now())
+  closedAt           DateTime?
+  expenses           Expense[]
+
+  @@index([branchId, openedAt])
+  @@unique([branchId, businessDate])
+}
+
+model Expense {
+  id              String        @id @default(cuid())
+  branchId        String
+  branch          Branch        @relation(fields: [branchId], references: [id])
+  cashSessionId   String?
+  cashSession     CashSession?   @relation(fields: [cashSessionId], references: [id])
+  category        String
+  description     String
+  amountMinor     Int
+  paymentMethod   PaymentMethod @default(CASH)
+  vendorName      String?
+  receiptUrl      String?
+  occurredAt      DateTime      @default(now())
+  createdByUserId String
+  createdAt       DateTime      @default(now())
+
+  @@index([branchId, occurredAt])
+  @@index([cashSessionId])
+}
+
+// ---------------------------------------------------------------------------
+// Messaging, inbox, campaigns
+// ---------------------------------------------------------------------------
+
+enum ChannelType {
+  WHATSAPP_OFFICIAL
+  WHATSAPP_UNOFFICIAL
+  EMAIL
+  SMS
+}
+
+model Channel {
+  id       String      @id @default(cuid())
+  type     ChannelType
+  label    String
+  isActive Boolean     @default(false)
+  config   Json? // secrets stored encrypted at app layer / secret manager
+
+  conversations Conversation[]
+  templates     Template[]
+}
+
+model Conversation {
+  id            String    @id @default(cuid())
+  channelId     String
+  channel       Channel   @relation(fields: [channelId], references: [id])
+  customerId    String?
+  customer      Customer? @relation(fields: [customerId], references: [id])
+  assignedTo    String?
+  tags          String[]  @default([])
+  unread        Boolean   @default(true)
+  lastMessageAt DateTime?
+  createdAt     DateTime  @default(now())
+
+  messages Message[]
+
+  @@index([channelId, lastMessageAt])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  direction      String // in | out | internal_note
+  body           String?
+  mediaType      String?
+  externalId     String?      @unique // provider message id for idempotency
+  status         String? // sent, delivered, read, failed
+  createdAt      DateTime     @default(now())
+
+  attachments Attachment[]
+
+  @@index([conversationId, createdAt])
+}
+
+model Attachment {
+  id        String  @id @default(cuid())
+  messageId String
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  url       String
+  mimeType  String?
+  sizeBytes Int?
+}
+
+model Template {
+  id        String   @id @default(cuid())
+  channelId String
+  channel   Channel  @relation(fields: [channelId], references: [id])
+  name      String
+  language  String   @default("en")
+  body      String
+  status    String   @default("draft") // draft, submitted, approved, rejected
+  createdAt DateTime @default(now())
+}
+
+enum CampaignStatus {
+  DRAFT
+  PENDING_APPROVAL
+  SCHEDULED
+  SENDING
+  SENT
+  CANCELLED
+}
+
+model Campaign {
+  id          String           @id @default(cuid())
+  branchId    String           @default("main")
+  branch      Branch           @relation(fields: [branchId], references: [id])
+  name        String
+  channel     ChannelType
+  segment     CustomerSegment?
+  content     String
+  mediaKey    String?
+  mediaType   String?
+  couponCode  String?
+  status      CampaignStatus   @default(DRAFT)
+  scheduledAt DateTime?
+  approvedBy  String?
+  intervalSeconds Int?
+  dailyCap     Int?
+  riskLevel    String?
+  createdAt   DateTime         @default(now())
+
+  recipients CampaignRecipient[]
+
+  @@index([branchId, createdAt])
+}
+
+model CampaignRecipient {
+  id         String    @id @default(cuid())
+  campaignId String
+  campaign   Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  customerId String
+  status     String    @default("queued") // queued, sent, delivered, failed
+  scheduledFor DateTime?
+  sentAt     DateTime?
+  deliveredAt DateTime?
+  readAt     DateTime?
+  repliedAt  DateTime?
+  externalId String?   @unique
+  error      String?
+  bookedAt   DateTime? // attribution
+
+  @@unique([campaignId, customerId])
+  @@index([scheduledFor, status])
+}
+
+// ---------------------------------------------------------------------------
+// Automation, notifications, email logs, audit, settings
+// ---------------------------------------------------------------------------
+
+model AutomationRule {
+  id        String   @id @default(cuid())
+  name      String
+  trigger   String // welcome, reminder, thank_you, review_request, birthday, low_balance, lapsed
+  config    Json
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  runs AutomationRun[]
+}
+
+model AutomationRun {
+  id        String         @id @default(cuid())
+  ruleId    String
+  rule      AutomationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  dedupeKey String         @unique // idempotency: rule+entity+window
+  status    String // queued, sent, skipped, failed
+  createdAt DateTime       @default(now())
+
+  @@index([ruleId, createdAt])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String?
+  title     String
+  body      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model EmailLog {
+  id        String   @id @default(cuid())
+  to        String
+  subject   String
+  template  String?
+  status    String // queued, sent, failed
+  dedupeKey String?  @unique
+  error     String?
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String?
+  actor       User?    @relation(fields: [actorUserId], references: [id])
+  action      String // e.g. "invoice.void", "membership.adjust"
+  entityType  String
+  entityId    String
+  before      Json?
+  after       Json?
+  ip          String?
+  createdAt   DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorUserId, createdAt])
+}
+
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}

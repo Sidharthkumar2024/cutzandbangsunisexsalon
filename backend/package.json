@@ -1,0 +1,18 @@
+{
+  "name": "cutz-bangs",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Cutz & Bangs — Salon ERP/CRM/POS/Booking (backend-first monorepo)",
+  "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "db:generate": "pnpm --filter @cutz/db exec prisma generate",
+    "db:migrate": "pnpm --filter @cutz/db exec prisma migrate dev",
+    "db:deploy": "pnpm --filter @cutz/db exec prisma migrate deploy",
+    "db:seed": "pnpm --filter @cutz/db exec tsx prisma/seed.ts",
+    "dev:api": "pnpm --filter @cutz/api dev",
+    "dev:worker": "pnpm --filter @cutz/worker dev",
+    "test": "pnpm --filter @cutz/api test",
+    "build": "pnpm -r build",
+    "db:seed:codex": "pnpm --filter @cutz/db exec tsx prisma/seed-codex.ts"
+  }
+}

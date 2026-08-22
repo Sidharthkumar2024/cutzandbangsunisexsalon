@@ -314,7 +314,10 @@ export default function AdminPage() {
   const [memberCredit, setMemberCredit] = useState(false);
   const [paid, setPaid] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
+  const [notificationOpen, setNotificationOpen] = useState(false);
   const backend = useBackendIntegration();
+  const unreadNotifications = backend.data.notifications.filter((item) => !item.readAt);
+  const unreadConversations = backend.data.conversations.filter((item) => item.unread).length;
   const [title, subtitle] = viewTitles[view];
   const customerRows = backend.data.customers.length
     ? backend.data.customers.map((customer) => ({
@@ -449,7 +452,7 @@ export default function AdminPage() {
                 >
                   <span>{item.icon}</span>
                   {item.label}
-                  {item.id === "inbox" && <b>6</b>}
+                  {item.id === "inbox" && unreadConversations > 0 && <b>{unreadConversations}</b>}
                 </button>
               ))}
             </div>
@@ -485,11 +488,46 @@ export default function AdminPage() {
           <div className="admin-actions">
             <label className="global-search">
               <span>⌕</span>
-              <input placeholder="Search anything…" />
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && search.trim()) selectView("customers");
+                }}
+                placeholder="Search customers by name or phone…"
+              />
             </label>
-            <button className="icon-button" aria-label="Notifications">
-              ●<b>3</b>
-            </button>
+            <div className="notification-control">
+              <button
+                className="icon-button"
+                aria-label="Notifications"
+                aria-expanded={notificationOpen}
+                onClick={() => setNotificationOpen((current) => !current)}
+              >
+                ●{unreadNotifications.length > 0 && <b>{unreadNotifications.length}</b>}
+              </button>
+              {notificationOpen && (
+                <div className="notification-popover">
+                  <header><strong>Notifications</strong><small>{unreadNotifications.length} unread</small></header>
+                  {backend.data.notifications.slice(0, 8).map((item) => (
+                    <button
+                      key={item.id}
+                      className={item.readAt ? "read" : ""}
+                      onClick={async () => {
+                        if (!item.readAt && backend.token) await backendApi.markNotificationRead(backend.token, item.id).catch(() => undefined);
+                        setNotificationOpen(false);
+                        selectView(item.title.toLowerCase().includes("reschedule") ? "calendar" : "system");
+                        await backend.refresh();
+                      }}
+                    >
+                      <strong>{item.title}</strong>
+                      <small>{item.body ?? new Date(item.createdAt).toLocaleString("en-IN")}</small>
+                    </button>
+                  ))}
+                  {!backend.data.notifications.length && <p>No new notifications.</p>}
+                </div>
+              )}
+            </div>
             <button
               className="button admin-primary"
               onClick={() => selectView(view === "pos" ? "calendar" : "pos")}
@@ -1534,7 +1572,7 @@ function Dashboard({
               <h2>Sales overview</h2>
               <p>{insights ? "Daily sales · rolling 15 days" : "Revenue across this week"}</p>
             </div>
-            <button>{insights ? "15 days" : "This week⌄"}</button>
+            <span className="filter-button">{insights ? "Last 15 days" : "This week"}</span>
           </div>
           <div className="sales-summary">
             <strong>{insights ? money(insights.sales.rolling15Minor) : "₹2,48,320"}</strong>
@@ -1641,7 +1679,7 @@ function Dashboard({
                   </small>
                 </span>
                 <em className={item.tone}>{item.status}</em>
-                <button>•••</button>
+                <button aria-label={`Open ${item.name}'s appointment`} onClick={() => onView("calendar")}>Open</button>
               </div>
             ))}
           </div>
@@ -1684,7 +1722,12 @@ function Dashboard({
                   <strong>{title}</strong>
                   <em>{note}</em>
                 </p>
-                <button>→</button>
+                <button
+                  aria-label={`Open ${title}`}
+                  onClick={() => onView(type === "Low stock" ? "inventory" : type === "Follow-up" ? "campaigns" : type === "Membership" ? "memberships" : "reports")}
+                >
+                  →
+                </button>
               </div>
             ))}
         </article>
@@ -1809,9 +1852,9 @@ function Calendar({
       <div className="calendar-view">
         <div className="calendar-toolbar">
           <div className="view-switch">
-            <button className="active">Live agenda</button>
+            <span className="active">Live agenda</span>
           </div>
-          <button className="filter-button">No appointments yet</button>
+          <span className="filter-button">No appointments yet</span>
         </div>
         <WalkInCreator token={token} data={data} onRefresh={onRefresh} />
         <div className="admin-card waitlist-empty">
@@ -1826,14 +1869,14 @@ function Calendar({
       <div className="calendar-view">
         <div className="calendar-toolbar">
           <div className="view-switch">
-            <button className="active">Live agenda</button>
+            <span className="active">Live agenda</span>
           </div>
           <div>
-            <button className="today-button">Appointments & waitlist</button>
+            <span className="today-button">Appointments & waitlist</span>
           </div>
-          <button className="filter-button">
+          <span className="filter-button">
             {data.appointments.length} from backend
-          </button>
+          </span>
         </div>
         <WalkInCreator token={token} data={data} onRefresh={onRefresh} />
         {message && (
@@ -2009,102 +2052,7 @@ function Calendar({
         )}
       </div>
     );
-  return (
-    <div className="calendar-view">
-      <div className="calendar-toolbar">
-        <div className="view-switch">
-          <button className="active">Day</button>
-          <button>Week</button>
-          <button>Month</button>
-        </div>
-        <div>
-          <button>‹</button>
-          <button className="today-button">Today</button>
-          <button>›</button>
-        </div>
-        <button className="filter-button">Filters · All staff</button>
-      </div>
-      <article className="admin-card calendar-card">
-        <div className="calendar-grid">
-          <div className="calendar-times">
-            <span />
-            <span>10 AM</span>
-            <span>11 AM</span>
-            <span>12 PM</span>
-            <span>1 PM</span>
-            <span>2 PM</span>
-            <span>3 PM</span>
-            <span>4 PM</span>
-            <span>5 PM</span>
-            <span>6 PM</span>
-          </div>
-          {[
-            ["RS", "Riya Sen"],
-            ["AK", "Arjun Khanna"],
-            ["MM", "Meher Malik"],
-            ["PP", "Priya Pal"],
-          ].map(([initials, name], col) => (
-            <div className="staff-column" key={name}>
-              <header>
-                <span>{initials}</span>
-                <strong>{name}</strong>
-              </header>
-              <div className="schedule-lines">
-                {Array.from({ length: 9 }).map((_, i) => (
-                  <i key={i} />
-                ))}
-              </div>
-              {col === 0 && (
-                <>
-                  <div
-                    className="calendar-event colour-event"
-                    style={{ top: "12%", height: "22%" }}
-                  >
-                    <strong>Aanya Mehta</strong>
-                    <span>Global colour · 2h</span>
-                  </div>
-                  <div
-                    className="calendar-event spa-event"
-                    style={{ top: "56%", height: "15%" }}
-                  >
-                    <strong>Neha Kapoor</strong>
-                    <span>Hair spa · 1h 15m</span>
-                  </div>
-                </>
-              )}
-              {col === 1 && (
-                <>
-                  <div
-                    className="calendar-event cut-event"
-                    style={{ top: "27%", height: "18%" }}
-                  >
-                    <strong>Kabir Sethi</strong>
-                    <span>Cut + beard · 1h 30m</span>
-                  </div>
-                  <div
-                    className="calendar-event walkin-event"
-                    style={{ top: "70%", height: "12%" }}
-                  >
-                    <strong>Walk-in</strong>
-                    <span>Cut · 1h</span>
-                  </div>
-                </>
-              )}
-              {col === 2 && (
-                <div
-                  className="calendar-event skin-event"
-                  style={{ top: "40%", height: "17%" }}
-                >
-                  <strong>Diya Rao</strong>
-                  <span>Skin reset · 1h 15m</span>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </article>
-    </div>
-  );
+  return null;
 }
 
 function WalkInCreator({
@@ -2281,6 +2229,8 @@ function POS({
   const [invoiceId, setInvoiceId] = useState("");
   const [checkoutError, setCheckoutError] = useState("");
   const [charging, setCharging] = useState(false);
+  const [catalogQuery, setCatalogQuery] = useState("");
+  const [catalogFilter, setCatalogFilter] = useState("All");
   const [customerId, setCustomerId] = useState("");
   const [customerSearch, setCustomerSearch] = useState("");
   const [customerDetail, setCustomerDetail] =
@@ -2295,6 +2245,30 @@ function POS({
   >("UPI");
   const [deliveryMessage, setDeliveryMessage] = useState("");
   const customer = data.customers.find((item) => item.id === customerId);
+  const serviceCategory = new Map(
+    data.categories.flatMap((category) =>
+      category.services.map((service) => [service.id, category.name] as const),
+    ),
+  );
+  const catalogFilters = [
+    "All",
+    ...Array.from(new Set(data.categories.map((category) => category.name))),
+    "Products",
+  ];
+  const queryKey = catalogQuery.trim().toLowerCase();
+  const visibleServices = services.filter(
+    (service) =>
+      catalogFilter !== "Products" &&
+      (catalogFilter === "All" || serviceCategory.get(service.id) === catalogFilter) &&
+      (!queryKey || service.name.toLowerCase().includes(queryKey)),
+  );
+  const visibleProducts = data.products.filter(
+    (product) =>
+      product.isActive !== false &&
+      product.stockQty > 0 &&
+      (catalogFilter === "All" || catalogFilter === "Products") &&
+      (!queryKey || `${product.name} ${product.brand ?? ""} ${product.sku ?? ""}`.toLowerCase().includes(queryKey)),
+  );
   const matchingCustomers = data.customers.filter((item) => !customerSearch.trim() || item.name.toLowerCase().includes(customerSearch.toLowerCase()) || (item.phone ?? "").includes(customerSearch.replace(/\D/g, ""))).slice(0, 30);
   const membership = customerDetail?.memberships.find(
     (item) => item.id === membershipId && item.isActive,
@@ -2550,18 +2524,25 @@ function POS({
       <section className="pos-catalog">
         <label className="pos-search">
           <span>⌕</span>
-          <input placeholder="Search services or scan product…" />
+          <input
+            value={catalogQuery}
+            onChange={(event) => setCatalogQuery(event.target.value)}
+            placeholder="Search services, products or SKU…"
+          />
         </label>
         <div className="pos-category-row">
-          <button className="active">All</button>
-          <button>Hair</button>
-          <button>Colour</button>
-          <button>Skin</button>
-          <button>Grooming</button>
-          <button>Products</button>
+          {catalogFilters.map((filter) => (
+            <button
+              key={filter}
+              className={catalogFilter === filter ? "active" : ""}
+              onClick={() => setCatalogFilter(filter)}
+            >
+              {filter}
+            </button>
+          ))}
         </div>
         <div className="pos-service-grid">
-          {services.map((service, index) => (
+          {visibleServices.map((service, index) => (
             <button key={service.id} onClick={() => addItem(service)}>
               <span className={`tile-icon tile-${index}`}>
                 {service.name
@@ -2576,17 +2557,18 @@ function POS({
               <i>+</i>
             </button>
           ))}
-          {data.products
-            .filter((product) => product.isActive !== false && product.stockQty > 0)
-            .map((product, index) => (
+          {visibleProducts.map((product, index) => (
               <button key={product.id} onClick={() => addProduct(product)}>
-                <span className={`tile-icon tile-${(index + services.length) % 6}`}>PR</span>
+                <span className={`tile-icon tile-${(index + visibleServices.length) % 6}`}>PR</span>
                 <strong>{product.name}</strong>
                 <small>{product.stockQty} in stock · product</small>
                 <b>{money(product.sellMinor)}</b>
                 <i>+</i>
               </button>
             ))}
+          {!visibleServices.length && !visibleProducts.length && (
+            <p className="empty-cart">No matching services or products.</p>
+          )}
         </div>
       </section>
       <aside className="pos-cart admin-card">
@@ -3106,7 +3088,7 @@ function Customers({
                 <strong>—</strong>
                 <strong>{customer.spend}</strong>
                 <span>{customer.last}</span>
-                <button disabled>→</button>
+                <span aria-label="Connect backend to open this demo record">Demo</span>
               </div>
             ))}
       </article>
@@ -4473,6 +4455,7 @@ function Campaigns({
   const [mediaKey, setMediaKey] = useState("");
   const [mediaType, setMediaType] = useState<"image" | "document" | "video" | "">("");
   const [mediaName, setMediaName] = useState("");
+  const [statusFilter, setStatusFilter] = useState("ALL");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [waRisk, setWaRisk] = useState<BackendWhatsAppStatus["unofficial"]["risk"]>();
@@ -4523,6 +4506,9 @@ function Campaigns({
           "—",
         ],
       ];
+  const visibleRows = statusFilter === "ALL"
+    ? rows
+    : rows.filter((row) => row[3].toUpperCase().replaceAll(" ", "_") === statusFilter);
   const draft = async () => {
     if (!token) return;
     setBusy(true);
@@ -4689,10 +4675,21 @@ function Campaigns({
                 : "Demo campaign records"}
             </p>
           </div>
-          <button>All statuses⌄</button>
+          <select
+            aria-label="Filter campaigns by status"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+          >
+            <option value="ALL">All statuses</option>
+            <option value="PENDING_APPROVAL">Pending approval</option>
+            <option value="SCHEDULED">Scheduled</option>
+            <option value="SENDING">Sending</option>
+            <option value="COMPLETED">Completed</option>
+            <option value="FAILED">Failed</option>
+          </select>
         </div>
         <div className="campaign-table-labels"><span>Campaign</span><span>Audience</span><span>Channel</span><span>Status</span><span>Sent / total</span><span>Read</span><span>Replied</span></div>
-        {rows.map((row) => (
+        {visibleRows.map((row) => (
           <div className="campaign-row" key={row[0]}>
             {row.map((cell, index) =>
               index === 0 ? (
@@ -4751,9 +4748,9 @@ function Reports({ report }: { report: BackendRangeReport | null }) {
   return (
     <div>
       <div className="report-filters">
-        <button>This month</button>
-        <button>All services⌄</button>
-        <button>All staff⌄</button>
+        <span className="filter-button">This month</span>
+        <span className="filter-button">All services</span>
+        <span className="filter-button">All staff</span>
         <button disabled={!report} onClick={exportCsv}>Export CSV</button>
         <button onClick={() => window.print()}>Print / save PDF</button>
       </div>
@@ -5010,7 +5007,19 @@ function Staff({
                 <strong>{sales}</strong>
               </span>
             </div>
-            <button>View profile →</button>
+            <button
+              onClick={() => {
+                const member = team[index];
+                if (!member) return;
+                setAccountStaffId(member.id);
+                setAccountEmail(member.user?.email ?? "");
+                setAccountRole((member.user?.role as typeof accountRole) ?? "STAFF");
+                setAccountCommission((member.commissionRate ?? 0) / 100);
+                document.querySelector(".team-access-form")?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }}
+            >
+              Manage profile →
+            </button>
           </article>
         ))}
       </div>
@@ -5187,7 +5196,7 @@ function Attendance({
                 : "Demo records until the first check-in"}
             </p>
           </div>
-          <button>Attendance policy</button>
+          <span className="filter-button">GPS + selfie + consent</span>
         </div>
         {rows.map((row) => (
           <div className="attendance-row" key={`${row[1]}${row[2]}`}>
@@ -5200,7 +5209,7 @@ function Attendance({
               Hours <b>{row[3]}</b>
             </small>
             <em className={row[4].toLowerCase().replace(" ", "")}>{row[4]}</em>
-            <button>•••</button>
+            <span className="attendance-status-label">Audited</span>
           </div>
         ))}
       </article>

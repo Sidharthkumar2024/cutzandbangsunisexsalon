@@ -1,0 +1,17 @@
+# Automatic HTTPS. Replace the domain with your own.
+{$DOMAIN:localhost} {
+	encode gzip
+
+	# API + webhooks
+	handle /api/* {
+		reverse_proxy api:4000
+	}
+	handle /health* {
+		reverse_proxy api:4000
+	}
+
+	# Everything else -> Next.js web app
+	handle {
+		reverse_proxy web:3000
+	}
+}

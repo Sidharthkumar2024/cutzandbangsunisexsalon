@@ -1,0 +1,32 @@
+{
+  "name": "@cutz/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cutz/db": "workspace:*",
+    "@cutz/providers": "workspace:*",
+    "@cutz/queue": "workspace:*",
+    "@cutz/types": "workspace:*",
+    "@fastify/cors": "^10.0.0",
+    "@fastify/rate-limit": "^10.0.0",
+    "argon2": "^0.41.1",
+    "fastify": "^5.0.0",
+    "fastify-plugin": "^5.0.0",
+    "pdfkit": "^0.15.0",
+    "zod": "^3.23.0",
+    "@prisma/client": "^5.20.0"
+  },
+  "devDependencies": {
+    "@types/pdfkit": "^0.13.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

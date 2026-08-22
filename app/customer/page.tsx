@@ -46,6 +46,19 @@ export default function CustomerPortal() {
       setBusy(false);
     }
   };
+  const requestReschedule = async (appointmentId: string) => {
+    if (!token) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.requestCustomerReschedule(token, appointmentId);
+      setMessage("Your reschedule request was sent to the salon team. They will confirm the new time with you.");
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message.replaceAll("_", " ") : "Request could not be sent.");
+    } finally {
+      setBusy(false);
+    }
+  };
   if (!data)
     return (
       <main className="portal-auth-shell">
@@ -181,6 +194,7 @@ export default function CustomerPortal() {
         </div>
       </header>
       <div className="portal-content" id="overview">
+        {message && <div className="calendar-message">{message}</div>}
         <section className="portal-welcome">
           <div>
             <p className="eyebrow">
@@ -243,7 +257,9 @@ export default function CustomerPortal() {
                 </p>
                 <div>
                   <a className="portal-inline-button" href="https://www.google.com/maps/search/?api=1&query=28.6166967%2C77.0283703" target="_blank" rel="noreferrer">Get directions</a>
-                  <button>Request reschedule</button>
+                  <button disabled={busy} onClick={() => void requestReschedule(upcoming.id)}>
+                    {busy ? "Sending…" : "Request reschedule"}
+                  </button>
                 </div>
               </div>
               <span className="confirmed-pill">✓ {upcoming.status}</span>
@@ -368,7 +384,7 @@ export default function CustomerPortal() {
                   </span>
                   <em>{appointment.status}</em>
                 </div>
-                <button>Book again</button>
+                <Link href="/book">Book again</Link>
               </article>
             ))}
           </div>

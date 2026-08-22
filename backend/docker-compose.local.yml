@@ -1,0 +1,45 @@
+name: cutz-bangs-local
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cutz
+      POSTGRES_PASSWORD: cutz-local-password
+      POSTGRES_DB: cutz
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - cutz_local_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cutz"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6382:6379"
+    volumes:
+      - cutz_local_redisdata:/data
+
+  waha:
+    image: devlikeapro/waha
+    restart: unless-stopped
+    environment:
+      WAHA_API_KEY: cutz-local-dev-key-change-before-production
+      WAHA_API_KEY_PLAIN: cutz-local-dev-key-change-before-production
+      WAHA_PRINT_QR: "false"
+    ports:
+      - "127.0.0.1:3005:3000"
+    volumes:
+      - cutz_local_waha_sessions:/app/.sessions
+
+volumes:
+  cutz_local_pgdata:
+  cutz_local_redisdata:
+  cutz_local_waha_sessions:

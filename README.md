@@ -1,38 +1,59 @@
-# Cutz & Bangs Salon Platform
+# Cutz & Bangs Unisex Salon
 
-A responsive front-end MVP for the Cutz & Bangs salon ERP/CRM brief. It includes the public website, a conflict-aware booking flow, admin operations, POS, Customer 360, membership ledger views, inbox, campaigns, reports, and customer/staff portals.
+Complete salon website and operations platform for Cutz & Bangs, Sector 15 Dwarka, New Delhi.
 
-## Experiences
+## What is included
 
-- `/` — public salon website
-- `/book` — multi-service guest booking with per-service staff assignment
-- `/admin` — owner/reception workspace; use the sidebar to explore all core modules
-- `/customer` — appointments, history, membership balance, and invoices
-- `/staff` — daily schedule, attendance, client notes, and commission snapshot
+- Public local-SEO landing page, service catalogue, memberships and online booking
+- Owner/admin/manager/reception role-based workspace
+- Staff and customer account portals
+- Appointment calendar, waitlist and conflict-safe scheduling
+- POS with service/product lines, cash/UPI/card/split tenders and PDF invoices
+- Customer 360, duplicate phone lookup, historical visits and retention lists
+- Admin-managed loyalty points, coupons, memberships and service packages
+- Category-wise service management and inventory/stock/vendor-bill workflows
+- Opening/closing cash, daily expenses, attendance, commission and payroll summaries
+- Unified inbox, official Meta WhatsApp and optional self-hosted WAHA QR connector
+- Consent-aware CSV campaigns with paced delivery, images/PDFs and engagement reporting
+- SMTP/provider settings, health checks, audit logs and responsive mobile UI
 
-## API integration
+The payment gateway is intentionally excluded. POS records the salon's existing payment methods.
 
-The Site proxies protected business calls through `BACKEND_API_URL`, keeping the API origin and provider credentials server-side. When the owner signs in, the admin dashboard, calendar, POS, CRM, memberships, services, coupons, inventory, inbox, campaigns, reports, attendance, payroll foundation, settings, system health, and audit history use live backend data. Representative empty-state data remains visible only while the API is not connected.
+## Repository layout
 
-Admin → **Settings** manages retention and loyalty rules plus encrypted SMTP, official Meta WhatsApp, and a self-hosted WAHA connector. WAHA setup includes session creation, auto-refreshing QR, connected-state, contact sync, a separate webhook secret, a 60–300 second campaign interval, daily cap and delivery window. Admin → **Campaigns** accepts consent-aware CSV contact imports and shows a conservative unofficial-account risk signal. Admin → **System & audit** shows database/Redis/provider health, production-security readiness, delivery failures, and immutable changes.
-
-## Website content management
-
-Admin → **Website content** manages the public homepage through persisted D1 data:
-
-- Ranked “Popular right now” services; row order controls first, second, and third position.
-- Testimonials, including quote, customer label, rating, and display order.
-- Membership cards, including name, pay amount, service credit, validity, benefits, colour, order, and “most popular” state.
-
-The public homepage reads this content from the same server-side store on every request. The read-only API is `GET /api/site-content`; `PUT /api/admin/content` requires a live OWNER/ADMIN backend bearer session and also creates an audited content revision. The private Site access policy remains a second protection layer.
-
-`CONTENT_API_URL` accepts an optional external content endpoint. When configured, reads and writes go through that endpoint and mirror into D1; if it is unavailable, the UI falls back to D1. D1 remains the durable website-content store, while operational salon data lives in PostgreSQL.
-
-## Local use
-
-```bash
-npm run dev
-npm run build
+```text
+app/                 Vinext/Next.js Sites frontend
+lib/                 Frontend API and content clients
+backend/apps/api/    Fastify REST API
+backend/apps/worker/ BullMQ background worker
+backend/packages/db/ PostgreSQL/Prisma schema and migrations
+backend/packages/    Shared provider, queue and type packages
 ```
 
-See `docs/MVP_ACCEPTANCE_CHECKLIST.md` for the brief-to-build verification checklist.
+## Run the complete platform locally
+
+Requirements: Node.js 22+, Docker Desktop and Corepack.
+
+```bash
+npm run dev:stack
+```
+
+The first run installs dependencies, starts PostgreSQL/Redis/WAHA, applies migrations, seeds the local salon, and runs:
+
+- Website: http://localhost:3000
+- Admin: http://localhost:3000/admin
+- Customer portal: http://localhost:3000/customer
+- Staff portal: http://localhost:3000/staff
+- API health: http://localhost:4100/health
+- Local WAHA service: http://localhost:3005
+
+Local owner login: `owner@cutzbangs.local` / `changeme123`. Change every default before any public deployment.
+
+## Validate
+
+```bash
+npm run build:all
+npm run test:backend
+```
+
+Production setup, credentials and VPS deployment are documented in `backend/DEPLOYMENT.md` and `backend/CREDENTIALS.md`. Real SMTP, official WhatsApp and object-storage delivery require the salon's provider credentials. The unofficial WhatsApp connector requires a one-time Linked Devices QR scan and can never be guaranteed against account restrictions.

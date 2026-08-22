@@ -1,0 +1,410 @@
+import { FastifyInstance } from "fastify";
+import { ChannelType } from "@prisma/client";
+import { z } from "zod";
+import { prisma } from "@cutz/db";
+import { providers } from "@cutz/providers";
+import { authorize } from "../../plugins/auth.js";
+import { audit } from "../../lib/audit.js";
+import { applyProviderSettings, officialWebhookVerifyToken, publicProviderSettings } from "../provider-config/config.js";
+
+const STAFF = ["OWNER", "ADMIN", "MANAGER", "RECEPTION"] as const;
+const WHATSAPP_CHANNELS = ["WHATSAPP_OFFICIAL", "WHATSAPP_UNOFFICIAL"] as const;
+
+async function ensureChannels() {
+  await Promise.all([
+    prisma.channel.upsert({
+      where: { id: "channel-wa-official" },
+      create: { id: "channel-wa-official", type: "WHATSAPP_OFFICIAL", label: "WhatsApp Official" },
+      update: {},
+    }),
+    prisma.channel.upsert({
+      where: { id: "channel-wa-unofficial" },
+      create: { id: "channel-wa-unofficial", type: "WHATSAPP_UNOFFICIAL", label: "WhatsApp Unofficial" },
+      update: {},
+    }),
+    prisma.channel.upsert({
+      where: { id: "channel-email" },
+      create: { id: "channel-email", type: "EMAIL", label: "Email" },
+      update: {},
+    }),
+  ]);
+}
+
+const stringHeaders = (headers: Record<string, string | string[] | undefined>) =>
+  Object.fromEntries(
+    Object.entries(headers).flatMap(([key, value]) =>
+      typeof value === "string" ? [[key.toLowerCase(), value]] : [],
+    ),
+  );
+
+function inboundContent(message: any) {
+  const type = String(message.type ?? (message.text ? "text" : "unknown"));
+  const media = message[type] as { id?: string; mime_type?: string; caption?: string } | undefined;
+  const location = message.location as { latitude?: number; longitude?: number; name?: string; address?: string } | undefined;
+  const body =
+    message.text?.body ??
+    media?.caption ??
+    (location?.latitude != null && location.longitude != null
+      ? `Location: ${location.latitude},${location.longitude}${location.name ? ` · ${location.name}` : ""}`
+      : "");
+  return {
+    body,
+    mediaType: ["image", "document", "video", "audio"].includes(type) ? type : undefined,
+    attachment: media?.id ? { url: `whatsapp-media://${media.id}`, mimeType: media.mime_type } : undefined,
+  };
+}
+
+async function markCampaignDelivery(externalId: string, rawStatus: string) {
+  if (!externalId) return;
+  const normalized = rawStatus.toLowerCase();
+  const read = normalized.includes("read") || normalized.includes("played");
+  const delivered = read || normalized.includes("deliver");
+  const failed = normalized.includes("fail");
+  await prisma.campaignRecipient.updateMany({
+    where: { externalId },
+    data: {
+      status: failed ? "failed" : read ? "read" : delivered ? "delivered" : "sent",
+      ...(delivered ? { deliveredAt: new Date() } : {}),
+      ...(read ? { deliveredAt: new Date(), readAt: new Date() } : {}),
+      ...(failed ? { error: rawStatus.slice(0, 500) } : {}),
+    },
+  });
+}
+
+async function markLatestCampaignReply(customerId: string | undefined) {
+  if (!customerId) return;
+  const recipient = await prisma.campaignRecipient.findFirst({
+    where: { customerId, sentAt: { gte: new Date(Date.now() - 30 * 86_400_000) }, repliedAt: null },
+    orderBy: { sentAt: "desc" },
+    select: { id: true },
+  });
+  if (recipient) await prisma.campaignRecipient.update({ where: { id: recipient.id }, data: { repliedAt: new Date() } });
+}
+
+export default async function inboxRoutes(app: FastifyInstance) {
+  app.get("/channels", { preHandler: authorize(...STAFF) }, async () => {
+    await ensureChannels();
+    return prisma.channel.findMany({ orderBy: { label: "asc" }, include: { _count: { select: { conversations: true, templates: true } } } });
+  });
+
+  app.patch("/channels/:type", { preHandler: authorize("OWNER", "ADMIN") }, async (req, reply) => {
+    const { type } = z.object({ type: z.enum(["WHATSAPP_OFFICIAL", "WHATSAPP_UNOFFICIAL", "EMAIL", "SMS"]) }).parse(req.params);
+    const body = z.object({ isActive: z.boolean(), label: z.string().trim().min(2).optional() }).parse(req.body);
+    await ensureChannels();
+    const channel = await prisma.channel.findFirst({ where: { type } });
+    if (!channel) return reply.code(404).send({ error: "channel_not_found" });
+    const updated = await prisma.channel.update({ where: { id: channel.id }, data: body });
+    await audit("channel.update", "Channel", channel.id, { actorUserId: req.user?.id, before: channel, after: body, ip: req.ip });
+    return updated;
+  });
+
+  app.get("/integrations/whatsapp/status", { preHandler: authorize(...STAFF) }, async (req) => {
+    await ensureChannels();
+    const branchId = (req.query as Record<string, string>).branchId ?? req.user?.branchId ?? "main";
+    await applyProviderSettings(branchId);
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const [official, unofficial, channels, settings, deliveryRows] = await Promise.all([
+      providers.whatsapp("WHATSAPP_OFFICIAL").health?.(),
+      providers.whatsapp("WHATSAPP_UNOFFICIAL").health?.(),
+      prisma.channel.findMany({ where: { type: { in: [...WHATSAPP_CHANNELS] } } }),
+      publicProviderSettings(branchId),
+      prisma.campaignRecipient.findMany({
+        where: { campaign: { branchId, channel: "WHATSAPP_UNOFFICIAL" }, sentAt: { gte: since } },
+        select: { status: true },
+      }),
+    ]);
+    const failed = deliveryRows.filter((row) => row.status === "failed").length;
+    const completed = deliveryRows.filter((row) => ["sent", "delivered", "failed"].includes(row.status)).length;
+    const failureRate = completed ? Math.round((failed / completed) * 100) : 0;
+    const guardrails = settings.whatsappUnofficial;
+    const score = Math.min(100, 50
+      + (unofficial?.connected ? 0 : 15)
+      + (guardrails.intervalSeconds < 90 ? 8 : 0)
+      + (guardrails.dailyCap > 75 ? 10 : 0)
+      + (failureRate > 10 ? 12 : 0)
+      + (completed === 0 ? 5 : 0));
+    const risk = {
+      score,
+      label: score >= 85 ? "critical" : score >= 65 ? "high" : "moderate",
+      heuristic: true,
+      failureRate24h: failureRate,
+      sent24h: completed - failed,
+      failed24h: failed,
+      safeguards: {
+        consentRequired: true,
+        optOutHonoured: true,
+        intervalSeconds: guardrails.intervalSeconds,
+        dailyCap: guardrails.dailyCap,
+        deliveryWindow: `${String(guardrails.windowStartHour).padStart(2, "0")}:00–${String(guardrails.windowEndHour).padStart(2, "0")}:00`,
+      },
+    };
+    return {
+      official: { ...official, active: channels.find((channel) => channel.type === "WHATSAPP_OFFICIAL")?.isActive ?? false },
+      unofficial: { ...unofficial, active: channels.find((channel) => channel.type === "WHATSAPP_UNOFFICIAL")?.isActive ?? false, risk },
+    };
+  });
+
+  app.post("/integrations/whatsapp/test", { preHandler: authorize("OWNER", "ADMIN") }, async (req, reply) => {
+    const body = z.object({ channel: z.enum(WHATSAPP_CHANNELS), to: z.string().min(8), message: z.string().min(1) }).parse(req.body);
+    await applyProviderSettings("main");
+    const result = await providers.whatsapp(body.channel).send({ to: body.to, body: body.message });
+    if (result.status === "failed") return reply.code(422).send(result);
+    return result;
+  });
+
+  app.post("/integrations/whatsapp/templates/sync", { preHandler: authorize("OWNER", "ADMIN") }, async (req) => {
+    await ensureChannels();
+    await applyProviderSettings("main");
+    const channel = await prisma.channel.findFirstOrThrow({ where: { type: "WHATSAPP_OFFICIAL" } });
+    const remote = await providers.whatsapp("WHATSAPP_OFFICIAL").listTemplates?.() ?? [];
+    for (const template of remote) {
+      const existing = await prisma.template.findFirst({ where: { channelId: channel.id, name: template.name, language: template.language } });
+      if (existing) {
+        await prisma.template.update({ where: { id: existing.id }, data: { status: template.status, body: template.body } });
+      } else {
+        await prisma.template.create({ data: { channelId: channel.id, ...template } });
+      }
+    }
+    return { synced: remote.length, templates: remote };
+  });
+
+  app.get("/inbox", { preHandler: authorize(...STAFF) }, async (req) => {
+    const { unread } = req.query as Record<string, string>;
+    const scopedBranch = ["OWNER", "ADMIN"].includes(req.user!.role) ? undefined : req.user!.branchId ?? "__none__";
+    return prisma.conversation.findMany({
+      where: {
+        ...(unread === "true" ? { unread: true } : {}),
+        ...(scopedBranch ? { customer: { is: { branchId: scopedBranch } } } : {}),
+      },
+      orderBy: { lastMessageAt: "desc" },
+      take: 100,
+      include: { customer: { select: { id: true, name: true, phone: true } }, channel: true },
+    });
+  });
+
+  app.post("/inbox", { preHandler: authorize(...STAFF) }, async (req, reply) => {
+    const body = z.object({ customerId: z.string(), channel: z.enum(WHATSAPP_CHANNELS) }).parse(req.body);
+    await ensureChannels();
+    const [customer, channel] = await Promise.all([
+      prisma.customer.findUnique({ where: { id: body.customerId } }),
+      prisma.channel.findFirst({ where: { type: body.channel } }),
+    ]);
+    if (!customer) return reply.code(404).send({ error: "customer_not_found" });
+    if (!channel) return reply.code(404).send({ error: "channel_not_found" });
+    if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user?.branchId !== customer.branchId) {
+      return reply.code(403).send({ error: "forbidden" });
+    }
+    const existing = await prisma.conversation.findFirst({ where: { customerId: customer.id, channelId: channel.id } });
+    if (existing) return existing;
+    return reply.code(201).send(await prisma.conversation.create({
+      data: { customerId: customer.id, channelId: channel.id, assignedTo: req.user?.id, unread: false },
+      include: { customer: true, channel: true },
+    }));
+  });
+
+  app.get("/inbox/:id", { preHandler: authorize(...STAFF) }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const conversation = await prisma.conversation.findUnique({
+      where: { id },
+      include: { messages: { orderBy: { createdAt: "asc" }, include: { attachments: true } }, customer: true, channel: true },
+    });
+    if (!conversation) return reply.code(404).send({ error: "not_found" });
+    if (!["OWNER", "ADMIN"].includes(req.user!.role) && conversation.customer?.branchId !== req.user?.branchId) {
+      return reply.code(403).send({ error: "forbidden" });
+    }
+    await prisma.conversation.update({ where: { id }, data: { unread: false } });
+    return conversation;
+  });
+
+  app.patch("/inbox/:id", { preHandler: authorize(...STAFF) }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z.object({ assignedTo: z.string().nullable().optional(), tags: z.array(z.string()).optional(), unread: z.boolean().optional() }).parse(req.body);
+    const existing = await prisma.conversation.findUnique({ where: { id }, include: { customer: { select: { branchId: true } } } });
+    if (!existing) return reply.code(404).send({ error: "not_found" });
+    if (!["OWNER", "ADMIN"].includes(req.user!.role) && existing.customer?.branchId !== req.user?.branchId) {
+      return reply.code(403).send({ error: "forbidden" });
+    }
+    return prisma.conversation.update({ where: { id }, data: body });
+  });
+
+  app.post("/inbox/:id/messages", { preHandler: authorize(...STAFF) }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z.object({
+      body: z.string().default(""),
+      internal: z.boolean().default(false),
+      templateName: z.string().optional(),
+      templateLanguage: z.string().optional(),
+      mediaUrl: z.string().url().optional(),
+      mediaType: z.enum(["image", "document", "video", "audio"]).optional(),
+      location: z.object({ latitude: z.number(), longitude: z.number(), name: z.string().optional(), address: z.string().optional() }).optional(),
+    }).refine((value) => value.internal ? value.body.length > 0 : Boolean(value.body || value.templateName || value.mediaUrl || value.location), "message_content_required").parse(req.body);
+    const conversation = await prisma.conversation.findUnique({ where: { id }, include: { customer: true, channel: true } });
+    if (!conversation) return reply.code(404).send({ error: "not_found" });
+    if (!["OWNER", "ADMIN"].includes(req.user!.role) && conversation.customer?.branchId !== req.user?.branchId) {
+      return reply.code(403).send({ error: "forbidden" });
+    }
+
+    let externalId: string | undefined;
+    let status = "internal";
+    if (!body.internal) {
+      if (!conversation.customer?.phone || !WHATSAPP_CHANNELS.includes(conversation.channel.type as typeof WHATSAPP_CHANNELS[number])) {
+        return reply.code(422).send({ error: "channel_cannot_send" });
+      }
+      await applyProviderSettings(conversation.customer.branchId);
+      const result = await providers.whatsapp(conversation.channel.type as typeof WHATSAPP_CHANNELS[number]).send({
+        to: conversation.customer.phone,
+        body: body.body,
+        templateName: body.templateName,
+        templateLanguage: body.templateLanguage,
+        mediaUrl: body.mediaUrl,
+        mediaType: body.mediaType,
+        location: body.location,
+      });
+      externalId = result.externalId || undefined;
+      status = result.status;
+      if (result.status === "failed") return reply.code(422).send({ error: result.error ?? "send_failed" });
+    }
+
+    const message = await prisma.message.create({
+      data: {
+        conversationId: id,
+        direction: body.internal ? "internal_note" : "out",
+        body: body.body || body.templateName,
+        mediaType: body.mediaType ?? (body.location ? "location" : undefined),
+        externalId,
+        status,
+        attachments: body.mediaUrl ? { create: { url: body.mediaUrl } } : undefined,
+      },
+      include: { attachments: true },
+    });
+    await prisma.conversation.update({ where: { id }, data: { lastMessageAt: new Date() } });
+    return reply.code(201).send(message);
+  });
+
+  // Official webhook uses a local raw-body parser so normal JSON API routes
+  // remain unaffected while X-Hub-Signature-256 can be verified exactly.
+  app.register(async (webhooks) => {
+    webhooks.removeContentTypeParser("application/json");
+    webhooks.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => {
+      try {
+        done(null, { raw: body as string, json: JSON.parse(body as string) });
+      } catch (error) {
+        done(error as Error);
+      }
+    });
+
+    webhooks.get("/webhooks/whatsapp", async (req, reply) => {
+      const query = req.query as Record<string, string>;
+      const verifyToken = await officialWebhookVerifyToken("main");
+      if (verifyToken && query["hub.mode"] === "subscribe" && query["hub.verify_token"] === verifyToken) {
+        return reply.type("text/plain").send(query["hub.challenge"]);
+      }
+      return reply.code(403).send();
+    });
+
+    webhooks.post("/webhooks/whatsapp", async (req, reply) => {
+      const parsed = req.body as { raw: string; json: any };
+      await applyProviderSettings("main");
+      const ok = providers.whatsapp("WHATSAPP_OFFICIAL").verifyWebhook(stringHeaders(req.headers), parsed?.raw ?? "");
+      if (!ok) return reply.code(401).send({ error: "bad_signature" });
+      await ensureChannels();
+      const channel = await prisma.channel.findFirstOrThrow({ where: { type: "WHATSAPP_OFFICIAL" } });
+      for (const entry of parsed?.json?.entry ?? []) {
+        for (const change of entry.changes ?? []) {
+          for (const status of change.value?.statuses ?? []) {
+            await prisma.message.updateMany({ where: { externalId: status.id }, data: { status: status.status } });
+            await markCampaignDelivery(String(status.id ?? ""), String(status.status ?? "sent"));
+          }
+          for (const message of change.value?.messages ?? []) {
+            const from = String(message.from ?? "");
+            const externalId = String(message.id ?? "");
+            if (!from || !externalId) continue;
+            const customer = await prisma.customer.findFirst({ where: { phone: { endsWith: from.slice(-10) } } });
+            const conversation = await prisma.conversation.upsert({
+              where: { id: `wa-official-${from}` },
+              create: { id: `wa-official-${from}`, channelId: channel.id, customerId: customer?.id, unread: true, lastMessageAt: new Date() },
+              update: { customerId: customer?.id, unread: true, lastMessageAt: new Date() },
+            });
+            const content = inboundContent(message);
+            await prisma.message.create({
+              data: {
+                conversationId: conversation.id,
+                direction: "in",
+                body: content.body,
+                mediaType: content.mediaType,
+                externalId,
+                status: "received",
+                attachments: content.attachment ? { create: content.attachment } : undefined,
+              },
+            }).catch(() => undefined);
+            await markLatestCampaignReply(customer?.id);
+          }
+        }
+      }
+      return reply.send({ received: true });
+    });
+  });
+
+  app.post("/webhooks/whatsapp/unofficial", async (req, reply) => {
+    await applyProviderSettings("main");
+    if (!providers.whatsapp("WHATSAPP_UNOFFICIAL").verifyWebhook(stringHeaders(req.headers), "")) {
+      return reply.code(401).send({ error: "bad_secret" });
+    }
+    const envelope = z.object({
+      event: z.string().optional(),
+      payload: z.record(z.unknown()).optional(),
+      externalId: z.string().optional(),
+      from: z.string().optional(),
+      body: z.string().optional(),
+      mediaType: z.string().optional(),
+      timestamp: z.number().optional(),
+    }).passthrough().parse(req.body);
+    const payload = (envelope.payload ?? envelope) as Record<string, unknown>;
+    if (envelope.event === "session.status") return reply.send({ received: true });
+    if (envelope.event === "message.ack") {
+      const externalId = String(payload.id ?? "");
+      const status = String(payload.ackName ?? "sent").toLowerCase();
+      if (externalId) {
+        await prisma.message.updateMany({ where: { externalId }, data: { status } });
+        await markCampaignDelivery(externalId, status);
+      }
+      return reply.send({ received: true });
+    }
+    if (envelope.event && envelope.event !== "message") return reply.send({ received: true });
+    if (Boolean(payload.fromMe)) return reply.send({ received: true });
+    const from = String(payload.from ?? envelope.from ?? "").split("@")[0].replace(/\D/g, "");
+    const externalId = String(payload.id ?? envelope.externalId ?? "");
+    const messageBody = String(payload.body ?? envelope.body ?? "");
+    const timestamp = Number(payload.timestamp ?? envelope.timestamp ?? 0) || undefined;
+    if (!from || !externalId) return reply.code(400).send({ error: "invalid_waha_message" });
+    await ensureChannels();
+    const channel = await prisma.channel.findFirstOrThrow({ where: { type: "WHATSAPP_UNOFFICIAL" } });
+    const customer = await prisma.customer.findFirst({ where: { phone: { endsWith: from.slice(-10) } } });
+    const optOut = /^(stop|unsubscribe|cancel|opt\s*out|band|बंद)$/i.test(messageBody.trim());
+    if (customer && optOut) {
+      await prisma.customer.update({
+        where: { id: customer.id },
+        data: { waConsent: false, tags: Array.from(new Set([...customer.tags, "wa-opt-out"])) },
+      });
+      await audit("customer.whatsapp_opt_out", "Customer", customer.id, { after: { waConsent: false, source: "incoming_whatsapp" } });
+    }
+    const conversation = await prisma.conversation.upsert({
+      where: { id: `wa-unofficial-${from}` },
+      create: { id: `wa-unofficial-${from}`, channelId: channel.id, customerId: customer?.id, unread: true, lastMessageAt: new Date() },
+      update: { customerId: customer?.id, unread: true, lastMessageAt: new Date() },
+    });
+    await prisma.message.create({
+      data: {
+        conversationId: conversation.id,
+        direction: "in",
+        body: messageBody,
+        mediaType: Boolean(payload.hasMedia) ? "media" : envelope.mediaType,
+        externalId,
+        status: "received",
+        createdAt: timestamp ? new Date(timestamp * 1000) : undefined,
+      },
+    }).catch(() => undefined);
+    await markLatestCampaignReply(customer?.id);
+    return reply.send({ received: true });
+  });
+}

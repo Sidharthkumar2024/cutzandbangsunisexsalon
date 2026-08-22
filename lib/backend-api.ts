@@ -288,6 +288,14 @@ export type BackendExpense = {
   vendorName?: string | null;
   occurredAt: string;
 };
+export type BackendNotification = {
+  id: string;
+  userId?: string | null;
+  title: string;
+  body?: string | null;
+  readAt?: string | null;
+  createdAt: string;
+};
 export type BackendCustomerHistoryEntry = {
   id: string;
   visitedAt: string;
@@ -610,6 +618,7 @@ export type BackendSnapshot = {
   currentCash: BackendCashSession | null;
   expenses: BackendExpense[];
   teamAccounts: BackendStaff[];
+  notifications: BackendNotification[];
 };
 
 const emptySnapshot: BackendSnapshot = {
@@ -643,6 +652,7 @@ const emptySnapshot: BackendSnapshot = {
   currentCash: null,
   expenses: [],
   teamAccounts: [],
+  notifications: [],
 };
 
 async function request<T>(
@@ -741,6 +751,7 @@ export const backendApi = {
       ["/cash-sessions/current?branchId=main", "currentCash"],
       ["/expenses?branchId=main&take=100", "expenses"],
       ["/team-accounts", "teamAccounts"],
+      ["/notifications", "notifications"],
     ] as const;
     const [user, ...results] = await Promise.all([
       request<BackendUser>("/auth/me", {}, token),
@@ -1227,8 +1238,24 @@ export const backendApi = {
     ),
   customerOverview: (token: string) =>
     request<CustomerPortalOverview>("/portal/customer/overview", {}, token),
-  staffMyDay: (token: string) =>
-    request<StaffPortalDay>("/portal/staff/my-day", {}, token),
+  requestCustomerReschedule: (token: string, appointmentId: string, note?: string) =>
+    request<{ requested: boolean; eventId: string }>(
+      `/portal/customer/appointments/${encodeURIComponent(appointmentId)}/reschedule-request`,
+      { method: "POST", body: JSON.stringify({ note }) },
+      token,
+    ),
+  markNotificationRead: (token: string, notificationId: string) =>
+    request<BackendNotification>(
+      `/notifications/${encodeURIComponent(notificationId)}/read`,
+      { method: "POST", body: "{}" },
+      token,
+    ),
+  staffMyDay: (token: string, from?: string, to?: string) =>
+    request<StaffPortalDay>(
+      `/portal/staff/my-day${from && to ? `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}` : ""}`,
+      {},
+      token,
+    ),
   updateAppointmentStatus: (
     token: string,
     appointmentId: string,

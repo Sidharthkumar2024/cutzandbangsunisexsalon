@@ -1,0 +1,29 @@
+{
+  "name": "@cutz/providers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.0",
+    "@aws-sdk/client-s3": "^3.660.0",
+    "@aws-sdk/s3-request-presigner": "^3.660.0",
+    "@cutz/types": "workspace:*",
+    "nodemailer": "^6.9.0"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^6.4.0",
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}
