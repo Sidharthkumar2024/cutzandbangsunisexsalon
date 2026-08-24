@@ -63,4 +63,4 @@ fi
 
 echo "Cutz & Bangs is ready: website http://localhost:3000 · API http://localhost:4100/health · WAHA http://localhost:3005"
 export PORT=3000
-npm --prefix "$PROJECT_DIR" run dev
+npm --prefix "$PROJECT_DIR" run dev:web

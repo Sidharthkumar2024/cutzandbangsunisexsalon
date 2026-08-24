@@ -6,7 +6,8 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "vinext dev",
+    "dev": "bash scripts/dev-stack.sh",
+    "dev:web": "vinext dev",
     "dev:stack": "bash scripts/dev-stack.sh",
     "build": "vinext build",
     "build:all": "npm run build && corepack pnpm --dir backend db:generate && corepack pnpm --dir backend build",

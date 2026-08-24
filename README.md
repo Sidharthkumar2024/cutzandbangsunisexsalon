@@ -39,8 +39,12 @@ prototype is retained only as reference and is excluded from production builds.
 Requirements: Node.js 22+, Docker Desktop and Corepack.
 
 ```bash
-npm run dev:stack
+npm run dev
 ```
+
+`npm run dev:stack` is retained as an alias. Both commands start the complete
+stack; `npm run dev:web` is only for frontend work when the API is already
+running separately.
 
 The first run installs dependencies, starts PostgreSQL/Redis/WAHA, applies migrations, seeds the local salon, and runs:
 
@@ -51,7 +55,10 @@ The first run installs dependencies, starts PostgreSQL/Redis/WAHA, applies migra
 - API health: http://localhost:4100/health
 - Local WAHA service: http://localhost:3005
 
-Local owner login: `owner@cutzbangs.local` / `changeme123`. Change every default before any public deployment.
+The local owner is provisioned from `SEED_OWNER_EMAIL` and
+`SEED_OWNER_PASSWORD` in `backend/.env.local`. Placeholder
+`@cutzbangs.local` accounts are intentionally rejected. Never commit the
+owner password, and remove the seed password after the first production login.
 
 ## Validate
 

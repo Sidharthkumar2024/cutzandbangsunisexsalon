@@ -9,6 +9,8 @@ import { backendApi } from "../../../lib/backend-api";
 import { SESSION_MARKER } from "../../../lib/use-backend-integration";
 
 const ADMIN_ROLES = new Set(["OWNER", "ADMIN", "MANAGER", "RECEPTION"]);
+const CURRENT_OWNER_EMAIL = "admin@cutzandbangs.in";
+const LEGACY_ADMIN_EMAILS = new Set(["owner@cutzbangs.local", "admin@cutzbangs.local"]);
 
 function readableError(value: string) {
   const messages: Record<string, string> = {
@@ -48,9 +50,17 @@ export default function AdminLoginPage() {
   const signIn = async () => {
     setBusy(true);
     setMessage("");
+    const normalizedEmail = email.trim().toLowerCase();
+    if (LEGACY_ADMIN_EMAILS.has(normalizedEmail)) {
+      setEmail("");
+      setPassword("");
+      setMessage(`The old demo login was removed. Enter ${CURRENT_OWNER_EMAIL} and the current owner password.`);
+      setBusy(false);
+      return;
+    }
     try {
       const loginOnce = () => backendApi.login(
-        email.trim(),
+        normalizedEmail,
         password,
         twoFactorRequired
           ? recoveryMode
@@ -107,7 +117,7 @@ export default function AdminLoginPage() {
         </p>
         {!twoFactorRequired ? (
           <>
-            <label>Email<input type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@cutzandbangs.com" required /></label>
+            <label>Email<input type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} placeholder={CURRENT_OWNER_EMAIL} required /></label>
             <label>Password<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Your password" required /></label>
             <Link className="auth-mode-link auth-link-left" href="/forgot-password">Forgot password?</Link>
           </>

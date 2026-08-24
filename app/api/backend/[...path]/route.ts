@@ -1,4 +1,6 @@
-const backendBase = () => (process.env.BACKEND_API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? '').replace(/\/$/, '');
+const backendBase = () => (process.env.BACKEND_API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? '')
+  .replace(/\/+$/, '')
+  .replace(/\/api\/v1$/i, '');
 const isProduction = process.env.NODE_ENV === 'production';
 const sessionCookieName = isProduction ? '__Host-cutz_session' : 'cutz_session';
 const sessionMarker = 'cookie-session';
@@ -26,9 +28,12 @@ function sessionCookie(value: string, maxAge: number) {
 async function forward(request: Request, context: { params: Promise<{ path: string[] }> }) {
   const { path } = await context.params;
   const incoming = new URL(request.url);
+  const encodedPath = path.map(encodeURIComponent).join('/');
   const backendPath = path.length === 1 && path[0] === 'health'
     ? '/health'
-    : `/api/v1/${path.map(encodeURIComponent).join('/')}`;
+    : path[0] === 'api' && path[1] === 'v1'
+      ? `/${encodedPath}`
+      : `/api/v1/${encodedPath}`;
   const isLogout = request.method === 'POST' && backendPath === '/api/v1/auth/logout';
   const base = backendBase();
   if (!base) {
