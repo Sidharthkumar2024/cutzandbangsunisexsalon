@@ -39,6 +39,10 @@ const tableStatements = [
     is_active INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS site_content_migrations (
+    id TEXT PRIMARY KEY NOT NULL,
+    applied_at TEXT NOT NULL
+  )`,
   'CREATE INDEX IF NOT EXISTS idx_site_services_active_order ON site_services(is_active, display_order)',
   'CREATE INDEX IF NOT EXISTS idx_testimonials_active_order ON testimonials(is_active, display_order)',
   'CREATE INDEX IF NOT EXISTS idx_membership_plans_active_order ON membership_plans(is_active, display_order)',
@@ -50,6 +54,18 @@ function database() {
 
 async function ensureSchema(db: D1Database) {
   await db.batch(tableStatements.map(statement => db.prepare(statement)));
+}
+
+async function migrateLegacySeedContent(db: D1Database) {
+  const migrationId = '2026-08-24-remove-fictional-content';
+  const applied = await db.prepare('SELECT id FROM site_content_migrations WHERE id = ?').bind(migrationId).first();
+  if (applied) return;
+  const now = new Date().toISOString();
+  await db.batch([
+    db.prepare("DELETE FROM testimonials WHERE id IN ('aanya', 'kabir', 'diya')"),
+    db.prepare("DELETE FROM membership_plans WHERE id IN ('essential', 'prive', 'signature')"),
+    db.prepare('INSERT INTO site_content_migrations (id, applied_at) VALUES (?, ?)').bind(migrationId, now),
+  ]);
 }
 
 async function seedDefaults(db: D1Database) {
@@ -91,6 +107,7 @@ export async function getSiteContent(): Promise<SiteContent> {
   try {
     const db = database();
     await ensureSchema(db);
+    await migrateLegacySeedContent(db);
     await seedDefaults(db);
     const [services, testimonials, memberships] = await db.batch([
       db.prepare('SELECT * FROM site_services WHERE is_active = 1 ORDER BY display_order ASC, name ASC'),
@@ -111,6 +128,7 @@ export async function getSiteContent(): Promise<SiteContent> {
 export async function replaceSiteContent(content: SiteContent): Promise<SiteContent> {
   const db = database();
   await ensureSchema(db);
+  await migrateLegacySeedContent(db);
   const now = new Date().toISOString();
   const statements: D1PreparedStatement[] = [
     db.prepare('DELETE FROM site_services'),

@@ -18,10 +18,7 @@ const fallbackServices: ServiceOption[] = [
     durationMin: 60,
     priceMinor: 79900,
     taxRateBps: 1800,
-    serviceStaff: [
-      { staff: { id: "riya", displayName: "Riya Sen" } },
-      { staff: { id: "arjun", displayName: "Arjun Khanna" } },
-    ],
+    serviceStaff: [{ staff: { id: "faizan", displayName: "Faizan" } }],
   },
   {
     id: "global-colour",
@@ -30,7 +27,7 @@ const fallbackServices: ServiceOption[] = [
     durationMin: 120,
     priceMinor: 249900,
     taxRateBps: 1800,
-    serviceStaff: [{ staff: { id: "riya", displayName: "Riya Sen" } }],
+    serviceStaff: [{ staff: { id: "faizan", displayName: "Faizan" } }],
   },
   {
     id: "hair-spa",
@@ -39,10 +36,7 @@ const fallbackServices: ServiceOption[] = [
     durationMin: 75,
     priceMinor: 129900,
     taxRateBps: 1800,
-    serviceStaff: [
-      { staff: { id: "riya", displayName: "Riya Sen" } },
-      { staff: { id: "arjun", displayName: "Arjun Khanna" } },
-    ],
+    serviceStaff: [{ staff: { id: "faizan", displayName: "Faizan" } }],
   },
   {
     id: "skin-reset",
@@ -51,7 +45,7 @@ const fallbackServices: ServiceOption[] = [
     durationMin: 75,
     priceMinor: 149900,
     taxRateBps: 1800,
-    serviceStaff: [{ staff: { id: "meher", displayName: "Meher Malik" } }],
+    serviceStaff: [{ staff: { id: "pooja", displayName: "Pooja" } }],
   },
   {
     id: "beard-sculpt",
@@ -60,7 +54,7 @@ const fallbackServices: ServiceOption[] = [
     durationMin: 35,
     priceMinor: 49900,
     taxRateBps: 1800,
-    serviceStaff: [{ staff: { id: "arjun", displayName: "Arjun Khanna" } }],
+    serviceStaff: [{ staff: { id: "farman", displayName: "Farman" } }],
   },
 ];
 

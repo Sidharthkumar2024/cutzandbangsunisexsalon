@@ -9,7 +9,7 @@ const money = (minor: number) =>
   `₹${Math.round(minor / 100).toLocaleString("en-IN")}`;
 
 export default function StaffPortal() {
-  const [email, setEmail] = useState("riya@cutzbangs.local");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [token, setToken] = useState("");
   const [data, setData] = useState<StaffPortalDay | null>(null);
@@ -137,14 +137,17 @@ export default function StaffPortal() {
             Email
             <input
               type="email"
+              autoComplete="username"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
+              placeholder="Your staff email"
             />
           </label>
           <label>
             Password
             <input
               type="password"
+              autoComplete="current-password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               placeholder="Staff account password"

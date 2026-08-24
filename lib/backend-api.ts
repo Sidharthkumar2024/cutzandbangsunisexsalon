@@ -61,6 +61,7 @@ export type BackendCustomer = {
   name: string;
   phone?: string | null;
   email?: string | null;
+  avatarUrl?: string | null;
   source?: string | null;
   referralName?: string | null;
   referralPhone?: string | null;
@@ -157,7 +158,11 @@ export type BackendPayrollRow = {
   baseSalaryMinor?: number;
   lateDays?: number;
   halfDays?: number;
+  excessiveLateHalfDays?: number;
+  recurringLateHalfDays?: number;
+  shortShiftHalfDays?: number;
   lateDeductionMinor?: number;
+  halfDayDeductionMinor?: number;
   overtimePaid?: boolean;
   estimatedPayMinor?: number;
 };
@@ -214,7 +219,7 @@ export type BackendConversation = {
   id: string;
   unread: boolean;
   lastMessageAt: string;
-  customer?: { id: string; name: string; phone?: string | null } | null;
+  customer?: { id: string; name: string; phone?: string | null; avatarUrl?: string | null } | null;
   channel: { type: string };
 };
 export type BackendChannel = {
@@ -224,8 +229,22 @@ export type BackendChannel = {
   isActive: boolean;
   _count?: { conversations: number; templates: number };
 };
+export type BackendWhatsAppTemplate = {
+  id: string;
+  name: string;
+  language: string;
+  status: string;
+  body: string;
+  createdAt: string;
+};
 export type BackendWhatsAppStatus = {
-  official: { configured: boolean; connected: boolean; active: boolean; detail?: string };
+  official: {
+    configured: boolean;
+    connected: boolean;
+    active: boolean;
+    detail?: string;
+    templates?: BackendWhatsAppTemplate[];
+  };
   unofficial: {
     configured: boolean;
     connected: boolean;
@@ -366,6 +385,48 @@ export type BackendExpense = {
   vendorName?: string | null;
   occurredAt: string;
 };
+export type BackendHistoricalDailySummary = {
+  id: string;
+  branchId: string;
+  businessDate: string;
+  openingCashMinor?: number | null;
+  cashSalesMinor?: number | null;
+  upiSalesMinor?: number | null;
+  cardSalesMinor?: number | null;
+  totalSalesMinor?: number | null;
+  availableCashMinor?: number | null;
+  cashAdjustmentMinor?: number | null;
+  reviewRequired: boolean;
+  reviewNote?: string | null;
+  notes?: string | null;
+  source: string;
+  sourceRef?: string | null;
+  expenses: BackendExpense[];
+};
+export type BackendCustomerRetentionMatrix = {
+  generatedAt: string;
+  branchId: string;
+  timezone: string;
+  from: string;
+  to: string;
+  bucket: "day" | "week" | "month";
+  inactiveDays: number;
+  columns: string[];
+  totals: { customers: number; visits: number; revenueMinor: number; statuses: Record<string, number> };
+  rows: Array<{
+    customerId: string;
+    name: string;
+    phone?: string | null;
+    createdAt: string;
+    firstVisitAt?: string | null;
+    lastVisitAt?: string | null;
+    lifetimeVisits: number;
+    rangeVisits: number;
+    rangeRevenueMinor: number;
+    status: "NEVER_VISITED" | "NEW" | "REPEAT" | "AT_RISK" | "LAPSED";
+    buckets: Record<string, number>;
+  }>;
+};
 export type BackendNotification = {
   id: string;
   userId?: string | null;
@@ -397,6 +458,9 @@ export type BackendCategory = {
   id: string;
   name: string;
   gender?: string | null;
+  parentId?: string | null;
+  parent?: { id: string; name: string; gender?: string | null; parentId?: string | null; sortOrder: number } | null;
+  children?: Array<{ id: string; name: string; gender?: string | null; parentId?: string | null; sortOrder: number }>;
   sortOrder: number;
   services: BackendService[];
 };
@@ -621,6 +685,8 @@ export type PublicCatalog = Array<{
   id: string;
   name: string;
   gender?: string | null;
+  parentId?: string | null;
+  parent?: { id: string; name: string; gender?: string | null } | null;
   services: Array<BackendService>;
 }>;
 export type CustomerPortalOverview = BackendCustomer & {
@@ -903,6 +969,8 @@ export const backendApi = {
     request<BackendAppointment[]>(`/appointments?branchId=${encodeURIComponent(branchId)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, {}, token),
   rangeReport: (token: string, from: string, to: string, branchId = "main", filters?: { staffId?: string; serviceId?: string }) =>
     request<BackendRangeReport>(`/reports/range?branchId=${encodeURIComponent(branchId)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${filters?.staffId ? `&staffId=${encodeURIComponent(filters.staffId)}` : ""}${filters?.serviceId ? `&serviceId=${encodeURIComponent(filters.serviceId)}` : ""}`, {}, token),
+  customerRetentionMatrix: (token: string, from: string, to: string, branchId = "main", bucket: "day" | "week" | "month" = "month", inactiveDays = 60) =>
+    request<BackendCustomerRetentionMatrix>(`/reports/customer-retention-matrix?branchId=${encodeURIComponent(branchId)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&bucket=${bucket}&inactiveDays=${inactiveDays}`, {}, token),
   createCustomer: (
     token: string,
     payload: {
@@ -967,7 +1035,7 @@ export const backendApi = {
     ),
   createServiceCategory: (
     token: string,
-    payload: { name: string; gender?: "Male" | "Female" | "Unisex" | "Kids - Unisex" | "Boys" | "Girls" | "Baby Boy" | "Baby Girl" | null; sortOrder?: number },
+    payload: { name: string; gender?: "Male" | "Female" | "Unisex" | "Kids - Unisex" | "Boys" | "Girls" | "Baby Boy" | "Baby Girl" | null; parentId?: string | null; sortOrder?: number },
   ) =>
     request<BackendCategory>(
       "/service-categories",
@@ -1014,6 +1082,8 @@ export const backendApi = {
       { method: "POST", body: JSON.stringify(payload) },
       token,
     ),
+  importStaff: (token: string, payload: { branchId: string; csv?: string; rows?: Array<Record<string, unknown>> }) =>
+    request<{ imported: number; created: number; updated: number; rows: Array<{ id: string; displayName: string; operation: "created" | "updated" }> }>("/staff/import", { method: "POST", body: JSON.stringify(payload) }, token),
   setStaffAccount: (token: string, staffId: string, payload: { email: string; password: string; role: "MANAGER" | "RECEPTION" | "STAFF"; commissionRate?: number; permissionKeys?: string[] }) =>
     request<BackendUser>(
       `/staff/${encodeURIComponent(staffId)}/account`,
@@ -1122,7 +1192,13 @@ export const backendApi = {
   sendConversationMessage: (
     token: string,
     conversationId: string,
-    payload: { body: string; internal: boolean },
+    payload: {
+      body?: string;
+      internal: boolean;
+      templateName?: string;
+      templateLanguage?: string;
+      mediaUrl?: string;
+    },
   ) =>
     request<BackendMessage>(
       `/inbox/${conversationId}/messages`,
@@ -1262,10 +1338,14 @@ export const backendApi = {
     ),
   openCashSession: (token: string, payload: { branchId: string; openingCashMinor: number; openingBreakdown: CashBreakdown; openingNote?: string }) =>
     request<BackendCashSession>("/cash-sessions/open", { method: "POST", body: JSON.stringify(payload) }, token),
-  closeCashSession: (token: string, cashSessionId: string, payload: { closingCashMinor: number; closingBreakdown: CashBreakdown; closingNote?: string }) =>
+  closeCashSession: (token: string, cashSessionId: string, payload: { closingCashMinor: number; closingBreakdown?: CashBreakdown | null; closingNote?: string }) =>
     request<BackendCashSession>(`/cash-sessions/${encodeURIComponent(cashSessionId)}/close`, { method: "POST", body: JSON.stringify(payload) }, token),
   createExpense: (token: string, payload: { branchId: string; category: string; description: string; amountMinor: number; paymentMethod: "CASH" | "UPI" | "CARD"; vendorName?: string; occurredAt?: string }) =>
     request<BackendExpense>("/expenses", { method: "POST", body: JSON.stringify(payload) }, token),
+  importHistoricalRegister: (token: string, payload: { branchId: string; source?: string; csv?: string; dailyCsv?: string; expensesCsv?: string; days?: Array<Record<string, unknown>> }) =>
+    request<{ imported: number; created: number; updated: number; rows: Array<{ businessDate: string; summaryId: string; operation: "created" | "updated"; expensesUpserted: number; warnings: string[] }> }>("/historical-register/import", { method: "POST", body: JSON.stringify(payload) }, token),
+  historicalRegister: (token: string, branchId = "main", from?: string, to?: string) =>
+    request<BackendHistoricalDailySummary[]>(`/historical-register?branchId=${encodeURIComponent(branchId)}${from ? `&from=${encodeURIComponent(from)}` : ""}${to ? `&to=${encodeURIComponent(to)}` : ""}`, {}, token),
   createConversation: (
     token: string,
     payload: { customerId: string; channel: "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL" },

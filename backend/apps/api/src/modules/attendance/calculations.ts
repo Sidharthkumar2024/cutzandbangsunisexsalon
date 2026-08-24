@@ -18,3 +18,35 @@ export function minutesBetween(start: Date | null, end: Date | null) {
 export function commissionMinor(lineTotalMinor: number, commissionRateBps: number) {
   return Math.round(lineTotalMinor * commissionRateBps / 10_000);
 }
+
+/** Stores the actual delay from shift start once the configured grace is crossed. */
+export function lateMinutesForCheckIn(actualMinute: number, shiftStartMinute: number, graceMinutes = 15) {
+  const delay = Math.max(0, actualMinute - shiftStartMinute);
+  return delay > graceMinutes ? delay : 0;
+}
+
+export function attendancePenaltyCounts(
+  attendance: Array<{ checkInAt: Date | null; checkOutAt: Date | null; lateMinutes: number }>,
+  workedDurationHalfDayMinutes: number,
+) {
+  const lateDays = attendance.filter((row) => row.lateMinutes > 0).length;
+  const excessiveLateHalfDays = attendance.filter((row) => row.lateMinutes > 30).length;
+  const ordinaryLateDays = attendance.filter((row) => row.lateMinutes > 0 && row.lateMinutes <= 30).length;
+  const recurringLateHalfDays = Math.floor(ordinaryLateDays / 3);
+  // A group of three ordinary late arrivals is converted to a half-day. Only
+  // the remainder is eligible for an optional per-late monetary deduction.
+  const chargeableLateDays = ordinaryLateDays % 3;
+  const shortShiftHalfDays = attendance.filter((row) => {
+    const workedMinutes = minutesBetween(row.checkInAt, row.checkOutAt);
+    return Boolean(row.checkOutAt) && workedMinutes > 0 && workedMinutes < workedDurationHalfDayMinutes;
+  }).length;
+  return {
+    lateDays,
+    ordinaryLateDays,
+    chargeableLateDays,
+    excessiveLateHalfDays,
+    recurringLateHalfDays,
+    shortShiftHalfDays,
+    halfDays: excessiveLateHalfDays + recurringLateHalfDays + shortShiftHalfDays,
+  };
+}

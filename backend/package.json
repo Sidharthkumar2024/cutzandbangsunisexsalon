@@ -13,6 +13,8 @@
     "dev:worker": "pnpm --filter @cutz/worker dev",
     "test": "pnpm --filter @cutz/api test",
     "build": "pnpm --filter '!@cutz/web' -r build",
-    "db:seed:codex": "pnpm --filter @cutz/db exec tsx prisma/seed-codex.ts"
+    "db:seed:codex": "pnpm --filter @cutz/db exec tsx prisma/seed-codex.ts",
+    "db:scrub:demo": "pnpm --filter @cutz/db exec tsx prisma/scrub-known-demo.ts",
+    "db:import:historical": "pnpm --filter @cutz/api exec tsx src/scripts/import-historical-register.ts"
   }
 }

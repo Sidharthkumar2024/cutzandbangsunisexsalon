@@ -1,5 +1,5 @@
 import { prisma } from "@cutz/db";
-import { appointmentEmail, appointmentWhatsAppText, providers } from "@cutz/providers";
+import { appointmentEmail, appointmentWhatsAppText } from "@cutz/providers";
 import { enqueueEmail } from "@cutz/queue";
 import { applyProviderSettings } from "../modules/provider-config/config.js";
 
@@ -30,11 +30,12 @@ export async function notifyAppointment(appointmentId: string, kind: Appointment
   const waConsent = Boolean(appointment.customer?.waConsent || /WhatsApp consent:\s*yes/iu.test(appointment.notes ?? ""));
   if (!phone || !waConsent) return { email: emailStatus, whatsapp: "skipped" };
   try {
-    await applyProviderSettings(appointment.branchId);
     const channels = await prisma.channel.findMany({ where: { type: { in: ["WHATSAPP_UNOFFICIAL", "WHATSAPP_OFFICIAL"] }, isActive: true } });
     const preferred = channels.find((channel) => channel.type === "WHATSAPP_UNOFFICIAL") ? "WHATSAPP_UNOFFICIAL" : channels.find((channel) => channel.type === "WHATSAPP_OFFICIAL") ? "WHATSAPP_OFFICIAL" : null;
     if (!preferred) return { email: emailStatus, whatsapp: "skipped" };
-    const result = await providers.whatsapp(preferred).send({ to: phone, body: appointmentWhatsAppText({ name, when: appointment.startAt, services, kind }) });
+    const providerContext = await applyProviderSettings(appointment.branchId);
+    const messaging = providerContext.whatsapp(preferred);
+    const result = await messaging.send({ to: phone, body: appointmentWhatsAppText({ name, when: appointment.startAt, services, kind }) });
     return { email: emailStatus, whatsapp: result.status, channel: preferred };
   } catch {
     return { email: emailStatus, whatsapp: "failed" };

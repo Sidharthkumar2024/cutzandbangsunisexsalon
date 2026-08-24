@@ -9,7 +9,11 @@ const STAFF = ["OWNER", "ADMIN", "MANAGER", "RECEPTION", "STAFF"] as const;
 
 export default async function loyaltyRoutes(app: FastifyInstance) {
   app.get("/loyalty/rules", { preHandler: authorize(...STAFF, "CUSTOMER") }, async (req, reply) => {
-    const { branchId } = z.object({ branchId: z.string() }).parse(req.query);
+    const parsed = z.object({ branchId: z.string().optional() }).safeParse(req.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_query", details: parsed.error.flatten().fieldErrors });
+    }
+    const branchId = parsed.data.branchId ?? req.user?.branchId ?? "main";
     if (!["OWNER", "ADMIN", "CUSTOMER"].includes(req.user!.role) && req.user?.branchId !== branchId) {
       return reply.code(403).send({ error: "forbidden" });
     }

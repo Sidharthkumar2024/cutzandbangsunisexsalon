@@ -7,6 +7,7 @@ import type {
   WhatsAppSessionAction,
   WhatsAppSessionState,
 } from "@cutz/types";
+import { validateWahaBaseUrl } from "./waha-url.js";
 
 const digits = (value: string) => value.replace(/\D/g, "");
 
@@ -169,10 +170,14 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
   private webhookSecret: string;
   private session: string;
   private callbackUrl: string;
+  private configError: string | undefined;
 
   constructor(config?: WhatsAppUnofficialConfig) {
     const enabled = config?.enabled !== false;
-    this.baseUrl = (enabled ? config?.baseUrl ?? process.env.WA_UNOFFICIAL_URL ?? "" : "").replace(/\/$/, "");
+    const configuredBaseUrl = enabled ? config?.baseUrl ?? process.env.WA_UNOFFICIAL_URL ?? "" : "";
+    const validatedBaseUrl = configuredBaseUrl ? validateWahaBaseUrl(configuredBaseUrl) : undefined;
+    this.baseUrl = validatedBaseUrl?.ok ? validatedBaseUrl.url : "";
+    this.configError = validatedBaseUrl && !validatedBaseUrl.ok ? validatedBaseUrl.error : undefined;
     this.apiKey = enabled ? config?.apiKey ?? process.env.WAHA_API_KEY ?? "" : "";
     this.webhookSecret = enabled ? config?.webhookSecret ?? process.env.WA_UNOFFICIAL_WEBHOOK_SECRET ?? "" : "";
     this.session = enabled ? config?.session ?? process.env.WAHA_SESSION ?? "cutz-bangs-main" : "";
@@ -184,10 +189,14 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
   }
 
   private async json(path: string, init: RequestInit = {}) {
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    if (!this.baseUrl) throw new Error(this.configError ?? "wa_unofficial_not_configured");
+    const target = new URL(path, `${this.baseUrl}/`);
+    if (target.origin !== this.baseUrl) throw new Error("waha_request_origin_mismatch");
+    const response = await fetch(target, {
       ...init,
       headers: { ...this.headers(), ...(init.headers ?? {}) },
       signal: AbortSignal.timeout(20_000),
+      redirect: "error",
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -201,7 +210,7 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
 
   async send(msg: OutboundMessage): Promise<SendResult> {
     if (!this.baseUrl || !this.apiKey || !this.session) {
-      return { externalId: "", status: "failed", error: "wa_unofficial_not_configured" };
+      return { externalId: "", status: "failed", error: this.configError ?? "wa_unofficial_not_configured" };
     }
     try {
       const chatId = `${digits(msg.to)}@c.us`;
@@ -232,6 +241,9 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
 
   async health(): Promise<WhatsAppSessionState> {
     if (!this.baseUrl || !this.apiKey || !this.session) {
+      if (this.configError) {
+        return { configured: true, connected: false, status: "INVALID_CONFIG", detail: this.configError };
+      }
       return { configured: false, connected: false, status: "NOT_CONFIGURED", detail: "Add the WAHA URL, API key and session name." };
     }
     try {
@@ -263,7 +275,7 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
   }
 
   async sessionAction(action: WhatsAppSessionAction): Promise<WhatsAppSessionState> {
-    if (!this.baseUrl || !this.apiKey || !this.session) throw new Error("wa_unofficial_not_configured");
+    if (!this.baseUrl || !this.apiKey || !this.session) throw new Error(this.configError ?? "wa_unofficial_not_configured");
     if (action === "create") {
       const config: Record<string, unknown> = {
         metadata: { "app.name": "Cutz & Bangs", "app.session": this.session },
@@ -297,7 +309,7 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
   }
 
   async listContacts(limit = 5_000): Promise<WhatsAppContact[]> {
-    if (!this.baseUrl || !this.apiKey || !this.session) throw new Error("wa_unofficial_not_configured");
+    if (!this.baseUrl || !this.apiKey || !this.session) throw new Error(this.configError ?? "wa_unofficial_not_configured");
     const contacts: WhatsAppContact[] = [];
     for (let offset = 0; offset < limit; offset += 500) {
       const page = (await this.json(`/api/contacts/all?session=${encodeURIComponent(this.session)}&limit=500&offset=${offset}&sortBy=id&sortOrder=asc`)) as Array<{

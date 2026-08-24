@@ -20,16 +20,16 @@ export const WORKSPACE_PERMISSIONS = [
   "cash", "website", "coupons", "campaigns", "reports", "staff", "payroll", "settings", "audit",
 ] as const;
 
-function permissionForPath(path: string): string | undefined {
+export function permissionForPath(path: string): string | undefined {
   if (/^\/(auth|health|integrations\/bookings|webhooks)\b/u.test(path)) return undefined;
-  if (/^\/(pos|invoices|discounts)\b/u.test(path)) return "pos";
-  if (/^\/(cash-sessions|expenses)\b/u.test(path)) return "cash";
+  if (/^\/(pos|invoices|discounts|payments|scan)\b/u.test(path)) return "pos";
+  if (/^\/(cash-sessions|expenses|historical-register)\b/u.test(path)) return "cash";
   if (/^\/(customers|loyalty)\b/u.test(path)) return "customers";
   if (/^\/(memberships|membership-plans|service-packages|customer-service-packages)\b/u.test(path)) return "memberships";
   if (/^\/(appointments|availability|bookings|waitlist)\b/u.test(path)) return "calendar";
-  if (/^\/(conversations|messages|inbox)\b/u.test(path)) return "inbox";
+  if (/^\/(conversations|messages|inbox|channels)\b/u.test(path)) return "inbox";
   if (/^\/(services|service-categories)\b/u.test(path)) return "services";
-  if (/^\/(products|inventory|vendors|purchase-orders)\b/u.test(path)) return "inventory";
+  if (/^\/(products|inventory|vendors|purchase-orders|purchase-bills)\b/u.test(path)) return "inventory";
   if (/^\/(coupons)\b/u.test(path)) return "coupons";
   if (/^\/(campaigns)\b/u.test(path)) return "campaigns";
   if (/^\/reports\/(today|dashboard)\b/u.test(path) || /^\/dashboard\b/u.test(path)) return "dashboard";
@@ -38,7 +38,7 @@ function permissionForPath(path: string): string | undefined {
   if (/^\/(payroll|commissions)\b/u.test(path)) return "payroll";
   if (/^\/(content|website)\b/u.test(path)) return "website";
   if (/^\/(audit)\b/u.test(path)) return "audit";
-  if (/^\/(settings|integrations|system|provider)\b/u.test(path)) return "settings";
+  if (/^\/(settings|integrations|system|provider|branches|maintenance)\b/u.test(path)) return "settings";
   return undefined;
 }
 

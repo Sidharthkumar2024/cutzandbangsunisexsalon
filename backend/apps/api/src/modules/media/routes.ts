@@ -32,11 +32,23 @@ export default async function mediaRoutes(app: FastifyInstance) {
 
   app.get("/media/url", { preHandler: authorize("OWNER", "ADMIN", "MANAGER", "RECEPTION", "STAFF", "CUSTOMER") }, async (req, reply) => {
     const { key } = z.object({ key: z.string().min(3).max(512).regex(/^[a-zA-Z0-9/_\-.]+$/) }).parse(req.query);
-    if (req.user?.role === "STAFF" && key.startsWith("attendance-selfie/") && !key.includes(`/${req.user.id}/`)) return reply.code(403).send({ error: "forbidden" });
     if (req.user?.role === "CUSTOMER") {
       const customer = await prisma.customer.findUnique({ where: { userId: req.user.id }, select: { id: true } });
       const invoice = customer ? await prisma.invoice.findFirst({ where: { customerId: customer.id, pdfUrl: key }, select: { id: true } }) : null;
       if (!invoice) return reply.code(403).send({ error: "forbidden" });
+    } else if (!["OWNER", "ADMIN"].includes(req.user!.role)) {
+      const ownObject = key.split("/")[1] === req.user!.id;
+      if (req.user!.role === "STAFF" && !ownObject) return reply.code(403).send({ error: "forbidden" });
+      if (!ownObject) {
+        const scopedInvoice = req.user!.branchId
+          ? await prisma.invoice.findFirst({ where: { branchId: req.user!.branchId, pdfUrl: key }, select: { id: true } })
+          : null;
+        const objectOwnerId = key.startsWith("attendance-selfie/") ? key.split("/")[1] : undefined;
+        const scopedSelfie = objectOwnerId && req.user!.branchId
+          ? await prisma.staff.findFirst({ where: { userId: objectOwnerId, branchId: req.user!.branchId, deletedAt: null }, select: { id: true } })
+          : null;
+        if (!scopedInvoice && !scopedSelfie) return reply.code(403).send({ error: "forbidden" });
+      }
     }
     return { url: await providers.storage().signedUrl(key, 300), expiresIn: 300 };
   });

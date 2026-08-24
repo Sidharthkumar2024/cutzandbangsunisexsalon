@@ -205,7 +205,8 @@ export default async function campaignRoutes(app: FastifyInstance) {
     const existing = await prisma.campaign.findUnique({ where: { id } });
     if (!existing) return reply.code(404).send({ error: "not_found" });
     if (existing.status !== "PENDING_APPROVAL") return reply.code(409).send({ error: "not_pending_approval" });
-    await applyProviderSettings(existing.branchId);
+    const providerContext = await applyProviderSettings(existing.branchId);
+    const unofficialMessaging = providerContext.whatsapp("WHATSAPP_UNOFFICIAL");
     const [providerConfig, branch, recipients] = await Promise.all([
       publicProviderSettings(existing.branchId),
       prisma.branch.findUnique({ where: { id: existing.branchId }, select: { timezone: true } }),
@@ -213,7 +214,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
     ]);
     if (!recipients.length) return reply.code(409).send({ error: "campaign_has_no_eligible_recipients" });
     if (existing.channel === "WHATSAPP_UNOFFICIAL") {
-      const state = await providers.whatsapp("WHATSAPP_UNOFFICIAL").health?.();
+      const state = await unofficialMessaging.health?.();
       if (!state?.connected) return reply.code(409).send({ error: "waha_session_not_connected", detail: state?.detail });
     }
     const unofficial = providerConfig.whatsappUnofficial;

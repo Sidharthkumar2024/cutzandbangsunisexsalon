@@ -129,7 +129,7 @@ export default async function posRoutes(app: FastifyInstance) {
           select: { id: true, name: true },
         }),
         prisma.service.findMany({ where: { id: { in: serviceIds }, isActive: true, deletedAt: null } }),
-        prisma.product.findMany({ where: { id: { in: productIds }, isActive: true, deletedAt: null } }),
+        prisma.product.findMany({ where: { id: { in: productIds }, branchId: body.branchId, isActive: true, deletedAt: null } }),
         prisma.cashSession.findFirst({ where: { branchId: body.branchId, status: "OPEN" }, select: { id: true } }),
       ]);
       if (!branch) return reply.code(404).send({ error: "branch_not_found" });
@@ -315,13 +315,13 @@ export default async function posRoutes(app: FastifyInstance) {
           }
           for (const [productId, qty] of [...soldByProduct.entries()].sort(([a], [b]) => a.localeCompare(b))) {
             await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${productId})) IS NULL AS locked`;
-            const product = await tx.product.findUnique({ where: { id: productId } });
+            const product = await tx.product.findFirst({ where: { id: productId, branchId: body.branchId } });
             if (!product) throw new Error("product_not_found");
             if (product.stockQty < qty) throw new Error(`insufficient_stock:${product.name}`);
             const stockAfter = product.stockQty - qty;
             await tx.product.update({ where: { id: productId }, data: { stockQty: stockAfter } });
             await tx.inventoryMovement.create({
-              data: { productId, reason: "SALE", qtyDelta: -qty, stockAfter, refType: "invoice", refId: inv.id, actorUserId: req.user?.id },
+              data: { branchId: body.branchId, productId, reason: "SALE", qtyDelta: -qty, stockAfter, refType: "invoice", refId: inv.id, actorUserId: req.user?.id },
             });
           }
 
@@ -461,9 +461,19 @@ export default async function posRoutes(app: FastifyInstance) {
         }
         if (result.invoice.status === "PAID" && customer?.phone && customer.waConsent) {
           try {
-            await applyProviderSettings(body.branchId);
+            const providerContext = await applyProviderSettings(body.branchId);
+            const messaging = providerContext.whatsapp("WHATSAPP_UNOFFICIAL");
             const channel = await prisma.channel.findFirst({ where: { type: "WHATSAPP_UNOFFICIAL", isActive: true } });
-            if (channel) await providers.whatsapp("WHATSAPP_UNOFFICIAL").send({ to: customer.phone, body: `Thank you ${customer.name} for visiting Cutz & Bangs. Invoice ${result.invoice.number} · ${moneyText(result.invoice.totalMinor)}. Your PDF is available from the salon desk.` });
+            if (channel) {
+              const pdf = await buildAndStorePdf(result.invoice.id);
+              const mediaUrl = pdf ? await providers.storage().signedUrl(pdf.key, 3600) : undefined;
+              await messaging.send({
+                to: customer.phone,
+                body: `Thank you ${customer.name} for visiting Cutz & Bangs. Invoice ${result.invoice.number} · ${moneyText(result.invoice.totalMinor)}.`,
+                mediaUrl,
+                mediaType: mediaUrl ? "document" : undefined,
+              });
+            }
           } catch (error) {
             app.log.warn({ err: error, invoiceId: result.invoice.id }, "automatic WhatsApp receipt was skipped");
           }
@@ -598,9 +608,9 @@ export default async function posRoutes(app: FastifyInstance) {
       currency: inv.branch.currency,
     });
     const key = `invoices/${inv.number}.pdf`;
-    await providers.storage().put(key, buf, "application/pdf");
-    await prisma.invoice.update({ where: { id }, data: { pdfUrl: key } });
-    return { key, buf, number: inv.number };
+    const storedKey = await providers.storage().put(key, buf, "application/pdf");
+    await prisma.invoice.update({ where: { id }, data: { pdfUrl: storedKey } });
+    return { key: storedKey, buf, number: inv.number };
   }
 
   // Generate (or regenerate) the branded PDF, store it, return a signed URL.
@@ -687,9 +697,10 @@ export default async function posRoutes(app: FastifyInstance) {
       const phone = inv.customer?.phone;
       if (!phone) return reply.code(400).send({ error: "customer_has_no_phone" });
       if (!inv.customer?.waConsent) return reply.code(409).send({ error: "whatsapp_consent_required" });
-      await applyProviderSettings(inv.branchId);
+      const providerContext = await applyProviderSettings(inv.branchId);
+      const messaging = providerContext.whatsapp(channel);
       const url = await providers.storage().signedUrl(key, 3600);
-      const result = await providers.whatsapp(channel).send({
+      const result = await messaging.send({
         to: phone,
         body: `Thank you for visiting Cutz & Bangs. Invoice ${inv.number}`,
         mediaUrl: url,

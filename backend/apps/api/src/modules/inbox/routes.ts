@@ -2,17 +2,24 @@ import { FastifyInstance } from "fastify";
 import { ChannelType } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@cutz/db";
-import { providers } from "@cutz/providers";
+import type { MessagingProvider } from "@cutz/types";
 import { authorize } from "../../plugins/auth.js";
 import { audit } from "../../lib/audit.js";
-import { applyProviderSettings, officialWebhookVerifyToken, publicProviderSettings } from "../provider-config/config.js";
+import {
+  applyProviderSettings,
+  publicProviderSettings,
+  resolveOfficialVerificationBranch,
+  resolveOfficialWebhookBranch,
+  resolveUnofficialWebhookBranch,
+} from "../provider-config/config.js";
+import { whatsappConversationId } from "../provider-config/webhook-scope.js";
 
 const STAFF = ["OWNER", "ADMIN", "MANAGER", "RECEPTION"] as const;
 const WHATSAPP_CHANNELS = ["WHATSAPP_OFFICIAL", "WHATSAPP_UNOFFICIAL"] as const;
 
-async function safeProviderHealth(channel: typeof WHATSAPP_CHANNELS[number]) {
+async function safeProviderHealth(provider: MessagingProvider) {
   try {
-    return await providers.whatsapp(channel).health?.() ?? { configured: false, connected: false, detail: "Health check unavailable" };
+    return await provider.health?.() ?? { configured: false, connected: false, detail: "Health check unavailable" };
   } catch (error) {
     return {
       configured: true,
@@ -72,19 +79,42 @@ function inboundContent(message: any) {
   };
 }
 
-async function markCampaignDelivery(externalId: string, rawStatus: string) {
+async function markCampaignDelivery(branchId: string, externalId: string, rawStatus: string) {
   if (!externalId) return;
   const normalized = rawStatus.toLowerCase();
   const read = normalized.includes("read") || normalized.includes("played");
   const delivered = read || normalized.includes("deliver");
   const failed = normalized.includes("fail");
   await prisma.campaignRecipient.updateMany({
-    where: { externalId },
+    where: { externalId, campaign: { branchId } },
     data: {
       status: failed ? "failed" : read ? "read" : delivered ? "delivered" : "sent",
       ...(delivered ? { deliveredAt: new Date() } : {}),
       ...(read ? { deliveredAt: new Date(), readAt: new Date() } : {}),
       ...(failed ? { error: rawStatus.slice(0, 500) } : {}),
+    },
+  });
+}
+
+async function findOrCreateInboundCustomer(branchId: string, rawPhone: string, displayName?: string) {
+  const digits = rawPhone.replace(/\D/gu, "");
+  const suffix = digits.slice(-10);
+  const existing = await prisma.customer.findFirst({
+    where: { branchId, phone: { endsWith: suffix } },
+  });
+  if (existing) {
+    if (existing.deletedAt) {
+      return prisma.customer.update({ where: { id: existing.id }, data: { deletedAt: null } });
+    }
+    return existing;
+  }
+  return prisma.customer.create({
+    data: {
+      branchId,
+      phone: `+${digits}`,
+      name: displayName?.trim().slice(0, 120) || `WhatsApp ${digits.slice(-4)}`,
+      source: "Incoming WhatsApp",
+      waConsent: false,
     },
   });
 }
@@ -156,20 +186,33 @@ export default async function inboxRoutes(app: FastifyInstance) {
     return updated;
   });
 
-  app.get("/integrations/whatsapp/status", { preHandler: authorize(...STAFF) }, async (req) => {
+  app.get("/integrations/whatsapp/status", { preHandler: authorize(...STAFF) }, async (req, reply) => {
     await ensureChannels();
     const branchId = (req.query as Record<string, string>).branchId ?? req.user?.branchId ?? "main";
-    await applyProviderSettings(branchId);
+    if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user!.branchId !== branchId) {
+      return reply.code(403).send({ error: "forbidden" });
+    }
+    const providerContext = await applyProviderSettings(branchId);
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const [official, unofficial, channels, settings, deliveryRows] = await Promise.all([
-      safeProviderHealth("WHATSAPP_OFFICIAL"),
-      safeProviderHealth("WHATSAPP_UNOFFICIAL"),
+    const [official, unofficial, channels, settings, deliveryRows, officialTemplates] = await Promise.all([
+      safeProviderHealth(providerContext.whatsapp("WHATSAPP_OFFICIAL")),
+      safeProviderHealth(providerContext.whatsapp("WHATSAPP_UNOFFICIAL")),
       prisma.channel.findMany({ where: { type: { in: [...WHATSAPP_CHANNELS] } } }),
       publicProviderSettings(branchId),
       prisma.campaignRecipient.findMany({
         where: { campaign: { branchId, channel: "WHATSAPP_UNOFFICIAL" }, sentAt: { gte: since } },
         select: { status: true },
       }),
+      prisma.channel.findFirst({
+        where: { type: "WHATSAPP_OFFICIAL" },
+        select: {
+          templates: {
+            where: { status: "approved" },
+            select: { id: true, name: true, language: true, status: true, body: true, createdAt: true },
+            orderBy: [{ name: "asc" }, { language: "asc" }],
+          },
+        },
+      }).then((channel) => channel?.templates ?? []),
     ]);
     const failed = deliveryRows.filter((row) => row.status === "failed").length;
     const completed = deliveryRows.filter((row) => ["sent", "delivered", "failed"].includes(row.status)).length;
@@ -197,24 +240,29 @@ export default async function inboxRoutes(app: FastifyInstance) {
       },
     };
     return {
-      official: { ...official, active: channels.find((channel) => channel.type === "WHATSAPP_OFFICIAL")?.isActive ?? false },
+      official: {
+        ...official,
+        active: channels.find((channel) => channel.type === "WHATSAPP_OFFICIAL")?.isActive ?? false,
+        templates: officialTemplates,
+      },
       unofficial: { ...unofficial, active: channels.find((channel) => channel.type === "WHATSAPP_UNOFFICIAL")?.isActive ?? false, risk },
     };
   });
 
   app.post("/integrations/whatsapp/test", { preHandler: authorize("OWNER", "ADMIN") }, async (req, reply) => {
     const body = z.object({ channel: z.enum(WHATSAPP_CHANNELS), to: z.string().min(8), message: z.string().min(1) }).parse(req.body);
-    await applyProviderSettings("main");
-    const result = await providers.whatsapp(body.channel).send({ to: body.to, body: body.message });
+    const providerContext = await applyProviderSettings("main");
+    const result = await providerContext.whatsapp(body.channel).send({ to: body.to, body: body.message });
     if (result.status === "failed") return reply.code(422).send(result);
     return result;
   });
 
   app.post("/integrations/whatsapp/templates/sync", { preHandler: authorize("OWNER", "ADMIN") }, async (req) => {
     await ensureChannels();
-    await applyProviderSettings("main");
+    const providerContext = await applyProviderSettings("main");
+    const messaging = providerContext.whatsapp("WHATSAPP_OFFICIAL");
     const channel = await prisma.channel.findFirstOrThrow({ where: { type: "WHATSAPP_OFFICIAL" } });
-    const remote = await providers.whatsapp("WHATSAPP_OFFICIAL").listTemplates?.() ?? [];
+    const remote = await messaging.listTemplates?.() ?? [];
     for (const template of remote) {
       const existing = await prisma.template.findFirst({ where: { channelId: channel.id, name: template.name, language: template.language } });
       if (existing) {
@@ -236,7 +284,7 @@ export default async function inboxRoutes(app: FastifyInstance) {
       },
       orderBy: { lastMessageAt: "desc" },
       take: 100,
-      include: { customer: { select: { id: true, name: true, phone: true } }, channel: true },
+      include: { customer: { select: { id: true, name: true, phone: true, avatarUrl: true } }, channel: true },
     });
   });
 
@@ -310,8 +358,8 @@ export default async function inboxRoutes(app: FastifyInstance) {
       } else if (!conversation.customer?.phone || !WHATSAPP_CHANNELS.includes(conversation.channel.type as typeof WHATSAPP_CHANNELS[number])) {
         return reply.code(422).send({ error: "channel_cannot_send" });
       } else {
-        await applyProviderSettings(conversation.customer.branchId);
-        const result = await providers.whatsapp(conversation.channel.type as typeof WHATSAPP_CHANNELS[number]).send({
+        const providerContext = await applyProviderSettings(conversation.customer.branchId);
+        const result = await providerContext.whatsapp(conversation.channel.type as typeof WHATSAPP_CHANNELS[number]).send({
           to: conversation.customer.phone,
           body: body.body,
           templateName: body.templateName,
@@ -356,8 +404,8 @@ export default async function inboxRoutes(app: FastifyInstance) {
 
     webhooks.get("/webhooks/whatsapp", async (req, reply) => {
       const query = req.query as Record<string, string>;
-      const verifyToken = await officialWebhookVerifyToken("main");
-      if (verifyToken && query["hub.mode"] === "subscribe" && query["hub.verify_token"] === verifyToken) {
+      const branchId = await resolveOfficialVerificationBranch(query["hub.verify_token"] ?? "");
+      if (branchId && query["hub.mode"] === "subscribe") {
         return reply.type("text/plain").send(query["hub.challenge"]);
       }
       return reply.code(403).send();
@@ -365,26 +413,33 @@ export default async function inboxRoutes(app: FastifyInstance) {
 
     webhooks.post("/webhooks/whatsapp", async (req, reply) => {
       const parsed = req.body as { raw: string; json: any };
-      await applyProviderSettings("main");
-      const ok = providers.whatsapp("WHATSAPP_OFFICIAL").verifyWebhook(stringHeaders(req.headers), parsed?.raw ?? "");
+      const entries: any[] = Array.isArray(parsed?.json?.entry) ? parsed.json.entry : [];
+      const wabaIds = [...new Set<string>(entries.map((entry: any) => String(entry?.id ?? "")).filter(Boolean))];
+      const phoneIds = [...new Set<string>(entries.flatMap((entry: any) => (entry?.changes ?? []).map((change: any) => String(change?.value?.metadata?.phone_number_id ?? ""))).filter(Boolean))];
+      if (wabaIds.length > 1 || phoneIds.length > 1) return reply.code(401).send({ error: "provider_not_resolved" });
+      const branchId = await resolveOfficialWebhookBranch({ wabaId: wabaIds[0], phoneId: phoneIds[0] });
+      if (!branchId) return reply.code(401).send({ error: "provider_not_resolved" });
+      const providerContext = await applyProviderSettings(branchId);
+      const ok = providerContext.whatsapp("WHATSAPP_OFFICIAL").verifyWebhook(stringHeaders(req.headers), parsed?.raw ?? "");
       if (!ok) return reply.code(401).send({ error: "bad_signature" });
       await ensureChannels();
       const channel = await prisma.channel.findFirstOrThrow({ where: { type: "WHATSAPP_OFFICIAL" } });
-      for (const entry of parsed?.json?.entry ?? []) {
+      for (const entry of entries) {
         for (const change of entry.changes ?? []) {
           for (const status of change.value?.statuses ?? []) {
             await prisma.message.updateMany({ where: { externalId: status.id }, data: { status: status.status } });
-            await markCampaignDelivery(String(status.id ?? ""), String(status.status ?? "sent"));
+            await markCampaignDelivery(branchId, String(status.id ?? ""), String(status.status ?? "sent"));
           }
           for (const message of change.value?.messages ?? []) {
             const from = String(message.from ?? "");
             const externalId = String(message.id ?? "");
             if (!from || !externalId) continue;
-            const customer = await prisma.customer.findFirst({ where: { phone: { endsWith: from.slice(-10) } } });
+            const contactName = change.value?.contacts?.find((contact: any) => String(contact?.wa_id ?? "") === from)?.profile?.name;
+            const customer = await findOrCreateInboundCustomer(branchId, from, typeof contactName === "string" ? contactName : undefined);
             const conversation = await prisma.conversation.upsert({
-              where: { id: `wa-official-${from}` },
-              create: { id: `wa-official-${from}`, channelId: channel.id, customerId: customer?.id, unread: true, lastMessageAt: new Date() },
-              update: { customerId: customer?.id, unread: true, lastMessageAt: new Date() },
+              where: { id: whatsappConversationId("official", branchId, from) },
+              create: { id: whatsappConversationId("official", branchId, from), channelId: channel.id, customerId: customer.id, unread: true, lastMessageAt: new Date() },
+              update: { customerId: customer.id, unread: true, lastMessageAt: new Date() },
             });
             const content = inboundContent(message);
             await prisma.message.create({
@@ -398,7 +453,7 @@ export default async function inboxRoutes(app: FastifyInstance) {
                 attachments: content.attachment ? { create: content.attachment } : undefined,
               },
             }).catch(() => undefined);
-            await markLatestCampaignReply(customer?.id);
+            await markLatestCampaignReply(customer.id);
           }
         }
       }
@@ -407,8 +462,13 @@ export default async function inboxRoutes(app: FastifyInstance) {
   });
 
   app.post("/webhooks/whatsapp/unofficial", async (req, reply) => {
-    await applyProviderSettings("main");
-    if (!providers.whatsapp("WHATSAPP_UNOFFICIAL").verifyWebhook(stringHeaders(req.headers), "")) {
+    const untrusted = req.body as Record<string, unknown> | undefined;
+    const untrustedPayload = untrusted?.payload as Record<string, unknown> | undefined;
+    const session = String(untrusted?.session ?? untrustedPayload?.session ?? "");
+    const branchId = await resolveUnofficialWebhookBranch(session);
+    if (!branchId) return reply.code(401).send({ error: "provider_not_resolved" });
+    const providerContext = await applyProviderSettings(branchId);
+    if (!providerContext.whatsapp("WHATSAPP_UNOFFICIAL").verifyWebhook(stringHeaders(req.headers), "")) {
       return reply.code(401).send({ error: "bad_secret" });
     }
     const envelope = z.object({
@@ -419,6 +479,7 @@ export default async function inboxRoutes(app: FastifyInstance) {
       body: z.string().optional(),
       mediaType: z.string().optional(),
       timestamp: z.number().optional(),
+      session: z.string().optional(),
     }).passthrough().parse(req.body);
     const payload = (envelope.payload ?? envelope) as Record<string, unknown>;
     if (envelope.event === "session.status") return reply.send({ received: true });
@@ -427,7 +488,7 @@ export default async function inboxRoutes(app: FastifyInstance) {
       const status = String(payload.ackName ?? "sent").toLowerCase();
       if (externalId) {
         await prisma.message.updateMany({ where: { externalId }, data: { status } });
-        await markCampaignDelivery(externalId, status);
+        await markCampaignDelivery(branchId, externalId, status);
       }
       return reply.send({ received: true });
     }
@@ -440,9 +501,10 @@ export default async function inboxRoutes(app: FastifyInstance) {
     if (!from || !externalId) return reply.code(400).send({ error: "invalid_waha_message" });
     await ensureChannels();
     const channel = await prisma.channel.findFirstOrThrow({ where: { type: "WHATSAPP_UNOFFICIAL" } });
-    const customer = await prisma.customer.findFirst({ where: { phone: { endsWith: from.slice(-10) } } });
+    const displayName = typeof payload.pushName === "string" ? payload.pushName : typeof payload.notifyName === "string" ? payload.notifyName : undefined;
+    const customer = await findOrCreateInboundCustomer(branchId, from, displayName);
     const optOut = /^(stop|unsubscribe|cancel|opt\s*out|band|बंद)$/i.test(messageBody.trim());
-    if (customer && optOut) {
+    if (optOut) {
       await prisma.customer.update({
         where: { id: customer.id },
         data: { waConsent: false, tags: Array.from(new Set([...customer.tags, "wa-opt-out"])) },
@@ -450,9 +512,9 @@ export default async function inboxRoutes(app: FastifyInstance) {
       await audit("customer.whatsapp_opt_out", "Customer", customer.id, { after: { waConsent: false, source: "incoming_whatsapp" } });
     }
     const conversation = await prisma.conversation.upsert({
-      where: { id: `wa-unofficial-${from}` },
-      create: { id: `wa-unofficial-${from}`, channelId: channel.id, customerId: customer?.id, unread: true, lastMessageAt: new Date() },
-      update: { customerId: customer?.id, unread: true, lastMessageAt: new Date() },
+      where: { id: whatsappConversationId("unofficial", branchId, from) },
+      create: { id: whatsappConversationId("unofficial", branchId, from), channelId: channel.id, customerId: customer.id, unread: true, lastMessageAt: new Date() },
+      update: { customerId: customer.id, unread: true, lastMessageAt: new Date() },
     });
     await prisma.message.create({
       data: {
@@ -465,7 +527,7 @@ export default async function inboxRoutes(app: FastifyInstance) {
         createdAt: timestamp ? new Date(timestamp * 1000) : undefined,
       },
     }).catch(() => undefined);
-    await markLatestCampaignReply(customer?.id);
+    await markLatestCampaignReply(customer.id);
     return reply.send({ received: true });
   });
 }

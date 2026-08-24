@@ -80,6 +80,7 @@ export default async function waitlistRoutes(app: FastifyInstance) {
         async (tx) => {
           const slots = await resolveBooking(
             tx as unknown as typeof prisma,
+            entry.branchId,
             branch.timezone,
             [{ serviceId: entry.serviceId, staffId, startAt }] as SlotRequest[],
           );

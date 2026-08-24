@@ -4,6 +4,9 @@ import { z } from "zod";
 import { prisma } from "@cutz/db";
 import { authorize } from "../../plugins/auth.js";
 import { audit } from "../../lib/audit.js";
+import { parseCsv } from "../../lib/csv.js";
+import { assertStaffImportRowLimit, parseStaffImportRow, staffDedupeKey, staffPhoneKey } from "./import.js";
+import { lateMinutesForCheckIn } from "../attendance/calculations.js";
 
 const MANAGERS = ["OWNER", "ADMIN", "MANAGER"] as const;
 const WORKFORCE = ["OWNER", "ADMIN", "MANAGER", "RECEPTION", "STAFF"] as const;
@@ -38,6 +41,89 @@ function localParts(date: Date, timeZone: string) {
 }
 
 export default async function workforceRoutes(app: FastifyInstance) {
+  app.post("/staff/import", { preHandler: authorize(...MANAGERS) }, async (req, reply) => {
+    const parsed = z.object({
+      branchId: z.string().trim().min(1),
+      csv: z.string().min(1).optional(),
+      rows: z.array(z.record(z.unknown())).min(1).max(500).optional(),
+    }).refine((body) => Boolean(body.csv) !== Boolean(body.rows), "provide_exactly_one_of_csv_or_rows").safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_staff_import", details: parsed.error.flatten() });
+    const { branchId } = parsed.data;
+    if (req.user?.role === "MANAGER" && req.user.branchId !== branchId) return reply.code(403).send({ error: "forbidden" });
+    const branch = await prisma.branch.findFirst({ where: { id: branchId, deletedAt: null }, select: { id: true } });
+    if (!branch) return reply.code(404).send({ error: "branch_not_found" });
+
+    const rawRows = parsed.data.rows ?? parseCsv(parsed.data.csv!);
+    try {
+      assertStaffImportRowLimit(rawRows.length);
+    } catch {
+      return reply.code(413).send({ error: "staff_import_row_limit", maxRows: 500 });
+    }
+    if (!rawRows.length) return reply.code(400).send({ error: "staff_import_empty" });
+    const issues: Array<{ row: number; error: string }> = [];
+    const rows = rawRows.map((row, index) => {
+      try {
+        return parseStaffImportRow(row);
+      } catch (error) {
+        issues.push({ row: index + 2, error: error instanceof Error ? error.message : "invalid_row" });
+        return null;
+      }
+    }).filter((row): row is NonNullable<typeof row> => row !== null);
+    const inputKeys = new Set<string>();
+    rows.forEach((row, index) => {
+      const key = staffDedupeKey(row.displayName);
+      if (inputKeys.has(key)) issues.push({ row: index + 2, error: "duplicate_staff_name_in_import" });
+      inputKeys.add(key);
+    });
+    if (issues.length) return reply.code(400).send({ error: "staff_import_validation_failed", issues });
+
+    const existing = await prisma.staff.findMany({ where: { branchId }, include: { shifts: true } });
+    const byName = new Map<string, typeof existing>();
+    const byPhone = new Map<string, typeof existing>();
+    for (const staff of existing) {
+      const nameKey = staffDedupeKey(staff.displayName);
+      byName.set(nameKey, [...(byName.get(nameKey) ?? []), staff]);
+      const phoneKey = staffPhoneKey(staff.phone ?? undefined);
+      if (phoneKey) byPhone.set(phoneKey, [...(byPhone.get(phoneKey) ?? []), staff]);
+    }
+    for (const [index, row] of rows.entries()) {
+      const nameMatches = byName.get(staffDedupeKey(row.displayName)) ?? [];
+      const phoneMatches = row.phone ? byPhone.get(staffPhoneKey(row.phone) ?? "") ?? [] : [];
+      const matches = nameMatches.length ? nameMatches : phoneMatches;
+      if (matches.length > 1) issues.push({ row: index + 2, error: "ambiguous_existing_staff_match" });
+      if (nameMatches.length === 1 && phoneMatches.length === 1 && nameMatches[0].id !== phoneMatches[0].id) {
+        issues.push({ row: index + 2, error: "staff_name_phone_match_different_records" });
+      }
+    }
+    if (issues.length) return reply.code(409).send({ error: "staff_import_dedupe_conflict", issues });
+
+    const result = await prisma.$transaction(async (tx) => {
+      const imported: Array<{ id: string; displayName: string; operation: "created" | "updated" }> = [];
+      for (const row of rows) {
+        const nameMatch = (byName.get(staffDedupeKey(row.displayName)) ?? [])[0];
+        const phoneMatch = row.phone ? (byPhone.get(staffPhoneKey(row.phone) ?? "") ?? [])[0] : undefined;
+        const current = nameMatch ?? phoneMatch;
+        const { shifts, ...profile } = row;
+        const staff = current
+          ? await tx.staff.update({ where: { id: current.id }, data: { ...profile, isActive: true, deletedAt: null } })
+          : await tx.staff.create({ data: { branchId, ...profile } });
+        if (shifts) {
+          await tx.shift.deleteMany({ where: { staffId: staff.id } });
+          if (shifts.length) await tx.shift.createMany({ data: shifts.map((shift) => ({ staffId: staff.id, ...shift })) });
+        }
+        await audit(current ? "staff.import_update" : "staff.import_create", "Staff", staff.id, {
+          actorUserId: req.user?.id,
+          before: current ?? undefined,
+          after: { ...row, branchId },
+          ip: req.ip,
+        }, tx);
+        imported.push({ id: staff.id, displayName: staff.displayName, operation: current ? "updated" : "created" });
+      }
+      return imported;
+    });
+    return { imported: result.length, created: result.filter((row) => row.operation === "created").length, updated: result.filter((row) => row.operation === "updated").length, rows: result };
+  });
+
   app.patch("/staff/:id/profile", { preHandler: authorize(...MANAGERS) }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = z.object({
@@ -151,7 +237,7 @@ export default async function workforceRoutes(app: FastifyInstance) {
       const open = await prisma.attendance.findFirst({ where: { staffId: staff.id, checkOutAt: null }, orderBy: { createdAt: "desc" } });
       if (open) attendanceId = open.id;
       else {
-        const row = await prisma.attendance.create({ data: { staffId: staff.id, checkInAt: body.occurredAt, lateMinutes: shift ? Math.max(0, clock.minuteOfDay - shift.startMin - staff.lateGraceMinutes) : 0, source: "BIOMETRIC", biometricDeviceId: device.id, externalEventId: body.eventId } });
+        const row = await prisma.attendance.create({ data: { staffId: staff.id, checkInAt: body.occurredAt, lateMinutes: shift ? lateMinutesForCheckIn(clock.minuteOfDay, shift.startMin, staff.lateGraceMinutes) : 0, source: "BIOMETRIC", biometricDeviceId: device.id, externalEventId: body.eventId } });
         attendanceId = row.id;
       }
     } else {

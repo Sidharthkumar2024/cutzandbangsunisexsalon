@@ -42,16 +42,22 @@ model Branch {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  users            User[]
-  staff            Staff[]
-  customers        Customer[]
-  appointments     Appointment[]
-  invoices         Invoice[]
-  coupons          Coupon[]
-  campaigns        Campaign[]
-  cashSessions     CashSession[]
-  expenses         Expense[]
-  biometricDevices BiometricDevice[]
+  users                    User[]
+  staff                    Staff[]
+  customers                Customer[]
+  appointments             Appointment[]
+  invoices                 Invoice[]
+  coupons                  Coupon[]
+  campaigns                Campaign[]
+  products                 Product[]
+  vendors                  Vendor[]
+  purchaseBills            PurchaseBill[]
+  inventoryMovements       InventoryMovement[]
+  paymentReconciliations   PaymentReconciliation[]
+  cashSessions             CashSession[]
+  expenses                 Expense[]
+  historicalDailySummaries HistoricalDailySummary[]
+  biometricDevices         BiometricDevice[]
 }
 
 model User {
@@ -269,6 +275,7 @@ model Customer {
   name          String
   phone         String?
   email         String?
+  avatarUrl     String?
   gender        String?
   source        String?
   referralName  String?
@@ -340,11 +347,16 @@ model CustomerHistoryEntry {
 // ---------------------------------------------------------------------------
 
 model ServiceCategory {
-  id        String    @id @default(cuid())
+  id        String            @id @default(cuid())
   name      String
   gender    String? // Male / Female / Unisex
-  sortOrder Int       @default(0)
+  parentId  String?
+  parent    ServiceCategory?  @relation("ServiceCategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children  ServiceCategory[] @relation("ServiceCategoryTree")
+  sortOrder Int               @default(0)
   services  Service[]
+
+  @@index([parentId])
 }
 
 model Service {
@@ -522,6 +534,7 @@ model Invoice {
 
   items            InvoiceItem[]
   payments         Payment[]
+  refunds          InvoiceRefund[]
   couponRedemption CouponRedemption?
 
   @@index([branchId, createdAt])
@@ -548,6 +561,8 @@ model InvoiceItem {
   taxMinor       Int                @default(0)
   lineTotalMinor Int // (unit*qty - discount) + tax
 
+  refundItems InvoiceRefundItem[]
+
   @@index([invoiceId])
   @@index([companionId])
 }
@@ -566,6 +581,42 @@ model Payment {
   @@index([invoiceId])
 }
 
+// Immutable return records. Financial/credit side effects are derived from
+// these rows, so a retry can never restore the same quantity or tender twice.
+model InvoiceRefund {
+  id               String              @id @default(cuid())
+  invoiceId        String
+  invoice          Invoice             @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  grossMinor       Int
+  moneyMinor       Int
+  membershipMinor  Int
+  loyaltyMinor     Int
+  pointsRestored   Int                 @default(0)
+  pointsClawedBack Int                 @default(0)
+  paymentMethod    PaymentMethod
+  reason           String
+  restock          Boolean             @default(true)
+  actorUserId      String?
+  createdAt        DateTime            @default(now())
+  items            InvoiceRefundItem[]
+
+  @@index([invoiceId, createdAt])
+}
+
+model InvoiceRefundItem {
+  id            String        @id @default(cuid())
+  refundId      String
+  refund        InvoiceRefund @relation(fields: [refundId], references: [id], onDelete: Restrict)
+  invoiceItemId String
+  invoiceItem   InvoiceItem   @relation(fields: [invoiceItemId], references: [id], onDelete: Restrict)
+  qty           Int
+  amountMinor   Int
+  restocked     Boolean       @default(false)
+
+  @@unique([refundId, invoiceItemId])
+  @@index([invoiceItemId])
+}
+
 enum ReconciliationStatus {
   PENDING
   MATCHED
@@ -574,6 +625,8 @@ enum ReconciliationStatus {
 
 model PaymentReconciliation {
   id          String               @id @default(cuid())
+  branchId    String               @default("main")
+  branch      Branch               @relation(fields: [branchId], references: [id])
   provider    String
   externalRef String
   amountMinor Int
@@ -582,7 +635,8 @@ model PaymentReconciliation {
   payload     Json?
   createdAt   DateTime             @default(now())
 
-  @@unique([provider, externalRef])
+  @@unique([branchId, provider, externalRef])
+  @@index([branchId, status, createdAt])
   @@index([status, createdAt])
 }
 
@@ -759,7 +813,9 @@ model LoyaltyLedger {
   createdAt    DateTime          @default(now())
   // Append-only: entries are never updated or deleted.
 
-  @@unique([invoiceId, type])
+  // EARN/REDEEM idempotency is enforced by a partial unique DB index. REFUND
+  // must be repeatable because one invoice can be returned in partial lots.
+  @@index([invoiceId, type])
   @@index([customerId, createdAt])
 }
 
@@ -814,10 +870,12 @@ model CouponRedemption {
 
 model Product {
   id            String    @id @default(cuid())
+  branchId      String    @default("main")
+  branch        Branch    @relation(fields: [branchId], references: [id])
   name          String
   brand         String?
-  sku           String?   @unique
-  barcode       String?   @unique
+  sku           String?
+  barcode       String?
   purchaseMinor Int       @default(0)
   sellMinor     Int       @default(0)
   mrpMinor      Int       @default(0)
@@ -832,20 +890,30 @@ model Product {
 
   movements     InventoryMovement[]
   purchaseItems PurchaseItem[]
+
+  @@unique([branchId, sku])
+  @@unique([branchId, barcode])
+  @@index([branchId, deletedAt])
 }
 
 model Vendor {
   id        String   @id @default(cuid())
+  branchId  String   @default("main")
+  branch    Branch   @relation(fields: [branchId], references: [id])
   name      String
   phone     String?
   email     String?
   createdAt DateTime @default(now())
 
   purchaseBills PurchaseBill[]
+
+  @@index([branchId, name])
 }
 
 model PurchaseBill {
   id          String    @id @default(cuid())
+  branchId    String    @default("main")
+  branch      Branch    @relation(fields: [branchId], references: [id])
   vendorId    String
   vendor      Vendor    @relation(fields: [vendorId], references: [id])
   billNumber  String?
@@ -856,6 +924,8 @@ model PurchaseBill {
   createdAt   DateTime  @default(now())
 
   items PurchaseItem[]
+
+  @@index([branchId, createdAt])
 }
 
 model PurchaseItem {
@@ -879,17 +949,21 @@ enum MovementReason {
 }
 
 model InventoryMovement {
-  id          String         @id @default(cuid())
-  productId   String
-  product     Product        @relation(fields: [productId], references: [id])
-  reason      MovementReason
-  qtyDelta    Int // +in / -out
-  stockAfter  Int
-  refType     String? // invoice / purchase / manual
-  refId       String?
-  actorUserId String?
-  createdAt   DateTime       @default(now())
+  id             String         @id @default(cuid())
+  idempotencyKey String?        @unique
+  branchId       String         @default("main")
+  branch         Branch         @relation(fields: [branchId], references: [id])
+  productId      String
+  product        Product        @relation(fields: [productId], references: [id])
+  reason         MovementReason
+  qtyDelta       Int // +in / -out
+  stockAfter     Int
+  refType        String? // invoice / purchase / manual
+  refId          String?
+  actorUserId    String?
+  createdAt      DateTime       @default(now())
 
+  @@index([branchId, createdAt])
   @@index([productId, createdAt])
 }
 
@@ -922,23 +996,57 @@ model CashSession {
 }
 
 model Expense {
-  id              String        @id @default(cuid())
-  branchId        String
-  branch          Branch        @relation(fields: [branchId], references: [id])
-  cashSessionId   String?
-  cashSession     CashSession?  @relation(fields: [cashSessionId], references: [id])
-  category        String
-  description     String
-  amountMinor     Int
-  paymentMethod   PaymentMethod @default(CASH)
-  vendorName      String?
-  receiptUrl      String?
-  occurredAt      DateTime      @default(now())
-  createdByUserId String
-  createdAt       DateTime      @default(now())
+  id                  String                  @id @default(cuid())
+  branchId            String
+  branch              Branch                  @relation(fields: [branchId], references: [id])
+  cashSessionId       String?
+  cashSession         CashSession?            @relation(fields: [cashSessionId], references: [id])
+  historicalSummaryId String?
+  historicalSummary   HistoricalDailySummary? @relation(fields: [historicalSummaryId], references: [id], onDelete: Restrict)
+  importLineKey       String?
+  source              String                  @default("manual")
+  reviewRequired      Boolean                 @default(false)
+  reviewNote          String?
+  category            String
+  description         String
+  amountMinor         Int
+  paymentMethod       PaymentMethod           @default(CASH)
+  vendorName          String?
+  receiptUrl          String?
+  occurredAt          DateTime                @default(now())
+  createdByUserId     String
+  createdAt           DateTime                @default(now())
 
+  @@unique([historicalSummaryId, importLineKey])
   @@index([branchId, occurredAt])
   @@index([cashSessionId])
+  @@index([historicalSummaryId])
+}
+
+model HistoricalDailySummary {
+  id                  String    @id @default(cuid())
+  branchId            String
+  branch              Branch    @relation(fields: [branchId], references: [id])
+  businessDate        String
+  openingCashMinor    Int?
+  cashSalesMinor      Int?
+  upiSalesMinor       Int?
+  cardSalesMinor      Int?
+  totalSalesMinor     Int?
+  availableCashMinor  Int?
+  cashAdjustmentMinor Int?
+  reviewRequired      Boolean   @default(false)
+  reviewNote          String?
+  notes               String?
+  source              String    @default("handwritten_register")
+  sourceRef           String?
+  importedByUserId    String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  expenses            Expense[]
+
+  @@unique([branchId, businessDate])
+  @@index([branchId, businessDate])
 }
 
 // ---------------------------------------------------------------------------

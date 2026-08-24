@@ -79,6 +79,7 @@ export interface ResolveOptions {
 
 export async function resolveSlot(
   db: PrismaClient,
+  branchId: string,
   branchTimezone: string,
   req: SlotRequest,
   opts: ResolveOptions = {},
@@ -87,6 +88,16 @@ export async function resolveSlot(
     where: { id: req.serviceId, isActive: true, deletedAt: null },
   });
   if (!service) throw new SlotUnavailableError("service_not_found", req);
+
+  // Staff ids are exposed by the public catalogue, so every availability
+  // decision must bind the selected staff member to the appointment branch.
+  // Without this check a public caller could reserve a staff member from a
+  // different branch and block that person's real calendar.
+  const staff = await db.staff.findFirst({
+    where: { id: req.staffId, branchId, isActive: true, deletedAt: null },
+    select: { id: true },
+  });
+  if (!staff) throw new SlotUnavailableError("staff_branch_mismatch", req);
 
   const endAt = new Date(req.startAt.getTime() + (service.durationMin + service.bufferMin) * 60_000);
 
@@ -156,13 +167,14 @@ export async function resolveSlot(
  */
 export async function resolveBooking(
   db: PrismaClient,
+  branchId: string,
   branchTimezone: string,
   requests: SlotRequest[],
   opts: ResolveOptions = {},
 ): Promise<ResolvedSlot[]> {
   const resolved: ResolvedSlot[] = [];
   for (const r of requests) {
-    const slot = await resolveSlot(db, branchTimezone, r, opts);
+    const slot = await resolveSlot(db, branchId, branchTimezone, r, opts);
     // intra-booking self-conflict (always enforced — same customer can't clone)
     if (!opts.allowOverlap) {
       for (const prior of resolved) {

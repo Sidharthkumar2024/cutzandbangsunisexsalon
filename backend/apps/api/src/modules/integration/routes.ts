@@ -77,7 +77,7 @@ export default async function integrationRoutes(app: FastifyInstance) {
     try {
       const appt = await prisma.$transaction(
         async (tx) => {
-          const slots = await resolveBooking(tx as unknown as typeof prisma, branch.timezone, items);
+          const slots = await resolveBooking(tx as unknown as typeof prisma, branch.id, branch.timezone, items);
           const endAt = new Date(Math.max(...slots.map((s) => s.endAt.getTime())));
           return tx.appointment.create({
             data: {

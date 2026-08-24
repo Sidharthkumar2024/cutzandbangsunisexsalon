@@ -1,15 +1,24 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WhatsAppUnofficialProvider } from "@cutz/providers";
+import { isRestrictedWahaHost, validateWahaBaseUrl, WhatsAppUnofficialProvider } from "@cutz/providers";
 
 const config = {
   enabled: true,
-  baseUrl: "http://waha:3000",
+  baseUrl: "http://127.0.0.1:3005",
   apiKey: "a-secure-waha-api-key-123456",
   webhookSecret: "a-separate-webhook-secret-123",
   session: "cutz-bangs-main",
 };
 
-afterEach(() => vi.unstubAllGlobals());
+const previousAllowedOrigins = process.env.WAHA_ALLOWED_ORIGINS;
+const previousConfiguredUrl = process.env.WA_UNOFFICIAL_URL;
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  if (previousAllowedOrigins === undefined) delete process.env.WAHA_ALLOWED_ORIGINS;
+  else process.env.WAHA_ALLOWED_ORIGINS = previousAllowedOrigins;
+  if (previousConfiguredUrl === undefined) delete process.env.WA_UNOFFICIAL_URL;
+  else process.env.WA_UNOFFICIAL_URL = previousConfiguredUrl;
+});
 
 describe("WAHA provider", () => {
   it("sends text through the documented WAHA endpoint without exposing the key in the payload", async () => {
@@ -19,8 +28,9 @@ describe("WAHA provider", () => {
 
     expect(result).toEqual({ externalId: "msg-1", status: "sent" });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("http://waha:3000/api/sendText");
+    expect(String(url)).toBe("http://127.0.0.1:3005/api/sendText");
     expect(init.headers).toMatchObject({ "X-Api-Key": config.apiKey });
+    expect(init.redirect).toBe("error");
     expect(JSON.parse(String(init.body))).toEqual({ session: "cutz-bangs-main", chatId: "919876543210@c.us", text: "Hello" });
     expect(String(init.body)).not.toContain(config.apiKey);
   });
@@ -34,7 +44,7 @@ describe("WAHA provider", () => {
 
     expect(state.connected).toBe(false);
     expect(state.qrDataUrl).toBe("data:image/png;base64,YWJj");
-    expect(fetchMock.mock.calls[1]?.[0]).toContain("/api/cutz-bangs-main/auth/qr");
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/api/cutz-bangs-main/auth/qr");
   });
 
   it("hides QR data after WAHA reports WORKING", async () => {
@@ -68,5 +78,39 @@ describe("WAHA provider", () => {
     const provider = new WhatsAppUnofficialProvider(config);
     expect(provider.verifyWebhook({ "x-internal-secret": config.webhookSecret }, "")).toBe(true);
     expect(provider.verifyWebhook({ "x-internal-secret": config.apiKey }, "")).toBe(false);
+  });
+
+  it("fails closed before sending the API key to an arbitrary stored URL", async () => {
+    delete process.env.WA_UNOFFICIAL_URL;
+    delete process.env.WAHA_ALLOWED_ORIGINS;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new WhatsAppUnofficialProvider({ ...config, baseUrl: "https://attacker.example" })
+      .send({ to: "+919876543210", body: "secret-bearing request" });
+
+    expect(result).toMatchObject({ status: "failed", error: "waha_base_url_not_allowlisted" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects credentials, fragments, metadata and private addresses unless explicitly allowlisted", () => {
+    const env = {} as NodeJS.ProcessEnv;
+    expect(validateWahaBaseUrl("http://user:pass@127.0.0.1:3005", env)).toMatchObject({ ok: false, error: "waha_base_url_invalid" });
+    expect(validateWahaBaseUrl("http://127.0.0.1:3005/#token", env)).toMatchObject({ ok: false, error: "waha_base_url_invalid" });
+    expect(validateWahaBaseUrl("http://169.254.169.254", env)).toMatchObject({ ok: false, error: "waha_base_url_private_address_not_allowlisted" });
+    expect(validateWahaBaseUrl("http://10.0.0.4:3000", env)).toMatchObject({ ok: false, error: "waha_base_url_private_address_not_allowlisted" });
+    expect(isRestrictedWahaHost("metadata.google.internal")).toBe(true);
+  });
+
+  it("accepts an exact explicitly configured production origin", async () => {
+    process.env.WAHA_ALLOWED_ORIGINS = "http://waha:3000";
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "msg-allowlisted" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new WhatsAppUnofficialProvider({ ...config, baseUrl: "http://waha:3000" })
+      .send({ to: "+919876543210", body: "Allowed" });
+
+    expect(result).toMatchObject({ status: "sent", externalId: "msg-allowlisted" });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("http://waha:3000/api/sendText");
   });
 });

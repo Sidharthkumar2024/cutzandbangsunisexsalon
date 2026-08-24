@@ -1,6 +1,5 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { providers } from "@cutz/providers";
 import { prisma } from "@cutz/db";
 import { authorize } from "../../plugins/auth.js";
 import { audit } from "../../lib/audit.js";
@@ -64,9 +63,9 @@ export default async function providerConfigRoutes(app: FastifyInstance) {
   app.get("/integrations/email/status", { preHandler: authorize("OWNER", "ADMIN", "MANAGER") }, async (req, reply) => {
     const { branchId = req.user?.branchId ?? "main" } = req.query as Record<string, string>;
     if (req.user?.role === "MANAGER" && req.user.branchId !== branchId) return reply.code(403).send({ error: "forbidden" });
-    await applyProviderSettings(branchId);
+    const providerContext = await applyProviderSettings(branchId);
     try {
-      return await providers.email().health?.() ?? { configured: false, connected: false, detail: "Health check unavailable" };
+      return await providerContext.email().health?.() ?? { configured: false, connected: false, detail: "Health check unavailable" };
     } catch (error) {
       return {
         configured: true,
@@ -78,8 +77,8 @@ export default async function providerConfigRoutes(app: FastifyInstance) {
 
   app.post("/integrations/email/test", { preHandler: authorize("OWNER", "ADMIN") }, async (req, reply) => {
     const body = z.object({ branchId: z.string().default("main"), to: z.string().email() }).parse(req.body);
-    await applyProviderSettings(body.branchId);
-    const result = await providers.email().send({
+    const providerContext = await applyProviderSettings(body.branchId);
+    const result = await providerContext.email().send({
       to: body.to,
       subject: "Cutz & Bangs SMTP test",
       html: "<p>Your salon email integration is working.</p>",
@@ -97,8 +96,8 @@ export default async function providerConfigRoutes(app: FastifyInstance) {
       branchId: z.string().default("main"),
       action: z.enum(["create", "start", "restart", "stop", "logout"]),
     }).parse(req.body);
-    await applyProviderSettings(body.branchId);
-    const adapter = providers.whatsapp("WHATSAPP_UNOFFICIAL");
+    const providerContext = await applyProviderSettings(body.branchId);
+    const adapter = providerContext.whatsapp("WHATSAPP_UNOFFICIAL");
     if (!adapter.sessionAction) return reply.code(501).send({ error: "session_control_unavailable" });
     try {
       const state = await adapter.sessionAction(body.action);
@@ -120,8 +119,8 @@ export default async function providerConfigRoutes(app: FastifyInstance) {
     const body = z.object({ branchId: z.string().default("main"), limit: z.number().int().min(1).max(5_000).default(5_000) }).parse(req.body ?? {});
     const branch = await prisma.branch.findUnique({ where: { id: body.branchId }, select: { id: true } });
     if (!branch) return reply.code(404).send({ error: "branch_not_found" });
-    await applyProviderSettings(body.branchId);
-    const adapter = providers.whatsapp("WHATSAPP_UNOFFICIAL");
+    const providerContext = await applyProviderSettings(body.branchId);
+    const adapter = providerContext.whatsapp("WHATSAPP_UNOFFICIAL");
     if (!adapter.listContacts) return reply.code(501).send({ error: "contact_sync_unavailable" });
     try {
       const contacts = await adapter.listContacts(body.limit);

@@ -298,9 +298,10 @@ export default async function customerRoutes(app: FastifyInstance) {
 
   // CSV / Google-Sheet import with phone/email dedupe
   app.post("/customers/import", { preHandler: authorize("OWNER", "ADMIN", "MANAGER") }, async (req, reply) => {
-    const { branchId, csv } = z.object({ branchId: z.string(), csv: z.string() }).parse(req.body);
+    const { branchId, csv } = z.object({ branchId: z.string(), csv: z.string().max(1_000_000) }).parse(req.body);
     if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user!.branchId !== branchId) return reply.code(403).send({ error: "forbidden" });
     const rows = parseCsv(csv);
+    if (rows.length > 500) return reply.code(413).send({ error: "too_many_rows", maxRows: 500 });
     let created = 0;
     let skipped = 0;
     const loyaltyRules = await getLoyaltyRules(prisma, branchId);

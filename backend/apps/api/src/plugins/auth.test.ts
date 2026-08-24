@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { authorize } from "./auth.js";
+import { authorize, permissionForPath } from "./auth.js";
 
 function replyMock() {
   const reply = { code: vi.fn(), send: vi.fn() };
@@ -25,5 +25,19 @@ describe("role authorization", () => {
     const reply = replyMock();
     await authorize("OWNER", "ADMIN")({ user: { id: "owner-1", role: "OWNER", branchId: "main" } } as never, reply as never);
     expect(reply.code).not.toHaveBeenCalled();
+  });
+});
+
+describe("workspace permission routing", () => {
+  it.each([
+    ["/payments/reconciliation", "pos"],
+    ["/scan/barcode/sku-1", "pos"],
+    ["/purchase-bills/bill-1/confirm", "inventory"],
+    ["/channels/WHATSAPP_UNOFFICIAL", "inbox"],
+    ["/team-accounts", "staff"],
+    ["/branches", "settings"],
+    ["/maintenance/run", "settings"],
+  ])("maps %s to the %s grant", (path, permission) => {
+    expect(permissionForPath(path)).toBe(permission);
   });
 });

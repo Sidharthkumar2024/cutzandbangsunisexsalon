@@ -16,9 +16,11 @@ import {
   type CashBreakdown,
   type BackendAppointment,
   type BackendCustomerDetail,
+  type BackendCategory,
   type BackendProviderConfig,
   type BackendRangeReport,
   type BackendSnapshot,
+  type BackendWhatsAppTemplate,
   type BackendWhatsAppStatus,
 } from "../../lib/backend-api";
 
@@ -62,6 +64,63 @@ type SaleService = {
 
 const money = (minor: number) =>
   `₹${Math.round(minor / 100).toLocaleString("en-IN")}`;
+
+const initialsFor = (name?: string | null) =>
+  (name ?? "WA")
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase() || "WA";
+
+const categoryDisplayName = (category: BackendCategory) =>
+  category.parent ? `${category.parent.name} › ${category.name}` : category.name;
+
+const categoryGroupName = (category: BackendCategory) =>
+  category.parent?.name ?? category.name;
+
+const buildRateListMessage = (catalog: BackendCategory[], customerName?: string) => {
+  const servicesAvailable = catalog
+    .map((category) => ({
+      ...category,
+      services: [...category.services]
+        .filter((service) => service.isActive)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    }))
+    .filter((category) => category.services.length > 0)
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+
+  const heading = [
+    "*CUTZ & BANGS UNISEX SALON*",
+    customerName ? `Hi ${customerName}, here is our latest service rate list.` : "Here is our latest service rate list.",
+    "",
+    "Location: First Floor, Plot No. 118, Main Kakrola Rd, Patel Garden, Sector 15 Dwarka, New Delhi",
+    "Timings: 10:00 AM onwards",
+    "",
+  ];
+
+  if (!servicesAvailable.length) {
+    return [...heading, "No active services found right now. Please contact salon reception to confirm availability."].join("\n");
+  }
+
+  const grouped = servicesAvailable.reduce<Record<string, BackendCategory[]>>((acc, category) => {
+    const key = categoryGroupName(category);
+    acc[key] = [...(acc[key] ?? []), category];
+    return acc;
+  }, {});
+
+  const categoryLines = Object.entries(grouped).flatMap(([group, categories]) => [
+    `*${group}*`,
+    ...categories.flatMap((category) => [
+      category.parent ? `_${category.name}${category.gender ? ` · ${category.gender}` : ""}_` : "",
+      ...category.services.map((service) => `${service.name} — ${money(service.priceMinor)}`),
+    ]).filter(Boolean),
+    "",
+  ]);
+
+  return [...heading, ...categoryLines, "Reply *BOOK* with your preferred service to confirm."].join("\n");
+};
 const CASH_DENOMINATIONS = [
   { value: 1, kind: "Coin" },
   { value: 2, kind: "Coin" },
@@ -209,7 +268,7 @@ const viewPermission: Partial<Record<View, string>> = {
 };
 
 const viewTitles: Record<View, [string, string]> = {
-  dashboard: ["Good morning, Sana", "Here’s how Cutz & Bangs is doing today."],
+  dashboard: ["Salon dashboard", "Here’s how Cutz & Bangs is doing today."],
   calendar: [
     "Booking calendar",
     "Live appointments, walk-ins and artist schedules.",
@@ -1597,29 +1656,17 @@ function Dashboard({
               <p>Tasks for today</p>
             </div>
             <span className="count-badge">
-              {data.today?.lowStockCount ?? 4}
+              {data.today?.lowStockCount ?? 0}
             </span>
           </div>
-          {(
-            data.products
-              .filter((product) => product.stockQty <= product.reorderLevel)
-              .slice(0, 4)
-              .map((product) => [
-                "Low stock",
-                product.name,
-                `${product.stockQty} units left`,
-              ]) || []
-          )
-            .concat(
-              data.products.length
-                ? []
-                : [
-                    ["Low stock", "L’Oréal Majirel 5.0", "3 units left"],
-                    ["Membership", "Aanya’s balance", "₹620 remaining"],
-                    ["Payment", "Invoice #CB-1042", "UPI pending"],
-                    ["Follow-up", "7 no-shows", "This month"],
-                  ],
-            )
+          {data.products
+            .filter((product) => product.stockQty <= product.reorderLevel)
+            .slice(0, 4)
+            .map((product) => [
+              "Low stock",
+              product.name,
+              `${product.stockQty} units left`,
+            ])
             .map(([type, title, note], index) => (
               <div className="attention-row" key={title}>
                 <span>{["ST", "ME", "₹", "FU"][index] ?? "ST"}</span>
@@ -1636,6 +1683,9 @@ function Dashboard({
                 </button>
               </div>
             ))}
+          {!data.products.some((product) => product.stockQty <= product.reorderLevel) && (
+            <p className="empty-cart">No operational alerts right now.</p>
+          )}
         </article>
       </div>
       {insights && (
@@ -2270,6 +2320,16 @@ function POS({
   const [customerSearch, setCustomerSearch] = useState("");
   const [customerDetail, setCustomerDetail] =
     useState<BackendCustomerDetail | null>(null);
+  const [showQuickCustomer, setShowQuickCustomer] = useState(false);
+  const [quickCustomerName, setQuickCustomerName] = useState("");
+  const [quickCustomerPhone, setQuickCustomerPhone] = useState("");
+  const [quickCustomerEmail, setQuickCustomerEmail] = useState("");
+  const [quickCustomerVisitDate, setQuickCustomerVisitDate] = useState("");
+  const [quickCustomerService, setQuickCustomerService] = useState("");
+  const [quickCustomerAmount, setQuickCustomerAmount] = useState(0);
+  const [quickCustomerWaConsent, setQuickCustomerWaConsent] = useState(false);
+  const [quickCustomerBusy, setQuickCustomerBusy] = useState(false);
+  const [quickCustomerMessage, setQuickCustomerMessage] = useState("");
   const [membershipId, setMembershipId] = useState("");
   const [packageRedemptionEnabled, setPackageRedemptionEnabled] = useState(true);
   const [couponCode, setCouponCode] = useState("");
@@ -2288,21 +2348,27 @@ function POS({
   const openingCashMinor = cashBreakdownTotalMinor(openingBreakdown);
   const openingCountConfirmed = openingCountAcknowledged && Math.round(openingConfirmation * 100) === openingCashMinor;
   const customer = data.customers.find((item) => item.id === customerId);
+  const selectedCustomer = customer ?? (customerDetail?.id === customerId ? customerDetail : null);
   const serviceCategory = new Map(
     data.categories.flatMap((category) =>
-      category.services.map((service) => [service.id, category.name] as const),
+      category.services.map((service) => [service.id, categoryDisplayName(category)] as const),
+    ),
+  );
+  const serviceCategoryGroups = new Map(
+    data.categories.flatMap((category) =>
+      category.services.map((service) => [service.id, categoryGroupName(category)] as const),
     ),
   );
   const catalogFilters = [
     "All",
-    ...Array.from(new Set(data.categories.map((category) => category.name))),
+    ...Array.from(new Set(data.categories.flatMap((category) => [categoryGroupName(category), categoryDisplayName(category)]))),
     "Products",
   ];
   const queryKey = catalogQuery.trim().toLowerCase();
   const visibleServices = services.filter(
     (service) =>
       catalogFilter !== "Products" &&
-      (catalogFilter === "All" || serviceCategory.get(service.id) === catalogFilter) &&
+      (catalogFilter === "All" || serviceCategory.get(service.id) === catalogFilter || serviceCategoryGroups.get(service.id) === catalogFilter) &&
       (!queryKey || service.name.toLowerCase().includes(queryKey)),
   );
   const visibleProducts = data.products.filter(
@@ -2414,6 +2480,17 @@ function POS({
       ? Math.min(membership.balanceMinor, afterCouponMinor - loyaltyMinor)
       : 0;
 
+  const selectCustomer = (nextCustomerId: string) => {
+    setCustomerId(nextCustomerId);
+    setCustomerDetail(null);
+    setMembershipId("");
+    setPackageRedemptionEnabled(true);
+    setMemberCredit(false);
+    setLoyaltyPoints(0);
+    setRedeemLoyalty(false);
+    setQuickCustomerMessage("");
+  };
+
   useEffect(() => {
     if (!token || !customerId) return;
     let cancelled = false;
@@ -2488,7 +2565,7 @@ function POS({
       ];
       const result = await backendApi.checkout(token, {
         branchId: "main",
-        customerId: customer?.id,
+        customerId: customerId || undefined,
         lines: cart.map((item) => ({
           kind: item.kind,
           serviceId: item.serviceId,
@@ -2595,6 +2672,65 @@ function POS({
       setOpeningBusy(false);
     }
   };
+  const createQuickCustomer = async () => {
+    if (!token || !quickCustomerName.trim()) return;
+    if (quickCustomerVisitDate && !quickCustomerService.trim()) {
+      setQuickCustomerMessage("Add the earlier service name so the dated visit can be saved correctly.");
+      return;
+    }
+    setQuickCustomerBusy(true);
+    setQuickCustomerMessage("");
+    try {
+      const phone = quickCustomerPhone.trim();
+      const existing = phone.replace(/\D/gu, "").length >= 8
+        ? await backendApi.lookupCustomer(token, phone)
+        : null;
+      if (existing) {
+        setCustomerSearch(existing.phone ?? existing.name);
+        selectCustomer(existing.id);
+        setCustomerDetail(await backendApi.customerDetail(token, existing.id));
+        setShowQuickCustomer(false);
+        setQuickCustomerMessage(`${existing.name} already exists and is now selected.`);
+        return;
+      }
+      const created = await backendApi.createCustomer(token, {
+        branchId: "main",
+        name: quickCustomerName.trim(),
+        phone: phone || undefined,
+        email: quickCustomerEmail.trim() || undefined,
+        source: "walk_in",
+        waConsent: quickCustomerWaConsent,
+        initialVisit: quickCustomerVisitDate && quickCustomerService.trim()
+          ? {
+              visitedAt: new Date(`${quickCustomerVisitDate}T12:00:00`).toISOString(),
+              serviceName: quickCustomerService.trim(),
+              amountMinor: Math.round(quickCustomerAmount * 100),
+            }
+          : undefined,
+      });
+      setCustomerSearch(created.phone ?? created.name);
+      selectCustomer(created.id);
+      setCustomerDetail(await backendApi.customerDetail(token, created.id));
+      setQuickCustomerName("");
+      setQuickCustomerPhone("");
+      setQuickCustomerEmail("");
+      setQuickCustomerVisitDate("");
+      setQuickCustomerService("");
+      setQuickCustomerAmount(0);
+      setQuickCustomerWaConsent(false);
+      setShowQuickCustomer(false);
+      setQuickCustomerMessage(`${created.name} created and selected for this bill.`);
+      onRefresh();
+    } catch (cause) {
+      setQuickCustomerMessage(
+        cause instanceof Error
+          ? prettyStatus(cause.message)
+          : "Customer could not be created from POS.",
+      );
+    } finally {
+      setQuickCustomerBusy(false);
+    }
+  };
 
   if (!data.currentCash) {
     return (
@@ -2642,6 +2778,7 @@ function POS({
         <div className="pos-category-row">
           {catalogFilters.map((filter) => (
             <button
+              type="button"
               key={filter}
               className={catalogFilter === filter ? "active" : ""}
               onClick={() => setCatalogFilter(filter)}
@@ -2652,27 +2789,42 @@ function POS({
         </div>
         <div className="pos-service-grid">
           {visibleServices.map((service, index) => (
-            <button key={service.id} onClick={() => addItem(service)}>
-              <span className={`tile-icon tile-${index}`}>
+            <button
+              type="button"
+              key={service.id}
+              onClick={() => addItem(service)}
+              aria-label={`Add ${service.name} for ₹${service.price.toLocaleString("en-IN")}`}
+            >
+              <span className={`tile-icon tile-${index % 6}`}>
                 {service.name
                   .split(" ")
                   .map((word) => word[0])
                   .join("")
                   .slice(0, 2)}
               </span>
-              <strong>{service.name}</strong>
-              <small>{service.duration}</small>
-              <b>₹{service.price.toLocaleString("en-IN")}</b>
-              <i>+</i>
+              <span className="pos-service-copy">
+                <small className="pos-service-category">{serviceCategory.get(service.id) ?? "Salon service"}</small>
+                <strong>{service.name}</strong>
+                <small>{service.duration}</small>
+              </span>
+              <span className="pos-service-price">
+                <b>₹{service.price.toLocaleString("en-IN")}</b>
+                <i aria-hidden="true">+</i>
+              </span>
             </button>
           ))}
           {visibleProducts.map((product, index) => (
-              <button key={product.id} onClick={() => addProduct(product)}>
+              <button type="button" key={product.id} onClick={() => addProduct(product)} aria-label={`Add ${product.name} for ${money(product.sellMinor)}`}>
                 <span className={`tile-icon tile-${(index + visibleServices.length) % 6}`}>PR</span>
-                <strong>{product.name}</strong>
-                <small>{product.stockQty} in stock · product</small>
-                <b>{money(product.sellMinor)}</b>
-                <i>+</i>
+                <span className="pos-service-copy">
+                  <small className="pos-service-category">Retail product</small>
+                  <strong>{product.name}</strong>
+                  <small>{product.stockQty} in stock{product.sku ? ` · ${product.sku}` : ""}</small>
+                </span>
+                <span className="pos-service-price">
+                  <b>{money(product.sellMinor)}</b>
+                  <i aria-hidden="true">+</i>
+                </span>
               </button>
             ))}
           {!visibleServices.length && !visibleProducts.length && (
@@ -2683,8 +2835,8 @@ function POS({
       <aside className="pos-cart admin-card">
         <div className="pos-customer">
           <span>
-            {customer
-              ? customer.name
+            {selectedCustomer
+              ? selectedCustomer.name
                   .split(" ")
                   .map((part) => part[0])
                   .join("")
@@ -2693,10 +2845,10 @@ function POS({
           </span>
           <div>
             <small>Customer</small>
-            <strong>{customer?.name ?? "Walk-in / guest"}</strong>
+            <strong>{selectedCustomer?.name ?? "Walk-in / guest"}</strong>
             <p>
-              {customer
-                ? `${customer.visitCount} visits · live CRM`
+              {selectedCustomer
+                ? `${selectedCustomer.visitCount} visits · ${selectedCustomer.loyaltyPoints} loyalty points`
                 : "Choose a customer for CRM and membership"}
             </p>
           </div>
@@ -2704,13 +2856,7 @@ function POS({
           <select
             value={customerId}
             onChange={(event) => {
-              setCustomerId(event.target.value);
-              setCustomerDetail(null);
-              setMembershipId("");
-              setPackageRedemptionEnabled(true);
-              setMemberCredit(false);
-              setLoyaltyPoints(0);
-              setRedeemLoyalty(false);
+              selectCustomer(event.target.value);
             }}
             aria-label="Select POS customer"
           >
@@ -2721,6 +2867,73 @@ function POS({
               </option>
             ))}
           </select>
+          <div className="pos-customer-actions">
+            <button
+              type="button"
+              className="pos-add-customer-button"
+              aria-expanded={showQuickCustomer}
+              onClick={() => {
+                setShowQuickCustomer((current) => !current);
+                setQuickCustomerMessage("");
+              }}
+            >
+              {showQuickCustomer ? "Close new customer" : "+ Add new customer"}
+            </button>
+            {customerId && (
+              <button type="button" className="pos-clear-customer-button" onClick={() => { selectCustomer(""); setCustomerSearch(""); }}>
+                Use walk-in instead
+              </button>
+            )}
+          </div>
+          {showQuickCustomer && (
+            <form
+              className="pos-quick-customer"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void createQuickCustomer();
+              }}
+            >
+              <header>
+                <div><strong>Add customer without leaving POS</strong><small>Phone is checked first so an existing profile is never duplicated.</small></div>
+              </header>
+              <label>
+                Customer name
+                <input autoFocus value={quickCustomerName} onChange={(event) => setQuickCustomerName(event.target.value)} placeholder="Full name" required />
+              </label>
+              <label>
+                Mobile number
+                <input inputMode="tel" value={quickCustomerPhone} onChange={(event) => setQuickCustomerPhone(event.target.value)} placeholder="10-digit number" />
+              </label>
+              <label>
+                Email (optional)
+                <input type="email" value={quickCustomerEmail} onChange={(event) => setQuickCustomerEmail(event.target.value)} placeholder="name@example.com" />
+              </label>
+              <label>
+                Customer since / earlier visit date
+                <input type="date" max={new Date().toISOString().slice(0, 10)} value={quickCustomerVisitDate} onChange={(event) => setQuickCustomerVisitDate(event.target.value)} />
+              </label>
+              {quickCustomerVisitDate && (
+                <>
+                  <label>
+                    Earlier service
+                    <input value={quickCustomerService} onChange={(event) => setQuickCustomerService(event.target.value)} placeholder="Haircut, colour, facial…" required />
+                  </label>
+                  <label>
+                    Earlier sale (₹)
+                    <input type="number" min="0" step="1" value={quickCustomerAmount || ""} onChange={(event) => setQuickCustomerAmount(Math.max(0, Number(event.target.value)))} placeholder="0" />
+                  </label>
+                </>
+              )}
+              <label className="pos-quick-consent">
+                <input type="checkbox" checked={quickCustomerWaConsent} onChange={(event) => setQuickCustomerWaConsent(event.target.checked)} />
+                <span>Customer has agreed to receive service updates on WhatsApp</span>
+              </label>
+              <button className="button admin-primary" type="submit" disabled={quickCustomerBusy || !token || !quickCustomerName.trim() || Boolean(quickCustomerVisitDate && !quickCustomerService.trim())}>
+                {quickCustomerBusy ? "Checking & saving…" : "Save & select customer"}
+              </button>
+            </form>
+          )}
+          {quickCustomerMessage && <p className="pos-customer-message" aria-live="polite">{quickCustomerMessage}</p>}
         </div>
         <div className="cart-items">
           {cart.length ? (
@@ -2842,13 +3055,13 @@ function POS({
                 Open PDF
               </button>
               <button
-                disabled={charging || !customer?.email}
+                disabled={charging || !selectedCustomer?.email}
                 onClick={() => void emailInvoice()}
               >
                 Email invoice
               </button>
-              <button disabled={charging || !customer?.phone || !customer?.waConsent} onClick={() => void whatsappInvoice("WHATSAPP_OFFICIAL")}>Official WhatsApp</button>
-              <button disabled={charging || !customer?.phone || !customer?.waConsent} onClick={() => void whatsappInvoice("WHATSAPP_UNOFFICIAL")}>Unofficial WhatsApp</button>
+              <button disabled={charging || !selectedCustomer?.phone || !selectedCustomer?.waConsent} onClick={() => void whatsappInvoice("WHATSAPP_OFFICIAL")}>Official WhatsApp</button>
+              <button disabled={charging || !selectedCustomer?.phone || !selectedCustomer?.waConsent} onClick={() => void whatsappInvoice("WHATSAPP_UNOFFICIAL")}>Unofficial WhatsApp</button>
             </div>
             <button
               onClick={() => {
@@ -3770,6 +3983,7 @@ function Services({
   const [categoryId, setCategoryId] = useState("");
   const [categoryName, setCategoryName] = useState("");
   const [categoryGender, setCategoryGender] = useState("Unisex");
+  const [parentCategoryId, setParentCategoryId] = useState("");
   const [name, setName] = useState("");
   const [duration, setDuration] = useState(60);
   const [price, setPrice] = useState(799);
@@ -3784,11 +3998,13 @@ function Services({
       const category = await backendApi.createServiceCategory(token, {
         name: categoryName.trim(),
         gender: categoryGender,
+        parentId: parentCategoryId || null,
         sortOrder: data.categories.length * 10,
       });
       setCategoryName("");
+      setParentCategoryId("");
       setCategoryId(category.id);
-      setMessage("Category created. Add its first service below.");
+      setMessage(parentCategoryId ? "Subcategory created. Add its first service below." : "Main category created. Add its first service below.");
       onRefresh();
     } catch (cause) {
       setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Category could not be created.");
@@ -3826,12 +4042,22 @@ function Services({
       setBusy(false);
     }
   };
+  const topLevelCategories = data.categories.filter((category) => !category.parentId);
+  const categoryTree = topLevelCategories
+    .map((parent) => ({
+      parent,
+      children: data.categories.filter((category) => category.parentId === parent.id),
+      directServices: parent.services,
+    }))
+    .sort((a, b) => a.parent.sortOrder - b.parent.sortOrder || a.parent.name.localeCompare(b.parent.name));
+  const orphanCategories = data.categories.filter((category) => category.parentId && !data.categories.some((parent) => parent.id === category.parentId));
   return (
     <div className="services-admin">
       {message && <div className="calendar-message">{message}</div>}
       <section className="admin-card phase-one-form category-create">
-        <div><p className="eyebrow">Category manager</p><h2>Create category</h2><small>Examples: Male, Female, Manicure, Pedicure or Colouring.</small></div>
+        <div><p className="eyebrow">Category manager</p><h2>Create category</h2><small>Create parent categories like Men/Women/Hair, then subcategories like Hair & Grooming, Facials or Waxing.</small></div>
         <label>Category name<input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="Pedicure" /></label>
+        <label>Parent category<select value={parentCategoryId} onChange={(event) => setParentCategoryId(event.target.value)}><option value="">No parent · main category</option>{topLevelCategories.map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}</select></label>
         <label>Audience<select value={categoryGender} onChange={(event) => setCategoryGender(event.target.value)}><option value="Unisex">Unisex</option><option value="Male">Male</option><option value="Female">Female</option><option value="Kids - Unisex">Kids · Unisex</option><option value="Boys">Boys</option><option value="Girls">Girls</option><option value="Baby Boy">Baby boy</option><option value="Baby Girl">Baby girl</option></select></label>
         <button className="button admin-primary" disabled={busy || !token || !categoryName.trim()} onClick={() => void createCategory()}>{busy ? "Creating…" : "Create category"}</button>
       </section>
@@ -3853,7 +4079,7 @@ function Services({
             <option value="">Select category</option>
             {data.categories.map((category) => (
               <option value={category.id} key={category.id}>
-                {category.name}
+                {categoryDisplayName(category)}
               </option>
             ))}
           </select>
@@ -3912,14 +4138,14 @@ function Services({
         </button>
       </section>
       <div className="service-admin-grid">
-        {data.categories.map((category) => (
-          <article className="admin-card" key={category.id}>
+        {[...categoryTree, ...orphanCategories.map((category) => ({ parent: category, children: [], directServices: category.services }))].map(({ parent, children, directServices }) => (
+          <article className="admin-card service-category-card" key={parent.id}>
             <header>
-              <div><h3>{category.name}</h3><small>{category.gender ?? "All audiences"}</small></div>
-              <span>{category.services.length}</span>
+              <div><h3>{parent.name}</h3><small>{parent.gender ?? "All audiences"} · {children.length ? `${children.length} subcategories` : "Main category"}</small></div>
+              <span>{directServices.length + children.reduce((sum, child) => sum + child.services.length, 0)}</span>
             </header>
-            {category.services.map((service) => (
-              <div key={service.id}>
+            {directServices.map((service) => (
+              <div key={service.id} className="service-row">
                 <span>
                   <strong>{service.name}</strong>
                   <small>
@@ -3932,6 +4158,26 @@ function Services({
                 <b>{money(service.priceMinor)}</b>
               </div>
             ))}
+            {children.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)).map((category) => (
+              <section className="subcategory-block" key={category.id}>
+                <h4>{category.name}<small>{category.gender ?? parent.gender ?? "All audiences"}</small></h4>
+                {category.services.map((service) => (
+                  <div key={service.id} className="service-row">
+                    <span>
+                      <strong>{service.name}</strong>
+                      <small>
+                        {service.durationMin} min ·{" "}
+                        {service.serviceStaff
+                          .map((entry) => entry.staff.displayName)
+                          .join(", ") || "No artist assigned"}
+                      </small>
+                    </span>
+                    <b>{money(service.priceMinor)}</b>
+                  </div>
+                ))}
+                {!category.services.length && <p className="empty-cart">No services in this subcategory yet.</p>}
+              </section>
+            ))}
           </article>
         ))}
       </div>
@@ -3942,6 +4188,7 @@ function Services({
 function Cashbook({ token, data, onRefresh }: { token: string; data: BackendSnapshot; onRefresh: () => void }) {
   const [openingBreakdown, setOpeningBreakdown] = useState<CashBreakdown>(emptyCashBreakdown);
   const [closingBreakdown, setClosingBreakdown] = useState<CashBreakdown>(emptyCashBreakdown);
+  const [closingManualAmount, setClosingManualAmount] = useState("");
   const [openingConfirmation, setOpeningConfirmation] = useState(0);
   const [openingCountAcknowledged, setOpeningCountAcknowledged] = useState(false);
   const [category, setCategory] = useState("Refreshments");
@@ -3953,8 +4200,12 @@ function Cashbook({ token, data, onRefresh }: { token: string; data: BackendSnap
   const session = data.currentCash;
   const openingCashMinor = cashBreakdownTotalMinor(openingBreakdown);
   const closingCashMinor = cashBreakdownTotalMinor(closingBreakdown);
+  const closingManualMinor =
+    closingManualAmount.trim() === "" ? null : Math.max(0, Math.round(Number(closingManualAmount) * 100));
+  const effectiveClosingCashMinor = closingManualMinor ?? closingCashMinor;
+  const closingMode = closingManualMinor === null ? "count" : "manual";
   const openingCountConfirmed = openingCountAcknowledged && Math.round(openingConfirmation * 100) === openingCashMinor;
-  const closingCountMatches = Boolean(session && closingCashMinor === session.expectedCashMinor);
+  const closingCountMatches = Boolean(session && effectiveClosingCashMinor === session.expectedCashMinor);
   const operate = async (action: "open" | "close" | "expense") => {
     if (!token) return;
     setBusy(true); setMessage("");
@@ -3963,8 +4214,11 @@ function Cashbook({ token, data, onRefresh }: { token: string; data: BackendSnap
         await backendApi.openCashSession(token, { branchId: "main", openingCashMinor, openingBreakdown });
         setOpeningBreakdown(emptyCashBreakdown()); setOpeningConfirmation(0); setOpeningCountAcknowledged(false); setMessage("Cash drawer opened. Every cash sale and expense now reconciles against it.");
       } else if (action === "close" && session) {
-        const result = await backendApi.closeCashSession(token, session.id, { closingCashMinor, closingBreakdown });
-        setClosingBreakdown(emptyCashBreakdown()); setMessage(`Drawer closed. Variance: ${money(result.varianceMinor ?? 0)}.`);
+        const result = await backendApi.closeCashSession(token, session.id, {
+          closingCashMinor: effectiveClosingCashMinor,
+          closingBreakdown: closingMode === "manual" ? null : closingBreakdown,
+        });
+        setClosingBreakdown(emptyCashBreakdown()); setClosingManualAmount(""); setMessage(`Drawer closed. Variance: ${money(result.varianceMinor ?? 0)}.`);
       } else if (action === "expense") {
         await backendApi.createExpense(token, { branchId: "main", category, description, amountMinor: amount * 100, paymentMethod });
         setDescription(""); setAmount(0); setMessage("Expense recorded in the audit trail.");
@@ -3987,7 +4241,7 @@ function Cashbook({ token, data, onRefresh }: { token: string; data: BackendSnap
     <div className="cashbook-grid">
       <section className="admin-card phase-one-form">
         <div><p className="eyebrow">Daily register</p><h2>{session ? "Close cash drawer" : "Open cash drawer"}</h2><small>{session ? `Business date ${session.businessDate}` : "Enter the physical cash available before the first sale."}</small></div>
-        {!session ? <><CashDenominationCounter value={openingBreakdown} onChange={setOpeningBreakdown} title="Opening coins and notes" /><label>Re-enter counted total to confirm (₹)<input type="number" min="0" value={openingConfirmation || ""} placeholder="0" onChange={(event) => setOpeningConfirmation(Math.max(0, Number(event.target.value)))} /></label><label className="consent-box"><input type="checkbox" checked={openingCountAcknowledged} onChange={(event) => setOpeningCountAcknowledged(event.target.checked)} /><span>I physically counted every coin and note</span></label>{!openingCountConfirmed && <p className="cash-mismatch-message">Enter {money(openingCashMinor)} and confirm the physical count.</p>}</> : <CashDenominationCounter value={closingBreakdown} onChange={setClosingBreakdown} expectedMinor={session.expectedCashMinor} title="Closing coins and notes" />}
+        {!session ? <><CashDenominationCounter value={openingBreakdown} onChange={setOpeningBreakdown} title="Opening coins and notes" /><label>Re-enter counted total to confirm (₹)<input type="number" min="0" value={openingConfirmation || ""} placeholder="0" onChange={(event) => setOpeningConfirmation(Math.max(0, Number(event.target.value)))} /></label><label className="consent-box"><input type="checkbox" checked={openingCountAcknowledged} onChange={(event) => setOpeningCountAcknowledged(event.target.checked)} /><span>I physically counted every coin and note</span></label>{!openingCountConfirmed && <p className="cash-mismatch-message">Enter {money(openingCashMinor)} and confirm the physical count.</p>}</> : <><CashDenominationCounter value={closingBreakdown} onChange={setClosingBreakdown} expectedMinor={session.expectedCashMinor} title="Closing coins and notes" /><div className="manual-cash-total"><label>Closing cash amount (₹)<input type="number" min="0" inputMode="decimal" value={closingManualAmount} placeholder={`${(session.expectedCashMinor / 100).toLocaleString("en-IN")}`} onChange={(event) => setClosingManualAmount(event.target.value)} /></label><small>Use this if you counted total cash directly. Leave blank to use the note/coin count above.</small><strong className={closingCountMatches ? "matches" : "mismatch"}>{closingMode === "manual" ? "Manual total" : "Denomination total"}: {money(effectiveClosingCashMinor)}</strong></div>{!closingCountMatches && <p className="cash-mismatch-message">Counted {money(effectiveClosingCashMinor)} · expected {money(session.expectedCashMinor)} · fix the amount or record the missing cash expense before closing.</p>}</>}
         <button className="button admin-primary" disabled={busy || !token || (session ? !closingCountMatches : !openingCountConfirmed)} onClick={() => void operate(session ? "close" : "open")}>{busy ? "Saving…" : session ? "Close & reconcile" : "Open drawer"}</button>
       </section>
       <section className="admin-card phase-one-form">
@@ -4347,6 +4601,9 @@ function Inbox({
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [newCustomerId, setNewCustomerId] = useState("");
+  const [officialTemplates, setOfficialTemplates] = useState<BackendWhatsAppTemplate[]>([]);
+  const [templateMode, setTemplateMode] = useState<"text" | "template">("text");
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [inboxSearch, setInboxSearch] = useState("");
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [newChannel, setNewChannel] = useState<
@@ -4355,6 +4612,14 @@ function Inbox({
   const selected =
     data.conversations.find((item) => item.id === selectedId) ??
     data.conversations[0];
+  const canUseTemplate = selected?.channel.type === "WHATSAPP_OFFICIAL";
+  const activeTemplate = officialTemplates.find((template) => template.id === selectedTemplateId);
+  const sendDisabled = (() => {
+    if (!selected) return true;
+    if (internal) return !body.trim();
+    if (canUseTemplate && templateMode === "template") return !activeTemplate;
+    return !body.trim();
+  })();
   const conversationRows = data.conversations.filter((item) => (!unreadOnly || item.unread) && (!inboxSearch.trim() || (item.customer?.name ?? "").toLowerCase().includes(inboxSearch.toLowerCase()) || (item.customer?.phone ?? "").includes(inboxSearch.replace(/\D/g, ""))));
   const load = async (id: string) => {
     if (!token) return;
@@ -4394,15 +4659,61 @@ function Inbox({
     const timer = window.setInterval(onRefresh, 15_000);
     return () => window.clearInterval(timer);
   }, [onRefresh, token]);
+  useEffect(() => {
+    if (!token || !canUseTemplate) {
+      return;
+    }
+    let cancelled = false;
+    const syncTemplates = async () => {
+      try {
+        const next = await backendApi.whatsappStatus(token);
+        if (!cancelled) {
+          const templates = next.official.templates ?? [];
+          if (!templates.length && templateMode === "template") {
+            setTemplateMode("text");
+          }
+          setOfficialTemplates(templates);
+          if (templateMode === "template" && templates.length && !templates.find((template) => template.id === selectedTemplateId)) {
+            setSelectedTemplateId(templates[0].id);
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          setOfficialTemplates([]);
+          setTemplateMode("text");
+          setSelectedTemplateId("");
+        }
+      }
+    };
+    void syncTemplates();
+    const timer = window.setInterval(syncTemplates, 25_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [canUseTemplate, selected?.id, templateMode, token, selectedTemplateId]);
   const send = async () => {
-    if (!token || !selected || !body.trim()) return;
+    if (!token || !selected || sendDisabled) return;
     setBusy(true);
     setMessage("");
     try {
-      await backendApi.sendConversationMessage(token, selected.id, {
+      const basePayload = {
         body: body.trim(),
         internal,
-      });
+      } as Parameters<typeof backendApi.sendConversationMessage>[2];
+      if (!internal && canUseTemplate && templateMode === "template" && activeTemplate) {
+        const templatePayload = {
+          internal: false,
+          templateName: activeTemplate.name,
+          templateLanguage: activeTemplate.language,
+        } as Parameters<typeof backendApi.sendConversationMessage>[2];
+        if (!body.trim()) delete templatePayload.body;
+        await backendApi.sendConversationMessage(token, selected.id, templatePayload);
+      } else {
+        await backendApi.sendConversationMessage(token, selected.id, {
+          ...basePayload,
+        });
+      }
       setBody("");
       setDetail(await backendApi.conversation(token, selected.id));
       setMessage(
@@ -4421,6 +4732,32 @@ function Inbox({
       setBusy(false);
     }
   };
+
+  const sendRateList = async () => {
+    if (!token || !selected) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const rateList = buildRateListMessage(data.categories, selected.customer?.name);
+      await backendApi.sendConversationMessage(token, selected.id, {
+        body: rateList,
+        internal: false,
+      });
+      setBody("");
+      setDetail(await backendApi.conversation(token, selected.id));
+      setMessage("Rate list sent through the configured provider.");
+      onRefresh();
+    } catch (cause) {
+      setMessage(
+        cause instanceof Error
+          ? prettyStatus(cause.message)
+          : "Rate list could not be sent.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const startConversation = async () => {
     if (!token || !newCustomerId) return;
     setBusy(true);
@@ -4459,16 +4796,12 @@ function Inbox({
               className={selected?.id === item.id ? "active" : ""}
               onClick={() => void load(item.id)}
             >
-              <span>
-                {item.customer?.name
-                  .split(" ")
-                  .map((part) => part[0])
-                  .join("")
-                  .slice(0, 2) ?? "WA"}
+              <span className={item.customer?.avatarUrl ? "has-photo" : ""}>
+                {item.customer?.avatarUrl ? <Image src={item.customer.avatarUrl} alt="" width={48} height={48} unoptimized /> : initialsFor(item.customer?.name)}
               </span>
               <p>
                 <strong>{item.customer?.name ?? "Guest conversation"}</strong>
-                <small>{prettyStatus(item.channel.type)}</small>
+                <small>{item.customer?.phone ?? "No phone"} · {prettyStatus(item.channel.type)}</small>
               </p>
               <i>
                 {item.lastMessageAt
@@ -4489,18 +4822,14 @@ function Inbox({
         </aside>
         <section className="chat-panel">
           <header>
-            <span>
-              {selected?.customer?.name
-                .split(" ")
-                .map((part) => part[0])
-                .join("")
-                .slice(0, 2) ?? "IN"}
+            <span className={selected?.customer?.avatarUrl ? "has-photo" : ""}>
+              {selected?.customer?.avatarUrl ? <Image src={selected.customer.avatarUrl} alt="" width={48} height={48} unoptimized /> : initialsFor(selected?.customer?.name ?? "Inbox")}
             </span>
             <div>
               <strong>{selected?.customer?.name ?? "Unified inbox"}</strong>
               <small>
                 {selected
-                  ? `${prettyStatus(selected.channel.type)} · Backend live`
+                  ? `${selected.customer?.phone ?? "No phone"} · ${prettyStatus(selected.channel.type)}`
                   : "Choose a conversation"}
               </small>
             </div>
@@ -4541,6 +4870,37 @@ function Inbox({
               />
               Internal note
             </label>
+            {canUseTemplate && !internal && (
+              <div className="whatsapp-template-controls">
+                <label>
+                  <select
+                    value={templateMode}
+                    onChange={(event) => {
+                      const nextMode = event.target.value as "text" | "template";
+                      setTemplateMode(nextMode);
+                    }}
+                  >
+                    <option value="text">Custom text</option>
+                    <option value="template" disabled={!officialTemplates.length}>
+                      Official template
+                    </option>
+                  </select>
+                </label>
+                {templateMode === "template" && (
+                  <select
+                    value={selectedTemplateId}
+                    onChange={(event) => setSelectedTemplateId(event.target.value)}
+                  >
+                    <option value="">{officialTemplates.length ? "Choose template" : "No approved templates"}</option>
+                    {officialTemplates.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.name} ({template.language}) · {template.status}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            )}
             <input
               value={body}
               onChange={(event) => setBody(event.target.value)}
@@ -4549,23 +4909,25 @@ function Inbox({
               }
             />
             <button
-              disabled={busy || !selected || !body.trim()}
+              disabled={busy || sendDisabled}
               onClick={() => void send()}
             >
               {busy ? "…" : "Send ↑"}
             </button>
+            <button
+              disabled={busy || !selected}
+              onClick={() => void sendRateList()}
+            >
+              {busy ? "…" : "Send rate list"}
+            </button>
           </footer>
         </section>
         <aside className="contact-panel">
-          <div className="contact-avatar">
-            {selected?.customer?.name
-              .split(" ")
-              .map((part) => part[0])
-              .join("")
-              .slice(0, 2) ?? "IN"}
+          <div className={`contact-avatar ${selected?.customer?.avatarUrl ? "has-photo" : ""}`}>
+            {selected?.customer?.avatarUrl ? <Image src={selected.customer.avatarUrl} alt="" width={88} height={88} unoptimized /> : initialsFor(selected?.customer?.name ?? "Inbox")}
           </div>
           <h3>{selected?.customer?.name ?? "No contact selected"}</h3>
-          <p>{selected ? "Live CRM contact" : "Select a thread"}</p>
+          <p>{selected ? `${selected.customer?.phone ?? "No phone"} · WhatsApp-style CRM contact` : "Select a thread"}</p>
           <div className="contact-stats">
             <span>
               <strong>{data.conversations.length}</strong>Threads
@@ -5987,7 +6349,7 @@ function Settings({
             <strong>Allow waitlist</strong>
             <small>Offer a waitlist when a day is full</small>
           </div>
-          <button className={`toggle ${allowWaitlist ? "active" : ""}`} onClick={() => setAllowWaitlist((current) => !current)}>
+          <button type="button" className={`toggle ${allowWaitlist ? "active" : ""}`} onClick={() => setAllowWaitlist((current) => !current)}>
             <i />
           </button>
         </div>
@@ -5996,7 +6358,7 @@ function Settings({
             <strong>Manager conflict override</strong>
             <small>Require a reason and keep an audit entry</small>
           </div>
-          <button className={`toggle ${managerOverride ? "active" : ""}`} onClick={() => setManagerOverride((current) => !current)}>
+          <button type="button" className={`toggle ${managerOverride ? "active" : ""}`} onClick={() => setManagerOverride((current) => !current)}>
             <i />
           </button>
         </div>
@@ -6015,7 +6377,7 @@ function Settings({
       <article className="admin-card settings-card loyalty-settings-card">
         <p className="eyebrow">Loyalty engine</p>
         <h2>Points earning & redemption</h2>
-        <div className="setting-row"><div><strong>Loyalty programme</strong><small>Enable automatic earning and POS redemption</small></div><button className={`toggle ${loyaltyEnabled ? "active" : ""}`} onClick={() => setLoyaltyEnabled((current) => !current)}><i /></button></div>
+        <div className="setting-row"><div><strong>Loyalty programme</strong><small>Enable automatic earning and POS redemption</small></div><button type="button" className={`toggle ${loyaltyEnabled ? "active" : ""}`} onClick={() => setLoyaltyEnabled((current) => !current)}><i /></button></div>
         <div className="loyalty-rule-grid">
           <label>Welcome points<input type="number" min="0" value={welcomePoints} onChange={(event) => setWelcomePoints(Number(event.target.value))} /></label>
           <label>Earn points<input type="number" min="0" value={earnPoints} onChange={(event) => setEarnPoints(Number(event.target.value))} /></label>
@@ -6036,13 +6398,13 @@ function Settings({
       <article className="admin-card provider-config-card">
         <div className="card-head"><div><p className="eyebrow">Secure email setup</p><h2>SMTP configuration</h2><p>Add or rotate the salon mailbox without editing server files. Passwords are encrypted and never returned to this screen.</p></div><span className={emailHealth?.connected ? "integration-badge connected" : "integration-badge"}>{emailHealth?.connected ? "Connected" : providerConfig.smtp.hasPassword ? "Saved" : "Needs setup"}</span></div>
         <div className="provider-config-form smtp-config-form">
-          <label className="toggle-field"><span>Enable email</span><button className={`toggle ${providerConfig.smtp.enabled ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, smtp: { ...current.smtp, enabled: !current.smtp.enabled } }))}><i /></button></label>
+          <label className="toggle-field"><span>Enable email</span><button type="button" className={`toggle ${providerConfig.smtp.enabled ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, smtp: { ...current.smtp, enabled: !current.smtp.enabled } }))}><i /></button></label>
           <label>SMTP host<input value={providerConfig.smtp.host} onChange={(event) => setProviderConfig((current) => ({ ...current, smtp: { ...current.smtp, host: event.target.value } }))} placeholder="smtp.example.com" /></label>
           <label>Port<input type="number" min="1" max="65535" value={providerConfig.smtp.port} onChange={(event) => setProviderConfig((current) => ({ ...current, smtp: { ...current.smtp, port: Number(event.target.value) } }))} /></label>
           <label>Username<input value={providerConfig.smtp.user} onChange={(event) => setProviderConfig((current) => ({ ...current, smtp: { ...current.smtp, user: event.target.value } }))} placeholder="salon@example.com" /></label>
           <label>From address<input value={providerConfig.smtp.from} onChange={(event) => setProviderConfig((current) => ({ ...current, smtp: { ...current.smtp, from: event.target.value } }))} placeholder="Cutz & Bangs <salon@example.com>" /></label>
           <label>Password<input type="password" value={smtpPassword} onChange={(event) => setSmtpPassword(event.target.value)} placeholder={providerConfig.smtp.hasPassword ? "Saved · enter only to replace" : "SMTP password"} /></label>
-          <label className="toggle-field"><span>Secure TLS socket</span><button className={`toggle ${providerConfig.smtp.secure ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, smtp: { ...current.smtp, secure: !current.smtp.secure } }))}><i /></button></label>
+          <label className="toggle-field"><span>Secure TLS socket</span><button type="button" className={`toggle ${providerConfig.smtp.secure ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, smtp: { ...current.smtp, secure: !current.smtp.secure } }))}><i /></button></label>
         </div>
         <div className="integration-test-row"><input type="email" value={emailTestTo} onChange={(event) => setEmailTestTo(event.target.value)} placeholder="Test recipient email" /><button disabled={busy || !token || !emailTestTo || !providerConfig.smtp.enabled} onClick={() => void testEmail()}>Send SMTP test</button><small>{emailHealth?.detail ?? "Save credentials, then send a connection test."}</small></div>
       </article>
@@ -6050,7 +6412,7 @@ function Settings({
         <div className="card-head"><div><p className="eyebrow">Messaging credentials</p><h2>WhatsApp provider setup</h2><p>Official Meta Cloud API and the optional unofficial connector are isolated from each other.</p></div></div>
         <div className="provider-credential-grid">
           <section>
-            <header><div><strong>Official Meta Cloud API</strong><small>Recommended for production messaging</small></div><button className={`toggle ${providerConfig.whatsappOfficial.enabled ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, whatsappOfficial: { ...current.whatsappOfficial, enabled: !current.whatsappOfficial.enabled } }))}><i /></button></header>
+            <header><div><strong>Official Meta Cloud API</strong><small>Recommended for production messaging</small></div><button type="button" className={`toggle ${providerConfig.whatsappOfficial.enabled ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, whatsappOfficial: { ...current.whatsappOfficial, enabled: !current.whatsappOfficial.enabled } }))}><i /></button></header>
             <div className="provider-config-form">
               <label>Phone number ID<input value={providerConfig.whatsappOfficial.phoneId} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappOfficial: { ...current.whatsappOfficial, phoneId: event.target.value } }))} /></label>
               <label>WhatsApp business ID<input value={providerConfig.whatsappOfficial.wabaId} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappOfficial: { ...current.whatsappOfficial, wabaId: event.target.value } }))} /></label>
@@ -6062,7 +6424,7 @@ function Settings({
             <small className="webhook-hint">Webhook endpoint: <code>/api/v1/webhooks/whatsapp</code></small>
           </section>
           <section>
-            <header><div><strong>WAHA · self-hosted unofficial API</strong><small>Free/open-source connector on an isolated private service</small></div><button className={`toggle ${providerConfig.whatsappUnofficial.enabled ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, enabled: !current.whatsappUnofficial.enabled } }))}><i /></button></header>
+            <header><div><strong>WAHA · self-hosted unofficial API</strong><small>Free/open-source connector on an isolated private service</small></div><button type="button" className={`toggle ${providerConfig.whatsappUnofficial.enabled ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, enabled: !current.whatsappUnofficial.enabled } }))}><i /></button></header>
             <div className="provider-config-form">
               <label>WAHA base URL<input value={providerConfig.whatsappUnofficial.baseUrl} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, baseUrl: event.target.value } }))} placeholder="http://waha:3000" /></label>
               <label>Backend webhook URL<input value={providerConfig.whatsappUnofficial.callbackUrl} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, callbackUrl: event.target.value } }))} placeholder="https://salon.example.com/api/v1/webhooks/whatsapp/unofficial" /></label>
@@ -6103,7 +6465,7 @@ function Settings({
                   </div>
                 )}
                 <div className="provider-actions">
-                  <button className={`toggle ${item?.active ? "active" : ""}`} disabled={busy || !token} onClick={() => void toggleChannel(type, !item?.active)}><i /></button>
+                  <button type="button" className={`toggle ${item?.active ? "active" : ""}`} disabled={busy || !token} onClick={() => void toggleChannel(type, !item?.active)}><i /></button>
                   {key === "official" && <button disabled={busy || !token} onClick={() => void syncTemplates()}>Sync templates</button>}
                   {key === "unofficial" && !item?.connected && !sessionNeedsCreate && <button disabled={busy || !token || !providerConfig.whatsappUnofficial.enabled} onClick={() => void refreshWahaStatus()}>Show / refresh QR</button>}
                   {key === "unofficial" && !item?.connected && sessionNeedsCreate && <button disabled={busy || !token || !providerConfig.whatsappUnofficial.enabled} onClick={() => void controlWaha(technicalStatus === "STOPPED" ? "start" : "create")}>{technicalStatus === "STOPPED" ? "Start session" : "Create session"}</button>}

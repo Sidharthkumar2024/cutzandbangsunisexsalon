@@ -12,11 +12,14 @@ export default async function catalogRoutes(app: FastifyInstance) {
   app.get("/services", async (req) => {
     const { branchId } = req.query as Record<string, string>;
     return prisma.serviceCategory.findMany({
-      orderBy: { sortOrder: "asc" },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
       include: {
+        parent: { select: { id: true, name: true, gender: true, parentId: true, sortOrder: true } },
+        children: { orderBy: [{ sortOrder: "asc" }, { name: "asc" }], select: { id: true, name: true, gender: true, parentId: true, sortOrder: true } },
         services: {
           where: { isActive: true, deletedAt: null },
           include: { serviceStaff: { include: { staff: { select: { id: true, displayName: true } } } } },
+          orderBy: [{ name: "asc" }],
         },
       },
     });
@@ -37,9 +40,13 @@ export default async function catalogRoutes(app: FastifyInstance) {
 
   // ---- Availability: free start-times for a staff+service on a date ----
   app.get("/availability", async (req, reply) => {
-    const { branchId, serviceId, staffId, date } = z
+    const parsed = z
       .object({ branchId: z.string(), serviceId: z.string(), staffId: z.string(), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })
-      .parse(req.query);
+      .safeParse(req.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_query", issues: parsed.error.issues.map((issue) => issue.message) });
+    }
+    const { branchId, serviceId, staffId, date } = parsed.data;
 
     const [branch, service, staff] = await Promise.all([
       prisma.branch.findFirst({ where: { id: branchId, deletedAt: null } }),
@@ -120,7 +127,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
         cursor = new Date(cursor.getTime() + (service.durationMin + service.bufferMin) * 60_000);
       }
       try {
-        await resolveBooking(prisma, branch.timezone, requests);
+        await resolveBooking(prisma, body.branchId, branch.timezone, requests);
         return startAt.toISOString();
       } catch (error) {
         if (error instanceof SlotUnavailableError) return null;
@@ -155,7 +162,15 @@ export default async function catalogRoutes(app: FastifyInstance) {
   });
 
   app.post("/service-categories", { preHandler: authorize(...ADMIN) }, async (req, reply) => {
-    const body = z.object({ name: z.string().trim().min(2).max(80), gender: z.enum(["Male", "Female", "Unisex", "Kids - Unisex", "Boys", "Girls", "Baby Boy", "Baby Girl"]).nullable().optional(), sortOrder: z.number().int().min(0).default(0) }).parse(req.body);
+    const body = z.object({
+      name: z.string().trim().min(2).max(80),
+      gender: z.enum(["Male", "Female", "Unisex", "Kids - Unisex", "Boys", "Girls", "Baby Boy", "Baby Girl"]).nullable().optional(),
+      parentId: z.string().nullable().optional(),
+      sortOrder: z.number().int().min(0).default(0),
+    }).parse(req.body);
+    if (body.parentId && !(await prisma.serviceCategory.findUnique({ where: { id: body.parentId } }))) {
+      return reply.code(400).send({ error: "parent_category_not_found" });
+    }
     const category = await prisma.serviceCategory.create({ data: body });
     await audit("service_category.create", "ServiceCategory", category.id, { actorUserId: req.user?.id, after: body, ip: req.ip });
     return reply.code(201).send(category);
@@ -163,9 +178,18 @@ export default async function catalogRoutes(app: FastifyInstance) {
 
   app.patch("/service-categories/:id", { preHandler: authorize(...ADMIN) }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const body = z.object({ name: z.string().trim().min(2).max(80).optional(), gender: z.enum(["Male", "Female", "Unisex", "Kids - Unisex", "Boys", "Girls", "Baby Boy", "Baby Girl"]).nullable().optional(), sortOrder: z.number().int().min(0).optional() }).parse(req.body);
+    const body = z.object({
+      name: z.string().trim().min(2).max(80).optional(),
+      gender: z.enum(["Male", "Female", "Unisex", "Kids - Unisex", "Boys", "Girls", "Baby Boy", "Baby Girl"]).nullable().optional(),
+      parentId: z.string().nullable().optional(),
+      sortOrder: z.number().int().min(0).optional(),
+    }).parse(req.body);
     const before = await prisma.serviceCategory.findUnique({ where: { id } });
     if (!before) return reply.code(404).send({ error: "category_not_found" });
+    if (body.parentId === id) return reply.code(400).send({ error: "category_cannot_parent_itself" });
+    if (body.parentId && !(await prisma.serviceCategory.findUnique({ where: { id: body.parentId } }))) {
+      return reply.code(400).send({ error: "parent_category_not_found" });
+    }
     const category = await prisma.serviceCategory.update({ where: { id }, data: body });
     await audit("service_category.update", "ServiceCategory", id, { actorUserId: req.user?.id, before, after: body, ip: req.ip });
     return category;
@@ -173,9 +197,10 @@ export default async function catalogRoutes(app: FastifyInstance) {
 
   app.delete("/service-categories/:id", { preHandler: authorize(...ADMIN) }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const category = await prisma.serviceCategory.findUnique({ where: { id }, include: { _count: { select: { services: true } } } });
+    const category = await prisma.serviceCategory.findUnique({ where: { id }, include: { _count: { select: { services: true, children: true } } } });
     if (!category) return reply.code(404).send({ error: "category_not_found" });
     if (category._count.services > 0) return reply.code(409).send({ error: "category_has_services" });
+    if (category._count.children > 0) return reply.code(409).send({ error: "category_has_subcategories" });
     await prisma.serviceCategory.delete({ where: { id } });
     await audit("service_category.delete", "ServiceCategory", id, { actorUserId: req.user?.id, before: category, ip: req.ip });
     return reply.code(204).send();
@@ -249,6 +274,9 @@ export default async function catalogRoutes(app: FastifyInstance) {
         serviceIds: z.array(z.string()).default([]),
       })
       .parse(req.body);
+    if (req.user!.role === "MANAGER" && req.user!.branchId !== body.branchId) {
+      return reply.code(403).send({ error: "forbidden" });
+    }
     const staff = await prisma.staff.create({
       data: {
         branchId: body.branchId,

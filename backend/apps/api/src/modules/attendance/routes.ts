@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@cutz/db";
 import { authorize } from "../../plugins/auth.js";
 import { audit } from "../../lib/audit.js";
-import { commissionMinor, haversineMeters, minutesBetween } from "./calculations.js";
+import { attendancePenaltyCounts, commissionMinor, haversineMeters, lateMinutesForCheckIn, minutesBetween } from "./calculations.js";
 
 const MANAGERS = ["OWNER", "ADMIN", "MANAGER"] as const;
 const ATTENDANCE_ROLES = ["OWNER", "ADMIN", "MANAGER", "RECEPTION", "STAFF"] as const;
@@ -53,7 +53,7 @@ export default async function attendanceRoutes(app: FastifyInstance) {
     const hour = Number(localParts.find(part => part.type === "hour")?.value ?? 0) % 24;
     const minute = Number(localParts.find(part => part.type === "minute")?.value ?? 0);
     const shift = await prisma.shift.findFirst({ where: { staffId: staff.id, weekday }, orderBy: { startMin: "asc" } });
-    const lateMinutes = shift ? Math.max(0, hour * 60 + minute - shift.startMin - staff.lateGraceMinutes) : 0;
+    const lateMinutes = shift ? lateMinutesForCheckIn(hour * 60 + minute, shift.startMin, staff.lateGraceMinutes) : 0;
     const attendance = await prisma.attendance.create({ data: { staffId: staff.id, checkInAt: now, checkInLat: body.lat, checkInLng: body.lng, selfieUrl: body.selfieKey, consentAt: now, lateMinutes } });
     await audit("attendance.check_in", "Attendance", attendance.id, { actorUserId: req.user?.id, after: { staffId: staff.id, distanceMeters: location.distanceMeters, lateMinutes }, ip: req.ip });
     return reply.code(201).send({ ...attendance, distanceMeters: location.distanceMeters });
@@ -80,7 +80,14 @@ export default async function attendanceRoutes(app: FastifyInstance) {
   });
 
   app.get("/payroll/summary", { preHandler: authorize(...MANAGERS) }, async (req, reply) => {
-    const { branchId, from, to } = z.object({ branchId: z.string(), from: z.string(), to: z.string() }).parse(req.query);
+    const parsed = z.object({ branchId: z.string(), from: z.string(), to: z.string() }).safeParse(req.query);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "invalid_query",
+        details: parsed.error.flatten().fieldErrors,
+      });
+    }
+    const { branchId, from, to } = parsed.data;
     if (req.user?.role === "MANAGER" && req.user.branchId !== branchId) return reply.code(403).send({ error: "forbidden" });
     const gte = new Date(from); const lte = new Date(to);
     const staff = await prisma.staff.findMany({ where: { branchId, deletedAt: null }, include: { attendance: { where: { createdAt: { gte, lte } } }, invoiceItems: { where: { invoice: { createdAt: { gte, lte }, status: { not: "VOID" } } } } } });
@@ -93,14 +100,12 @@ export default async function attendanceRoutes(app: FastifyInstance) {
       const productRevenueMinor = member.invoiceItems.filter(item => item.kind === "product").reduce((sum, item) => sum + item.lineTotalMinor, 0);
       const serviceCommissionMinor = serviceRevenueMinor >= member.commissionThresholdMinor ? commissionMinor(serviceRevenueMinor, member.commissionRate) : 0;
       const productCommissionMinor = member.invoiceItems.filter(item => item.kind === "product").reduce((sum, item) => sum + commissionMinor(item.lineTotalMinor, productCommission.get(item.productId ?? "") ?? 0), 0);
-      const lateDays = member.attendance.filter((row) => row.lateMinutes > 0).length;
-      const halfDays = member.attendance.filter((row) => {
-        const minutes = minutesBetween(row.checkInAt, row.checkOutAt);
-        return row.checkOutAt && minutes > 0 && minutes < member.halfDayAfterMinutes;
-      }).length;
-      const lateDeductionMinor = lateDays * member.lateDeductionMinor;
+      const penalties = attendancePenaltyCounts(member.attendance, member.halfDayAfterMinutes);
+      const { halfDays, chargeableLateDays } = penalties;
+      const lateDeductionMinor = chargeableLateDays * member.lateDeductionMinor;
+      const halfDayDeductionMinor = Math.round(member.baseSalaryMinor / 60) * halfDays;
       const commissionTotalMinor = serviceCommissionMinor + productCommissionMinor;
-      return { staffId: member.id, displayName: member.displayName, designation: member.designation, presentDays: new Set(member.attendance.map(row => row.createdAt.toISOString().slice(0, 10))).size, workedMinutes, lateMinutes: member.attendance.reduce((sum, row) => sum + row.lateMinutes, 0), lateDays, halfDays, overtimeMinutes: member.attendance.reduce((sum, row) => sum + row.overtimeMin, 0), overtimePaid: member.overtimePaid, serviceRevenueMinor, productRevenueMinor, commissionRateBps: member.commissionRate, commissionThresholdMinor: member.commissionThresholdMinor, serviceCommissionMinor, productCommissionMinor, commissionMinor: commissionTotalMinor, baseSalaryMinor: member.baseSalaryMinor, lateDeductionMinor, estimatedPayMinor: Math.max(0, member.baseSalaryMinor - lateDeductionMinor) + commissionTotalMinor };
+      return { staffId: member.id, displayName: member.displayName, designation: member.designation, presentDays: new Set(member.attendance.map(row => row.createdAt.toISOString().slice(0, 10))).size, workedMinutes, lateMinutes: member.attendance.reduce((sum, row) => sum + row.lateMinutes, 0), ...penalties, overtimeMinutes: member.attendance.reduce((sum, row) => sum + row.overtimeMin, 0), overtimePaid: member.overtimePaid, serviceRevenueMinor, productRevenueMinor, commissionRateBps: member.commissionRate, commissionThresholdMinor: member.commissionThresholdMinor, serviceCommissionMinor, productCommissionMinor, commissionMinor: commissionTotalMinor, baseSalaryMinor: member.baseSalaryMinor, lateDeductionMinor, halfDayDeductionMinor, estimatedPayMinor: Math.max(0, member.baseSalaryMinor - lateDeductionMinor - halfDayDeductionMinor) + commissionTotalMinor };
     });
   });
 }

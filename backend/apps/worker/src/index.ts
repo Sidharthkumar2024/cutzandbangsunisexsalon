@@ -36,9 +36,12 @@ new Worker<ReminderJob>(
       return;
     }
     try {
-      await applyStoredProviderSettings(appt.branchId);
+      const providerContext = await applyStoredProviderSettings(appt.branchId);
+      const emailProvider = providerContext.email();
+      const officialMessaging = providerContext.whatsapp("WHATSAPP_OFFICIAL");
+      const unofficialMessaging = providerContext.whatsapp("WHATSAPP_UNOFFICIAL");
       if (to) {
-        const result = await providers.email().send({ to, subject: "Reminder: your Cutz & Bangs appointment", html: appointmentEmail({ name, when: appt.startAt, services, kind: "reminder" }), dedupeKey: `email-${dedupeKey}` });
+        const result = await emailProvider.send({ to, subject: "Reminder: your Cutz & Bangs appointment", html: appointmentEmail({ name, when: appt.startAt, services, kind: "reminder" }), dedupeKey: `email-${dedupeKey}` });
         if (result.status === "failed") throw new Error(result.error ?? "reminder_email_failed");
       }
       if (phone && waConsent) {
@@ -49,7 +52,7 @@ new Worker<ReminderJob>(
             ? ("WHATSAPP_OFFICIAL" as const)
             : undefined;
         if (channel) {
-          const result = await providers.whatsapp(channel).send({ to: phone, body: appointmentWhatsAppText({ name, when: appt.startAt, services, kind: "reminder" }) });
+          const result = await (channel === "WHATSAPP_UNOFFICIAL" ? unofficialMessaging : officialMessaging).send({ to: phone, body: appointmentWhatsAppText({ name, when: appt.startAt, services, kind: "reminder" }) });
           if (result.status === "failed") throw new Error(result.error ?? "reminder_whatsapp_failed");
         }
       }
@@ -76,7 +79,8 @@ new Worker<EmailJob>(
       logId = log.id;
     }
     try {
-      await applyStoredProviderSettings(branchId);
+      const providerContext = await applyStoredProviderSettings(branchId);
+      const emailProvider = providerContext.email();
       // Resolve storage-key attachments to inline bytes (works with S3 or local disk).
       const resolved = attachments
         ? await Promise.all(
@@ -87,7 +91,7 @@ new Worker<EmailJob>(
             })),
           )
         : undefined;
-      const res = await providers.email().send({ to, subject, html, attachments: resolved });
+      const res = await emailProvider.send({ to, subject, html, attachments: resolved });
       if (res.status === "failed") throw new Error(res.error ?? "email_send_failed");
       if (logId) await prisma.emailLog.update({ where: { id: logId }, data: { status: res.status, error: null } });
     } catch (error) {
@@ -108,7 +112,10 @@ new Worker<CampaignJob>(
     if (campaign.status === "SCHEDULED") {
       await prisma.campaign.update({ where: { id: campaignId }, data: { status: "SENDING" } });
     }
-    await applyStoredProviderSettings(campaign.branchId);
+    const providerContext = await applyStoredProviderSettings(campaign.branchId);
+    const emailProvider = providerContext.email();
+    const officialMessaging = providerContext.whatsapp("WHATSAPP_OFFICIAL");
+    const unofficialMessaging = providerContext.whatsapp("WHATSAPP_UNOFFICIAL");
 
     const recipient = await prisma.campaignRecipient.findUnique({ where: { id: recipientId } });
     if (!recipient || recipient.campaignId !== campaignId || recipient.status !== "queued") return;
@@ -123,14 +130,14 @@ new Worker<CampaignJob>(
       let externalId: string | undefined;
       if (campaign.channel === "EMAIL" && customer.email && customer.emailConsent) {
         const image = mediaUrl && campaign.mediaType === "image" ? `<p><img src="${mediaUrl}" alt="" style="max-width:100%;height:auto" /></p>` : "";
-        const result = await providers.email().send({ to: customer.email, subject: campaign.name, html: `${image}<p>${campaign.content}</p>` });
+        const result = await emailProvider.send({ to: customer.email, subject: campaign.name, html: `${image}<p>${campaign.content}</p>` });
         if (result.status === "failed") throw new Error(result.error ?? "email_send_failed");
         externalId = result.externalId || undefined;
       } else if (["WHATSAPP_OFFICIAL", "WHATSAPP_UNOFFICIAL"].includes(campaign.channel) && customer.phone && customer.waConsent) {
         const body = campaign.channel === "WHATSAPP_UNOFFICIAL" && !/reply\s+stop|बंद/i.test(campaign.content)
           ? `${campaign.content}\n\nReply STOP to opt out.`
           : campaign.content;
-        const result = await providers.whatsapp(campaign.channel as "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL").send({
+        const result = await (campaign.channel === "WHATSAPP_UNOFFICIAL" ? unofficialMessaging : officialMessaging).send({
           to: customer.phone,
           body,
           mediaUrl,
@@ -194,7 +201,7 @@ type StoredProviders = {
 async function applyStoredProviderSettings(branchId: string) {
   const row = await prisma.setting.findUnique({ where: { key: `branch:${branchId}:providers` } });
   const value = (row?.value ?? {}) as StoredProviders;
-  providers.configure({
+  return providers.scoped({
     smtp: value.smtp ? { ...value.smtp, password: decryptSecret(value.smtp.passwordEncrypted) } : undefined,
     whatsappOfficial: value.whatsappOfficial
       ? { ...value.whatsappOfficial, token: decryptSecret(value.whatsappOfficial.tokenEncrypted), appSecret: decryptSecret(value.whatsappOfficial.appSecretEncrypted) }

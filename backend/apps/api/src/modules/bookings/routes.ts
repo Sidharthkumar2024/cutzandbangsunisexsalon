@@ -103,6 +103,7 @@ export default async function bookingRoutes(app: FastifyInstance) {
         async (tx) => {
           const slots = await resolveBooking(
             tx as unknown as typeof prisma,
+            body.branchId,
             branch.timezone,
             body.items as SlotRequest[],
             { allowOverlap },
@@ -251,6 +252,7 @@ export default async function bookingRoutes(app: FastifyInstance) {
             await tx.appointmentItem.deleteMany({ where: { appointmentId: id } });
             const slots = await resolveBooking(
               tx as unknown as typeof prisma,
+              existing.branchId,
               branch.timezone,
               body.items as SlotRequest[],
               { allowOverlap },

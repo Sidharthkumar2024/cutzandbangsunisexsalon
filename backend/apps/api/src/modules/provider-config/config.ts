@@ -1,6 +1,12 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@cutz/db";
-import { providers, decryptSecret, encryptSecret, type ProviderRuntimeConfig } from "@cutz/providers";
+import { providers, decryptSecret, encryptSecret, normalizeWahaBaseUrl, type ProviderRuntimeConfig } from "@cutz/providers";
+import {
+  matchOfficialVerificationBranch,
+  matchOfficialWebhookBranch,
+  matchUnofficialWebhookBranch,
+  type WebhookProviderBranch,
+} from "./webhook-scope.js";
 
 export type ProviderSettingsInput = {
   smtp: {
@@ -65,6 +71,68 @@ async function storedSettings(branchId: string): Promise<StoredProviderSettings>
   return (row?.value ?? {}) as StoredProviderSettings;
 }
 
+async function configuredWebhookBranches(): Promise<WebhookProviderBranch[]> {
+  const rows = await prisma.setting.findMany({
+    where: { key: { startsWith: "branch:", endsWith: ":providers" } },
+    select: { key: true, value: true },
+  });
+  const storedCandidates = rows.flatMap((row) => {
+    const branchId = /^branch:(.+):providers$/u.exec(row.key)?.[1];
+    if (!branchId) return [];
+    const stored = row.value as StoredProviderSettings;
+    return [{
+      branchId,
+      whatsappOfficial: stored.whatsappOfficial ? {
+        enabled: stored.whatsappOfficial.enabled,
+        phoneId: stored.whatsappOfficial.phoneId,
+        wabaId: stored.whatsappOfficial.wabaId,
+        verifyToken: decryptSecret(stored.whatsappOfficial.webhookVerifyTokenEncrypted) ?? process.env.WA_WEBHOOK_VERIFY_TOKEN,
+      } : undefined,
+      whatsappUnofficial: stored.whatsappUnofficial ? {
+        enabled: stored.whatsappUnofficial.enabled,
+        session: stored.whatsappUnofficial.session,
+      } : undefined,
+    } satisfies WebhookProviderBranch];
+  });
+
+  const envBranchId = process.env.WA_DEFAULT_BRANCH_ID ?? process.env.NEXT_PUBLIC_BRANCH_ID;
+  if (envBranchId && !storedCandidates.some((candidate) => candidate.branchId === envBranchId)) {
+    storedCandidates.push({
+      branchId: envBranchId,
+      whatsappOfficial: {
+        enabled: Boolean(process.env.WA_OFFICIAL_PHONE_ID && process.env.WA_OFFICIAL_WABA_ID),
+        phoneId: process.env.WA_OFFICIAL_PHONE_ID ?? "",
+        wabaId: process.env.WA_OFFICIAL_WABA_ID ?? "",
+        verifyToken: process.env.WA_WEBHOOK_VERIFY_TOKEN,
+      },
+      whatsappUnofficial: {
+        enabled: Boolean(process.env.WA_UNOFFICIAL_URL && process.env.WAHA_SESSION),
+        session: process.env.WAHA_SESSION ?? "",
+      },
+    });
+  }
+
+  if (!storedCandidates.length) return [];
+  const branches = await prisma.branch.findMany({
+    where: { id: { in: storedCandidates.map((candidate) => candidate.branchId) }, deletedAt: null },
+    select: { id: true },
+  });
+  const active = new Set(branches.map((branch) => branch.id));
+  return storedCandidates.filter((candidate) => active.has(candidate.branchId));
+}
+
+export async function resolveOfficialWebhookBranch(identity: { phoneId?: string; wabaId?: string }) {
+  return matchOfficialWebhookBranch(await configuredWebhookBranches(), identity);
+}
+
+export async function resolveOfficialVerificationBranch(verifyToken: string) {
+  return matchOfficialVerificationBranch(await configuredWebhookBranches(), verifyToken);
+}
+
+export async function resolveUnofficialWebhookBranch(session: string) {
+  return matchUnofficialWebhookBranch(await configuredWebhookBranches(), session);
+}
+
 function runtimeConfig(stored: StoredProviderSettings): ProviderRuntimeConfig {
   return {
     smtp: stored.smtp
@@ -90,8 +158,7 @@ function runtimeConfig(stored: StoredProviderSettings): ProviderRuntimeConfig {
 
 export async function applyProviderSettings(branchId = "main") {
   const stored = await storedSettings(branchId);
-  providers.configure(runtimeConfig(stored));
-  return stored;
+  return providers.scoped(runtimeConfig(stored));
 }
 
 export async function publicProviderSettings(branchId = "main") {
@@ -150,6 +217,14 @@ export async function saveProviderSettings(branchId: string, input: ProviderSett
     if (!input.whatsappUnofficial.webhookSecret && !current.whatsappUnofficial?.webhookSecretEncrypted && !process.env.WA_UNOFFICIAL_WEBHOOK_SECRET) throw new ProviderConfigError("waha_webhook_secret_required");
     if (input.whatsappUnofficial.windowStartHour >= input.whatsappUnofficial.windowEndHour) throw new ProviderConfigError("whatsapp_delivery_window_invalid");
   }
+  let normalizedWahaBaseUrl = input.whatsappUnofficial.baseUrl;
+  if (input.whatsappUnofficial.baseUrl) {
+    try {
+      normalizedWahaBaseUrl = normalizeWahaBaseUrl(input.whatsappUnofficial.baseUrl);
+    } catch (error) {
+      throw new ProviderConfigError(error instanceof Error ? error.message : "waha_base_url_invalid");
+    }
+  }
   const next: StoredProviderSettings = {
     smtp: {
       enabled: input.smtp.enabled,
@@ -179,7 +254,7 @@ export async function saveProviderSettings(branchId: string, input: ProviderSett
     },
     whatsappUnofficial: {
       enabled: input.whatsappUnofficial.enabled,
-      baseUrl: input.whatsappUnofficial.baseUrl,
+      baseUrl: normalizedWahaBaseUrl,
       callbackUrl: input.whatsappUnofficial.callbackUrl,
       session: input.whatsappUnofficial.session,
       intervalSeconds: input.whatsappUnofficial.intervalSeconds,
@@ -200,11 +275,5 @@ export async function saveProviderSettings(branchId: string, input: ProviderSett
     create: { key: keyFor(branchId), value: json },
     update: { value: json },
   });
-  providers.configure(runtimeConfig(next));
   return publicProviderSettings(branchId);
-}
-
-export async function officialWebhookVerifyToken(branchId = "main") {
-  const stored = await storedSettings(branchId);
-  return decryptSecret(stored.whatsappOfficial?.webhookVerifyTokenEncrypted) ?? process.env.WA_WEBHOOK_VERIFY_TOKEN;
 }

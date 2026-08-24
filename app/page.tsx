@@ -58,7 +58,7 @@ export default async function Home() {
           <div className="hero-actions"><a className="button button-coral" href="/book">Book an appointment</a><a className="text-link" href="#services">Explore our menu <span>↗</span></a></div>
           <div className="hero-proof"><div className="avatar-stack" aria-hidden="true"><span>CU</span><span>&</span><span>BA</span></div><p><strong>Dwarka</strong> appointments and walk-ins welcome</p></div>
         </div>
-        <div className="hero-art" aria-label="A calm, welcoming salon experience"><div className="arch arch-one"><div className="arch-glow" /></div><div className="arch arch-two"><div className="salon-chair"><span /></div></div><div className="floating-note"><span className="note-kicker">Next available</span><strong>Today, 4:30 PM</strong><span>with Riya · Senior stylist</span></div><span className="spark spark-one">✦</span><span className="spark spark-two">✦</span></div>
+        <div className="hero-art" aria-label="A calm, welcoming salon experience"><div className="arch arch-one"><div className="arch-glow" /></div><div className="arch arch-two"><div className="salon-chair"><span /></div></div><div className="floating-note"><span className="note-kicker">Appointments</span><strong>Check live availability</strong><span>Choose your service and preferred artist</span></div><span className="spark spark-one">✦</span><span className="spark spark-two">✦</span></div>
       </section>
 
       <section className="service-strip" id="services">

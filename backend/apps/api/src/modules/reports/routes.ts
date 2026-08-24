@@ -4,10 +4,50 @@ import { prisma } from "@cutz/db";
 import { authorize } from "../../plugins/auth.js";
 import { classify, DEFAULT_SEGMENT_CONFIG } from "../crm/segments.js";
 import { zonedToUtc } from "../../lib/tz.js";
+import { addHistoricalVisitEvents, buildCustomerRetention, retentionBucketKey } from "./retention.js";
+import { historicalSalesFallback } from "./historical-sales.js";
 
 const ADMIN = ["OWNER", "ADMIN", "MANAGER"] as const;
 
 export default async function reportRoutes(app: FastifyInstance) {
+  app.get("/reports/customer-retention-matrix", { preHandler: authorize(...ADMIN) }, async (req, reply) => {
+    const parsed = z.object({
+      branchId: z.string().optional(),
+      from: z.coerce.date(),
+      to: z.coerce.date(),
+      bucket: z.enum(["day", "week", "month"]).default("month"),
+      inactiveDays: z.coerce.number().int().min(15).max(365).default(60),
+    }).refine((value) => value.to > value.from, "to_must_be_after_from").safeParse(req.query);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_query", details: parsed.error.flatten() });
+    const branchId = ["OWNER", "ADMIN"].includes(req.user!.role) ? parsed.data.branchId ?? req.user!.branchId : req.user!.branchId;
+    if (!branchId) return reply.code(400).send({ error: "branch_required" });
+    if (req.user?.role === "MANAGER" && req.user.branchId !== branchId) return reply.code(403).send({ error: "forbidden" });
+    const branch = await prisma.branch.findFirst({ where: { id: branchId, deletedAt: null }, select: { timezone: true } });
+    if (!branch) return reply.code(404).send({ error: "branch_not_found" });
+    const [customers, invoices, appointments, historyEntries] = await Promise.all([
+      prisma.customer.findMany({ where: { branchId, deletedAt: null }, orderBy: { name: "asc" }, take: 5000, select: { id: true, name: true, phone: true, createdAt: true } }),
+      prisma.invoice.findMany({ where: { branchId, customerId: { not: null }, status: { not: "VOID" }, createdAt: { lt: parsed.data.to } }, select: { customerId: true, appointmentId: true, createdAt: true, totalMinor: true } }),
+      prisma.appointment.findMany({ where: { branchId, customerId: { not: null }, status: "COMPLETED", startAt: { lt: parsed.data.to }, deletedAt: null }, select: { customerId: true, id: true, startAt: true } }),
+      prisma.customerHistoryEntry.findMany({ where: { customer: { branchId, deletedAt: null }, visitedAt: { lt: parsed.data.to } }, select: { customerId: true, visitedAt: true, amountMinor: true, source: true } }),
+    ]);
+    const invoicedAppointmentIds = new Set(invoices.flatMap((invoice) => invoice.appointmentId ? [invoice.appointmentId] : []));
+    const events = addHistoricalVisitEvents([
+      ...invoices.flatMap((invoice) => invoice.customerId ? [{ customerId: invoice.customerId, occurredAt: invoice.createdAt, revenueMinor: invoice.totalMinor, source: "invoice" as const }] : []),
+      ...appointments.flatMap((appointment) => appointment.customerId && !invoicedAppointmentIds.has(appointment.id) ? [{ customerId: appointment.customerId, occurredAt: appointment.startAt, revenueMinor: 0, source: "appointment" as const }] : []),
+    ], historyEntries, branch.timezone);
+    const now = new Date();
+    const rows = buildCustomerRetention(customers, events, { ...parsed.data, timeZone: branch.timezone, now });
+    const columns = [...new Set(events.filter((event) => event.occurredAt >= parsed.data.from && event.occurredAt < parsed.data.to).map((event) => retentionBucketKey(event.occurredAt, branch.timezone, parsed.data.bucket)))].sort();
+    const totals = rows.reduce((result, row) => {
+      result.customers += 1;
+      result.visits += row.rangeVisits;
+      result.revenueMinor += row.rangeRevenueMinor;
+      result.statuses[row.status] = (result.statuses[row.status] ?? 0) + 1;
+      return result;
+    }, { customers: 0, visits: 0, revenueMinor: 0, statuses: {} as Record<string, number> });
+    return { generatedAt: now, branchId, timezone: branch.timezone, from: parsed.data.from, to: parsed.data.to, bucket: parsed.data.bucket, inactiveDays: parsed.data.inactiveDays, columns, totals, rows };
+  });
+
   // Today snapshot for the dashboard.
   app.get("/reports/today", { preHandler: authorize(...ADMIN, "RECEPTION") }, async (req) => {
     const query = req.query as Record<string, string>;
@@ -28,7 +68,7 @@ export default async function reportRoutes(app: FastifyInstance) {
         where: { ...branchWhere, createdAt: { gte: start, lt: end }, status: { not: "VOID" } },
         select: { totalMinor: true, paidMinor: true },
       }),
-      prisma.product.findMany({ where: { deletedAt: null } }),
+      prisma.product.findMany({ where: { ...branchWhere, deletedAt: null } }),
       prisma.customer.count({ where: { ...branchWhere, createdAt: { gte: start, lt: end }, deletedAt: null } }),
     ]);
 
@@ -40,14 +80,18 @@ export default async function reportRoutes(app: FastifyInstance) {
   });
 
   // Range report: sales, payment mix, new vs repeat, top services/staff.
-  app.get("/reports/range", { preHandler: authorize(...ADMIN) }, async (req) => {
+  app.get("/reports/range", { preHandler: authorize(...ADMIN) }, async (req, reply) => {
     const parsed = z
       .object({ from: z.string(), to: z.string(), branchId: z.string().optional(), staffId: z.string().optional(), serviceId: z.string().optional() })
-      .parse(req.query);
-    const { from, to } = parsed;
+      .safeParse(req.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_query", details: parsed.error.flatten().fieldErrors });
+    }
+    // NOTE: keep strict authorization by role and branch scoping.
+    const { from, to, branchId: queryBranchId, staffId, serviceId } = parsed.data;
     const gte = new Date(from);
     const lt = new Date(to);
-    const branchId = ["OWNER", "ADMIN"].includes(req.user!.role) ? parsed.branchId : req.user!.branchId ?? undefined;
+    const branchId = ["OWNER", "ADMIN"].includes(req.user!.role) ? queryBranchId : req.user!.branchId ?? undefined;
     const branchWhere = branchId ? { branchId } : {};
 
     const invoices = await prisma.invoice.findMany({
@@ -55,12 +99,27 @@ export default async function reportRoutes(app: FastifyInstance) {
         ...branchWhere,
         createdAt: { gte, lt },
         status: { not: "VOID" },
-        ...(parsed.staffId || parsed.serviceId ? { items: { some: { ...(parsed.staffId ? { staffId: parsed.staffId } : {}), ...(parsed.serviceId ? { serviceId: parsed.serviceId } : {}) } } } : {}),
+        ...(staffId || serviceId ? { items: { some: { ...(staffId ? { staffId } : {}), ...(serviceId ? { serviceId } : {}) } } } : {}),
       },
       include: { payments: true, items: true },
     });
 
-    const salesMinor = invoices.reduce((s, i) => s + i.totalMinor, 0);
+    const liveSalesMinor = invoices.reduce((s, i) => s + i.totalMinor, 0);
+    let historicalSalesMinor = 0;
+    if (branchId && !staffId && !serviceId) {
+      const branch = await prisma.branch.findFirst({ where: { id: branchId, deletedAt: null }, select: { timezone: true } });
+      if (branch) {
+        const fromKey = dateKey(gte, branch.timezone);
+        const toKey = dateKey(lt, branch.timezone);
+        const historical = await prisma.historicalDailySummary.findMany({
+          where: { branchId, businessDate: { gte: fromKey, lt: toKey }, reviewRequired: false, totalSalesMinor: { not: null } },
+          select: { businessDate: true, totalSalesMinor: true, reviewRequired: true },
+        });
+        const liveDates = new Set(invoices.map((invoice) => dateKey(invoice.createdAt, branch.timezone)));
+        historicalSalesMinor = historicalSalesFallback(historical, liveDates).totalMinor;
+      }
+    }
+    const salesMinor = liveSalesMinor + historicalSalesMinor;
     const paymentMix: Record<string, number> = {};
     const topServices: Record<string, number> = {};
     const topStaff: Record<string, number> = {};
@@ -92,6 +151,8 @@ export default async function reportRoutes(app: FastifyInstance) {
 
     return {
       salesMinor,
+      liveSalesMinor,
+      historicalSalesMinor,
       bills: invoices.length,
       paymentMix,
       topServices: Object.entries(topServices).sort((a, b) => b[1] - a[1]).slice(0, 10),
@@ -122,7 +183,7 @@ export default async function reportRoutes(app: FastifyInstance) {
     const rangeEnd = zonedToUtc(`${calendarKeys(todayKey, 1, 1)[0]}T00:00:00`, branch.timezone);
     const inactiveCutoff = new Date(now.getTime() - inactiveDays * 86_400_000);
 
-    const [invoices, customers, inactiveCustomers, inactiveTotal, neverVisited] = await Promise.all([
+    const [invoices, customers, inactiveCustomers, inactiveTotal, neverVisited, historicalDaily] = await Promise.all([
       prisma.invoice.findMany({
         where: { branchId, status: { not: "VOID" }, createdAt: { gte: rangeStart, lt: rangeEnd } },
         select: { id: true, totalMinor: true, paidMinor: true, createdAt: true },
@@ -139,6 +200,10 @@ export default async function reportRoutes(app: FastifyInstance) {
       }),
       prisma.customer.count({ where: { branchId, deletedAt: null, visitCount: { gt: 0 }, lastVisitAt: { lt: inactiveCutoff } } }),
       prisma.customer.count({ where: { branchId, deletedAt: null, visitCount: 0 } }),
+      prisma.historicalDailySummary.findMany({
+        where: { branchId, businessDate: { gte: earliestKey, lte: todayKey }, reviewRequired: false, totalSalesMinor: { not: null } },
+        select: { businessDate: true, totalSalesMinor: true, reviewRequired: true },
+      }),
     ]);
 
     const dailyMap = new Map<string, { salesMinor: number; collectedMinor: number; bills: number }>();
@@ -152,6 +217,13 @@ export default async function reportRoutes(app: FastifyInstance) {
       row.salesMinor += invoice.totalMinor;
       row.collectedMinor += invoice.paidMinor;
       row.bills += 1;
+      dailyMap.set(key, row);
+    }
+    const liveDates = new Set(invoices.map((invoice) => dateKey(invoice.createdAt, branch.timezone)));
+    const historicalFallback = historicalSalesFallback(historicalDaily, liveDates);
+    for (const [key, salesMinor] of historicalFallback.byDate) {
+      const row = dailyMap.get(key) ?? { salesMinor: 0, collectedMinor: 0, bills: 0 };
+      row.salesMinor = salesMinor;
       dailyMap.set(key, row);
     }
     const totalFor = (keys: string[]) => keys.reduce((sum, key) => sum + (dailyMap.get(key)?.salesMinor ?? 0), 0);

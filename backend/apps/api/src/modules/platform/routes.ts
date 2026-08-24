@@ -178,6 +178,13 @@ export default async function platformRoutes(app: FastifyInstance) {
     return { ...customer, loyaltyRules: await getLoyaltyRules(prisma, customer.branchId) };
   });
 
+  // Backward-compatible alias for older frontend paths.
+  app.get("/platform/portal/customer/overview", { preHandler: authorize("CUSTOMER") }, async (req, reply) => {
+    const customer = await prisma.customer.findUnique({ where: { userId: req.user!.id }, include: { appointments: { where: { deletedAt: null }, orderBy: { startAt: "desc" }, take: 100, include: { items: { include: { service: true, staff: true } } } }, invoices: { orderBy: { createdAt: "desc" }, take: 100, include: { items: true, payments: true } }, memberships: { where: { isActive: true }, include: { plan: true, ledger: { orderBy: { createdAt: "desc" } } } }, servicePackages: { where: { isActive: true }, orderBy: { createdAt: "desc" }, include: { package: { include: { items: { include: { service: true } } } }, ledger: { orderBy: { createdAt: "asc" }, include: { service: true } } } }, walletLedger: { orderBy: { createdAt: "desc" }, take: 100 }, loyaltyLedger: { orderBy: { createdAt: "desc" }, take: 100 } } });
+    if (!customer) return reply.code(404).send({ error: "customer_profile_not_found" });
+    return { ...customer, loyaltyRules: await getLoyaltyRules(prisma, customer.branchId) };
+  });
+
   app.post(
     "/portal/customer/appointments/:id/reschedule-request",
     { preHandler: authorize("CUSTOMER") },

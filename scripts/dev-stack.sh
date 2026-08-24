@@ -29,7 +29,7 @@ set +a
 
 corepack pnpm --dir "$BACKEND_DIR" db:generate
 corepack pnpm --dir "$BACKEND_DIR" db:deploy
-corepack pnpm --dir "$BACKEND_DIR" db:seed
+corepack pnpm --dir "$BACKEND_DIR" db:seed:codex
 
 cleanup() {
   kill "${API_PID:-}" "${WORKER_PID:-}" 2>/dev/null || true
