@@ -2,7 +2,8 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "@cutz/db";
 import { authorize } from "../../plugins/auth.js";
-import { minutesInTz, overlaps, resolveBooking, SlotRequest, SlotUnavailableError } from "../bookings/availability.js";
+import { overlaps, resolveBooking, SlotRequest, SlotUnavailableError } from "../bookings/availability.js";
+import { DEFAULT_CLOSED_WEEKDAYS, isSalonClosedWeekday, weekdayForDateKey, weeklyBusinessHours } from "../bookings/business-hours.js";
 import { audit } from "../../lib/audit.js";
 
 const ADMIN = ["OWNER", "ADMIN", "MANAGER"] as const;
@@ -38,6 +39,23 @@ export default async function catalogRoutes(app: FastifyInstance) {
     });
   });
 
+  app.get("/business-hours", async (req, reply) => {
+    const parsed = z.object({ branchId: z.string().min(1) }).safeParse(req.query);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_query" });
+    const branch = await prisma.branch.findFirst({ where: { id: parsed.data.branchId, deletedAt: null }, select: { id: true, timezone: true } });
+    if (!branch) return reply.code(404).send({ error: "branch_not_found" });
+    const shifts = await prisma.shift.findMany({
+      where: { staff: { branchId: branch.id, isActive: true, deletedAt: null } },
+      select: { weekday: true, startMin: true, endMin: true },
+    });
+    return {
+      branchId: branch.id,
+      timezone: branch.timezone,
+      closedWeekdays: [...DEFAULT_CLOSED_WEEKDAYS],
+      days: weeklyBusinessHours(shifts),
+    };
+  });
+
   // ---- Availability: free start-times for a staff+service on a date ----
   app.get("/availability", async (req, reply) => {
     const parsed = z
@@ -56,10 +74,17 @@ export default async function catalogRoutes(app: FastifyInstance) {
     if (!branch || !service || !staff) return reply.code(404).send({ error: "not_found" });
 
     // Day window in salon tz -> generate candidate 15-min slots.
-    const dayStart = new Date(`${date}T00:00:00`);
-    const weekday = minutesInTz(dayStart, branch.timezone).weekday;
+    let weekday: number;
+    try {
+      weekday = weekdayForDateKey(date);
+    } catch {
+      return reply.code(400).send({ error: "invalid_date" });
+    }
+    if (isSalonClosedWeekday(weekday)) {
+      return { timezone: branch.timezone, date, closed: true, reason: "salon_closed", closedWeekdays: [...DEFAULT_CLOSED_WEEKDAYS], slots: [] };
+    }
     const shifts = await prisma.shift.findMany({ where: { staffId, weekday } });
-    if (!shifts.length) return { slots: [] };
+    if (!shifts.length) return { timezone: branch.timezone, date, closed: false, slots: [] };
 
     const existing = await prisma.appointmentItem.findMany({
       where: {
@@ -84,7 +109,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
         if (!clash && startAt > new Date()) slots.push(startAt.toISOString());
       }
     }
-    return { slots };
+    return { timezone: branch.timezone, date, closed: false, slots };
   });
 
   // Conflict-free starts for a complete multi-service visit. Services run
@@ -105,6 +130,15 @@ export default async function catalogRoutes(app: FastifyInstance) {
     }
     const branch = await prisma.branch.findUnique({ where: { id: body.branchId } });
     if (!branch) return reply.code(404).send({ error: "branch_not_found" });
+    let weekday: number;
+    try {
+      weekday = weekdayForDateKey(body.date);
+    } catch {
+      return reply.code(400).send({ error: "invalid_date" });
+    }
+    if (isSalonClosedWeekday(weekday)) {
+      return { timezone: branch.timezone, date: body.date, closed: true, reason: "salon_closed", closedWeekdays: [...DEFAULT_CLOSED_WEEKDAYS], slots: [] };
+    }
 
     const services = await prisma.service.findMany({
       where: { id: { in: body.items.map((item) => item.serviceId) }, isActive: true, deletedAt: null },
@@ -135,7 +169,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
       }
     }));
 
-    return { timezone: branch.timezone, slots: checks.filter((slot): slot is string => Boolean(slot)).slice(0, 32) };
+    return { timezone: branch.timezone, date: body.date, closed: false, slots: checks.filter((slot): slot is string => Boolean(slot)).slice(0, 32) };
   });
 
   // ---- Admin CRUD ----
@@ -269,7 +303,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
         halfDayAfterMinutes: z.number().int().min(30).max(720).default(240),
         overtimePaid: z.boolean().default(false),
         biometricCode: z.string().trim().min(1).max(80).optional(),
-        weeklyOff: z.array(z.number().int().min(0).max(6)).max(7).default([]),
+        weeklyOff: z.array(z.number().int().min(0).max(6)).max(7).default([2]),
         shifts: z.array(z.object({ weekday: z.number().int().min(0).max(6), startMin: z.number().int().min(0).max(1439), endMin: z.number().int().min(1).max(1440) }).refine((shift) => shift.endMin > shift.startMin)).default([]),
         serviceIds: z.array(z.string()).default([]),
       })
@@ -291,8 +325,8 @@ export default async function catalogRoutes(app: FastifyInstance) {
         halfDayAfterMinutes: body.halfDayAfterMinutes,
         overtimePaid: body.overtimePaid,
         biometricCode: body.biometricCode,
-        weeklyOff: body.weeklyOff,
-        shifts: { create: body.shifts },
+        weeklyOff: [...new Set([...body.weeklyOff, ...DEFAULT_CLOSED_WEEKDAYS])].sort((a, b) => a - b),
+        shifts: { create: body.shifts.filter((shift) => !isSalonClosedWeekday(shift.weekday)) },
         skills: { create: body.serviceIds.map((serviceId) => ({ serviceId })) },
         serviceStaff: { create: body.serviceIds.map((serviceId) => ({ serviceId })) },
       },

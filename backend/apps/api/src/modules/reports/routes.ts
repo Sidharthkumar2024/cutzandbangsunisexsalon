@@ -6,6 +6,7 @@ import { classify, DEFAULT_SEGMENT_CONFIG } from "../crm/segments.js";
 import { zonedToUtc } from "../../lib/tz.js";
 import { addHistoricalVisitEvents, buildCustomerRetention, retentionBucketKey } from "./retention.js";
 import { historicalSalesFallback } from "./historical-sales.js";
+import { inclusiveDateKeys, nextDateKey } from "./dashboard-range.js";
 
 const ADMIN = ["OWNER", "ADMIN", "MANAGER"] as const;
 
@@ -162,7 +163,18 @@ export default async function reportRoutes(app: FastifyInstance) {
   });
 
   app.get("/reports/dashboard", { preHandler: authorize(...ADMIN, "RECEPTION") }, async (req, reply) => {
-    const query = z.object({ branchId: z.string().optional(), days: z.coerce.number().int().min(7).max(31).default(15), inactiveDays: z.coerce.number().int().min(15).max(365).optional() }).parse(req.query);
+    const parsed = z.object({
+      branchId: z.string().optional(),
+      days: z.coerce.number().int().min(7).max(31).default(15),
+      inactiveDays: z.coerce.number().int().min(15).max(365).optional(),
+      from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u).optional(),
+      to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u).optional(),
+    }).refine((value) => Boolean(value.from) === Boolean(value.to), {
+      message: "from_and_to_are_required_together",
+      path: ["from"],
+    }).safeParse(req.query);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_query", details: parsed.error.flatten() });
+    const query = parsed.data;
     const branchId = ["OWNER", "ADMIN"].includes(req.user!.role) ? query.branchId ?? req.user!.branchId ?? "main" : req.user!.branchId;
     if (!branchId) return reply.code(400).send({ error: "branch_required" });
     const branch = await prisma.branch.findFirst({ where: { id: branchId, deletedAt: null }, select: { timezone: true } });
@@ -173,17 +185,28 @@ export default async function reportRoutes(app: FastifyInstance) {
 
     const now = new Date();
     const todayKey = dateKey(now, branch.timezone);
-    const dailyKeys = calendarKeys(todayKey, query.days);
+    let selectedKeys: string[];
+    try {
+      selectedKeys = query.from && query.to ? inclusiveDateKeys(query.from, query.to) : calendarKeys(todayKey, query.days);
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "invalid_date_range" });
+    }
+    const selectedFromKey = selectedKeys[0];
+    const selectedToKey = selectedKeys[selectedKeys.length - 1];
+    const selectedEndKey = nextDateKey(selectedToKey);
     const rolling10Keys = calendarKeys(todayKey, 10);
+    const rolling15Keys = calendarKeys(todayKey, 15);
     const [year, month] = todayKey.split("-");
     const monthStartKey = `${year}-${month}-01`;
-    const rolling15Start = calendarKeys(todayKey, 15)[0];
-    const earliestKey = monthStartKey < rolling15Start ? monthStartKey : rolling15Start;
+    const earliestKey = [monthStartKey, rolling15Keys[0], selectedFromKey].sort()[0];
+    const latestEndKey = [nextDateKey(todayKey), selectedEndKey].sort().at(-1)!;
     const rangeStart = zonedToUtc(`${earliestKey}T00:00:00`, branch.timezone);
-    const rangeEnd = zonedToUtc(`${calendarKeys(todayKey, 1, 1)[0]}T00:00:00`, branch.timezone);
+    const rangeEnd = zonedToUtc(`${latestEndKey}T00:00:00`, branch.timezone);
+    const selectedRangeStart = zonedToUtc(`${selectedFromKey}T00:00:00`, branch.timezone);
+    const selectedRangeEnd = zonedToUtc(`${selectedEndKey}T00:00:00`, branch.timezone);
     const inactiveCutoff = new Date(now.getTime() - inactiveDays * 86_400_000);
 
-    const [invoices, customers, inactiveCustomers, inactiveTotal, neverVisited, historicalDaily] = await Promise.all([
+    const [invoices, customers, inactiveCustomers, inactiveTotal, neverVisited, historicalDaily, selectedAppointments, selectedNewCustomers] = await Promise.all([
       prisma.invoice.findMany({
         where: { branchId, status: { not: "VOID" }, createdAt: { gte: rangeStart, lt: rangeEnd } },
         select: { id: true, totalMinor: true, paidMinor: true, createdAt: true },
@@ -201,16 +224,22 @@ export default async function reportRoutes(app: FastifyInstance) {
       prisma.customer.count({ where: { branchId, deletedAt: null, visitCount: { gt: 0 }, lastVisitAt: { lt: inactiveCutoff } } }),
       prisma.customer.count({ where: { branchId, deletedAt: null, visitCount: 0 } }),
       prisma.historicalDailySummary.findMany({
-        where: { branchId, businessDate: { gte: earliestKey, lte: todayKey }, reviewRequired: false, totalSalesMinor: { not: null } },
+        where: { branchId, businessDate: { gte: earliestKey, lt: latestEndKey }, reviewRequired: false, totalSalesMinor: { not: null } },
         select: { businessDate: true, totalSalesMinor: true, reviewRequired: true },
       }),
+      prisma.appointment.findMany({
+        where: { branchId, startAt: { gte: selectedRangeStart, lt: selectedRangeEnd }, deletedAt: null },
+        select: { status: true, isWalkIn: true },
+      }),
+      prisma.customer.count({ where: { branchId, createdAt: { gte: selectedRangeStart, lt: selectedRangeEnd }, deletedAt: null } }),
     ]);
 
     const dailyMap = new Map<string, { salesMinor: number; collectedMinor: number; bills: number }>();
     for (const key of calendarKeys(todayKey, daysInMonth(Number(year), Number(month)))) {
       if (key >= monthStartKey && key <= todayKey) dailyMap.set(key, { salesMinor: 0, collectedMinor: 0, bills: 0 });
     }
-    for (const key of dailyKeys) if (!dailyMap.has(key)) dailyMap.set(key, { salesMinor: 0, collectedMinor: 0, bills: 0 });
+    for (const key of rolling15Keys) if (!dailyMap.has(key)) dailyMap.set(key, { salesMinor: 0, collectedMinor: 0, bills: 0 });
+    for (const key of selectedKeys) if (!dailyMap.has(key)) dailyMap.set(key, { salesMinor: 0, collectedMinor: 0, bills: 0 });
     for (const invoice of invoices) {
       const key = dateKey(invoice.createdAt, branch.timezone);
       const row = dailyMap.get(key) ?? { salesMinor: 0, collectedMinor: 0, bills: 0 };
@@ -228,13 +257,28 @@ export default async function reportRoutes(app: FastifyInstance) {
     }
     const totalFor = (keys: string[]) => keys.reduce((sum, key) => sum + (dailyMap.get(key)?.salesMinor ?? 0), 0);
     const monthKeys = [...dailyMap.keys()].filter((key) => key >= monthStartKey && key <= todayKey).sort();
-    const monthInvoices = invoices.filter((invoice) => dateKey(invoice.createdAt, branch.timezone) >= monthStartKey);
+    const monthInvoices = invoices.filter((invoice) => {
+      const key = dateKey(invoice.createdAt, branch.timezone);
+      return key >= monthStartKey && key <= todayKey;
+    });
     const ticketValues = monthInvoices.map((invoice) => invoice.totalMinor).filter((value) => value > 0);
     const maxDay = monthKeys.reduce((best, key) => {
       const salesMinor = dailyMap.get(key)?.salesMinor ?? 0;
       return salesMinor > best.salesMinor ? { date: key, salesMinor } : best;
     }, { date: monthStartKey, salesMinor: 0 });
     const repeatCustomers = customers.filter((customer) => customer.visitCount >= DEFAULT_SEGMENT_CONFIG.repeatMinVisits).length;
+    const selectedInvoices = invoices.filter((invoice) => {
+      const key = dateKey(invoice.createdAt, branch.timezone);
+      return key >= selectedFromKey && key <= selectedToKey;
+    });
+    const selectedTicketValues = selectedInvoices.map((invoice) => invoice.totalMinor).filter((value) => value > 0);
+    const selectedMaxDay = selectedKeys.reduce((best, key) => {
+      const salesMinor = dailyMap.get(key)?.salesMinor ?? 0;
+      return salesMinor > best.salesMinor ? { date: key, salesMinor } : best;
+    }, { date: selectedFromKey, salesMinor: 0 });
+    const selectedHistoricalSalesMinor = [...historicalFallback.byDate.entries()]
+      .filter(([key]) => key >= selectedFromKey && key <= selectedToKey)
+      .reduce((sum, [, salesMinor]) => sum + salesMinor, 0);
 
     return {
       generatedAt: now.toISOString(),
@@ -243,9 +287,30 @@ export default async function reportRoutes(app: FastifyInstance) {
       sales: {
         todayMinor: dailyMap.get(todayKey)?.salesMinor ?? 0,
         rolling10Minor: totalFor(rolling10Keys),
-        rolling15Minor: totalFor(calendarKeys(todayKey, 15)),
+        rolling15Minor: totalFor(rolling15Keys),
         monthMinor: totalFor(monthKeys),
         maxDaily: maxDay,
+      },
+      selectedRange: {
+        source: query.from ? "custom" : "rolling",
+        from: selectedFromKey,
+        to: selectedToKey,
+        days: selectedKeys.length,
+        salesMinor: totalFor(selectedKeys),
+        liveSalesMinor: selectedInvoices.reduce((sum, invoice) => sum + invoice.totalMinor, 0),
+        historicalSalesMinor: selectedHistoricalSalesMinor,
+        collectedMinor: selectedInvoices.reduce((sum, invoice) => sum + invoice.paidMinor, 0),
+        bills: selectedInvoices.length,
+        appointments: selectedAppointments.length,
+        completedAppointments: selectedAppointments.filter((appointment) => appointment.status === "COMPLETED").length,
+        walkIns: selectedAppointments.filter((appointment) => appointment.isWalkIn).length,
+        newCustomers: selectedNewCustomers,
+        tickets: {
+          minimumMinor: selectedTicketValues.length ? Math.min(...selectedTicketValues) : 0,
+          maximumMinor: selectedTicketValues.length ? Math.max(...selectedTicketValues) : 0,
+          averageMinor: selectedTicketValues.length ? Math.round(selectedTicketValues.reduce((sum, value) => sum + value, 0) / selectedTicketValues.length) : 0,
+        },
+        maxDaily: selectedMaxDay,
       },
       tickets: {
         minimumMinor: ticketValues.length ? Math.min(...ticketValues) : 0,
@@ -260,7 +325,7 @@ export default async function reportRoutes(app: FastifyInstance) {
         neverVisited,
         inactiveList: inactiveCustomers.map((customer) => ({ ...customer, daysSinceVisit: customer.lastVisitAt ? Math.floor((now.getTime() - customer.lastVisitAt.getTime()) / 86_400_000) : null })),
       },
-      dailySales: dailyKeys.map((date) => ({ date, ...(dailyMap.get(date) ?? { salesMinor: 0, collectedMinor: 0, bills: 0 }) })),
+      dailySales: selectedKeys.map((date) => ({ date, ...(dailyMap.get(date) ?? { salesMinor: 0, collectedMinor: 0, bills: 0 }) })),
     };
   });
 }

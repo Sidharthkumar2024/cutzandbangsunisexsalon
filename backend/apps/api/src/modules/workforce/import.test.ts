@@ -9,8 +9,10 @@ describe("staff import parsing", () => {
       baseSalaryMinor: 3_000_000,
       designation: "Female Hair Dresser",
     });
-    expect(row.shifts).toHaveLength(7);
+    expect(row.shifts).toHaveLength(6);
     expect(row.shifts?.[0]).toEqual({ weekday: 0, startMin: 660, endMin: 1260 });
+    expect(row.shifts?.some((shift) => shift.weekday === 2)).toBe(false);
+    expect(row.weeklyOff).toContain(2);
   });
 
   it("does not invent phone data and normalizes dedupe names", () => {

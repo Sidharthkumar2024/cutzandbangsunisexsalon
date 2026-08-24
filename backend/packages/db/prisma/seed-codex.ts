@@ -290,6 +290,7 @@ async function main() {
         lateGraceMinutes: 15,
         lateDeductionMinor: Math.round(st.salaryMinor / 60),
         halfDayAfterMinutes: 240,
+        weeklyOff: [2],
       },
       update: {
         userId: null,
@@ -301,6 +302,7 @@ async function main() {
         lateGraceMinutes: 15,
         lateDeductionMinor: Math.round(st.salaryMinor / 60),
         halfDayAfterMinutes: 240,
+        weeklyOff: [2],
         isActive: true,
         deletedAt: null,
       },
@@ -308,7 +310,7 @@ async function main() {
     // Exact team shifts supplied by the salon owner. Staff login is created only through an invite.
     await prisma.shift.deleteMany({ where: { staffId: st.id } });
     await prisma.shift.createMany({
-      data: [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({
+      data: [0, 1, 3, 4, 5, 6].map((weekday) => ({
         staffId: st.id,
         weekday,
         startMin: st.startMin,
@@ -389,6 +391,15 @@ async function main() {
     create: {
       key: "branch:main:loyalty",
       value: { enabled: true, welcomePoints: 50, earnPoints: 1, earnEveryMinor: 10_000, redeemMinorPerPoint: 100, minRedeemPoints: 50 },
+    },
+    update: {},
+  });
+
+  await prisma.setting.upsert({
+    where: { key: "branch:main:booking" },
+    create: {
+      key: "branch:main:booking",
+      value: { slotMinutes: 15, closedWeekdays: [2], closedWeekdayNames: ["Tuesday"] },
     },
     update: {},
   });

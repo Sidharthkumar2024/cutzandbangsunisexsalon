@@ -363,6 +363,9 @@ export default async function refundRoutes(app: FastifyInstance) {
                 paidMinor: Math.max(0, inv.paidMinor - priced.grossMinor),
                 status: fullyRefunded ? "VOID" : inv.status,
                 notes: `${inv.notes ? `${inv.notes} | ` : ""}Refunded ${priced.grossMinor} (${body.reason})`,
+                // The rendered receipt contains paid/status information. Force
+                // lazy regeneration instead of serving a pre-refund PDF.
+                pdfUrl: null,
               },
             });
 

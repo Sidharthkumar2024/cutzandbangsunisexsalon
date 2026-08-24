@@ -39,5 +39,7 @@ tsconfig.tsbuildinfo
 /dist/
 /.wrangler/
 /outputs/
+/output/
+/tmp/
 /work/
 **/.storage/

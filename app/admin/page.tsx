@@ -17,6 +17,8 @@ import {
   type BackendAppointment,
   type BackendCustomerDetail,
   type BackendCategory,
+  type BackendInvoiceArchive,
+  type BackendInvoiceArchiveItem,
   type BackendProviderConfig,
   type BackendRangeReport,
   type BackendSnapshot,
@@ -33,6 +35,7 @@ type View =
   | "services"
   | "inventory"
   | "cash"
+  | "invoices"
   | "inbox"
   | "content"
   | "coupons"
@@ -239,6 +242,7 @@ const navGroups: Array<{
       { id: "services", label: "Services", icon: "SV" },
       { id: "inventory", label: "Inventory", icon: "IV" },
       { id: "cash", label: "Cash & expenses", icon: "₹" },
+      { id: "invoices", label: "Invoices", icon: "IN" },
     ],
   },
   {
@@ -263,7 +267,7 @@ const navGroups: Array<{
 
 const viewPermission: Partial<Record<View, string>> = {
   dashboard: "dashboard", calendar: "calendar", pos: "pos", customers: "customers", memberships: "memberships",
-  inbox: "inbox", services: "services", inventory: "inventory", cash: "cash", content: "website", coupons: "coupons",
+  inbox: "inbox", services: "services", inventory: "inventory", cash: "cash", invoices: "pos", content: "website", coupons: "coupons",
   campaigns: "campaigns", reports: "reports", staff: "staff", attendance: "staff", payroll: "payroll", system: "audit", settings: "settings",
 };
 
@@ -285,6 +289,7 @@ const viewTitles: Record<View, [string, string]> = {
     "Products, vendor bills, stock movements and reorder alerts.",
   ],
   cash: ["Cash & expenses", "Opening float, daily expenses and end-of-day reconciliation."],
+  invoices: ["Invoice archive", "Search, download and deliver every stored salon invoice."],
   inbox: ["Unified inbox", "WhatsApp, email and internal notes in one queue."],
   content: [
     "Website content",
@@ -352,9 +357,9 @@ export default function AdminPage() {
   }
   const allowedViews = new Set<View>(
     role === "RECEPTION"
-      ? ["dashboard", "calendar", "pos", "customers", "memberships", "inbox", "cash"]
+      ? ["dashboard", "calendar", "pos", "customers", "memberships", "inbox", "cash", "invoices"]
       : role === "MANAGER"
-        ? ["dashboard", "calendar", "pos", "customers", "memberships", "services", "inventory", "cash", "inbox", "coupons", "campaigns", "reports", "staff", "attendance", "payroll", "settings"]
+        ? ["dashboard", "calendar", "pos", "customers", "memberships", "services", "inventory", "cash", "invoices", "inbox", "coupons", "campaigns", "reports", "staff", "attendance", "payroll", "settings"]
         : role === "STAFF"
           ? ["calendar", "customers"]
           : navGroups.flatMap((group) => group.items.map((item) => item.id)).concat("settings"),
@@ -473,7 +478,7 @@ export default function AdminPage() {
             </div>
           </div>
           <div className="admin-actions">
-            <label className="global-search">
+            <label className="global-search admin-search-field">
               <span>⌕</span>
               <input
                 value={search}
@@ -530,7 +535,7 @@ export default function AdminPage() {
         <div className="admin-page">
           <BackendConnection backend={backend} />
           {view === "dashboard" && (
-            <Dashboard onView={selectView} data={backend.data} />
+            <Dashboard token={backend.token} onView={selectView} data={backend.data} />
           )}
           {view === "calendar" && (
             <Calendar
@@ -599,6 +604,9 @@ export default function AdminPage() {
           )}
           {view === "cash" && (
             <Cashbook token={backend.token} data={backend.data} onRefresh={() => void backend.refresh()} />
+          )}
+          {view === "invoices" && (
+            <Invoices token={backend.token} data={backend.data} onRefresh={() => void backend.refresh()} />
           )}
           {view === "inbox" && (
             <Inbox
@@ -1460,15 +1468,48 @@ function WebsiteContent({ token }: { token: string }) {
 }
 
 function Dashboard({
+  token,
   onView,
   data,
 }: {
+  token: string;
   onView: (view: View) => void;
   data: BackendSnapshot;
 }) {
+  const todayKey = localDateKey(new Date());
+  const monthStartKey = `${todayKey.slice(0, 7)}-01`;
+  const [fromDate, setFromDate] = useState(monthStartKey);
+  const [toDate, setToDate] = useState(todayKey);
+  const [rangeInsights, setRangeInsights] = useState<NonNullable<BackendSnapshot["dashboardInsights"]> | null>(null);
+  const [rangeLoading, setRangeLoading] = useState(false);
+  const [rangeMessage, setRangeMessage] = useState("");
   const live = Boolean(data.today);
-  const insights = data.dashboardInsights;
-  const metrics = data.today
+  const insights = rangeInsights ?? data.dashboardInsights;
+  const selectedRange = rangeInsights?.selectedRange;
+
+  const applyDashboardRange = async (nextFrom = fromDate, nextTo = toDate) => {
+    if (!token || !nextFrom || !nextTo || nextFrom > nextTo) return;
+    setRangeLoading(true);
+    setRangeMessage("");
+    try {
+      const result = await backendApi.dashboardReport(token, nextFrom, nextTo);
+      setRangeInsights(result);
+      setRangeMessage(`Showing ${new Date(`${nextFrom}T12:00:00`).toLocaleDateString("en-IN", { dateStyle: "medium" })} to ${new Date(`${nextTo}T12:00:00`).toLocaleDateString("en-IN", { dateStyle: "medium" })}.`);
+    } catch (cause) {
+      setRangeMessage(cause instanceof Error ? prettyStatus(cause.message) : "Dashboard history could not be loaded.");
+    } finally {
+      setRangeLoading(false);
+    }
+  };
+
+  const metrics = selectedRange
+    ? [
+        ["Selected sales", money(selectedRange.salesMinor), `${selectedRange.bills} bills`, `${selectedRange.days} day range`],
+        ["Appointments", String(selectedRange.appointments), `${selectedRange.walkIns} walk-ins`, "Selected range"],
+        ["Average bill", money(selectedRange.tickets.averageMinor), `${selectedRange.completedAppointments} completed`, "Selected range"],
+        ["New customers", String(selectedRange.newCustomers), "Added in range", "From live CRM"],
+      ]
+    : data.today
     ? [
         [
           "Today’s sales",
@@ -1504,6 +1545,29 @@ function Dashboard({
   const chartMax = Math.max(1, ...chartRows.map((row) => row.salesMinor));
   return (
     <div className="dashboard-view">
+      <form
+        className="dashboard-range-toolbar"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const nextFrom = String(form.get("from") ?? fromDate);
+          const nextTo = String(form.get("to") ?? toDate);
+          setFromDate(nextFrom);
+          setToDate(nextTo);
+          void applyDashboardRange(nextFrom, nextTo);
+        }}
+      >
+        <div>
+          <p className="eyebrow">Historical dashboard</p>
+          <strong>Choose any date range</strong>
+          <small>{rangeMessage || "Compare past sales, bills, appointments and customers without changing today’s live data."}</small>
+        </div>
+        <label><span>From</span><input name="from" type="date" value={fromDate} max={toDate || undefined} onChange={(event) => setFromDate(event.target.value)} /></label>
+        <label><span>To</span><input name="to" type="date" value={toDate} min={fromDate || undefined} onChange={(event) => setToDate(event.target.value)} /></label>
+        <button className="button admin-primary" type="submit" disabled={rangeLoading || !token || !fromDate || !toDate || fromDate > toDate}>{rangeLoading ? "Loading…" : "Apply"}</button>
+        <button className="button" type="button" disabled={rangeLoading || !token} onClick={() => { setFromDate(monthStartKey); setToDate(todayKey); void applyDashboardRange(monthStartKey, todayKey); }}>This month</button>
+        {rangeInsights && <button className="button" type="button" onClick={() => { setRangeInsights(null); setRangeMessage(""); }}>Live default</button>}
+      </form>
       <div className="metric-grid">
         {metrics.map(([label, value, badge, note], index) => (
           <article className={`metric-card metric-${index}`} key={label}>
@@ -1522,9 +1586,9 @@ function Dashboard({
       </div>
       {insights && (
         <div className="insight-strip">
-          <span><small>Minimum ticket · month</small><strong>{money(insights.tickets.minimumMinor)}</strong></span>
-          <span><small>Maximum ticket · month</small><strong>{money(insights.tickets.maximumMinor)}</strong></span>
-          <span><small>Best sales day · month</small><strong>{money(insights.sales.maxDaily.salesMinor)}</strong><em>{new Date(`${insights.sales.maxDaily.date}T12:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</em></span>
+          <span><small>Minimum ticket · {selectedRange ? "selected range" : "month"}</small><strong>{money(selectedRange?.tickets.minimumMinor ?? insights.tickets.minimumMinor)}</strong></span>
+          <span><small>Maximum ticket · {selectedRange ? "selected range" : "month"}</small><strong>{money(selectedRange?.tickets.maximumMinor ?? insights.tickets.maximumMinor)}</strong></span>
+          <span><small>Best sales day · {selectedRange ? "selected range" : "month"}</small><strong>{money(selectedRange?.maxDaily.salesMinor ?? insights.sales.maxDaily.salesMinor)}</strong><em>{new Date(`${selectedRange?.maxDaily.date ?? insights.sales.maxDaily.date}T12:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</em></span>
           <span><small>Not returned in {insights.thresholds.inactiveDays}+ days</small><strong>{insights.customers.inactive}</strong><em>{insights.customers.neverVisited} never visited</em></span>
         </div>
       )}
@@ -1533,13 +1597,13 @@ function Dashboard({
           <div className="card-head">
             <div>
               <h2>Sales overview</h2>
-              <p>{insights ? "Daily sales · rolling 15 days" : "Revenue across this week"}</p>
+              <p>{selectedRange ? `Daily sales · ${selectedRange.from} to ${selectedRange.to}` : insights ? "Daily sales · rolling 15 days" : "Revenue across this week"}</p>
             </div>
-            <span className="filter-button">{insights ? "Last 15 days" : "This week"}</span>
+            <span className="filter-button">{selectedRange ? `${selectedRange.days} days` : insights ? "Last 15 days" : "This week"}</span>
           </div>
           <div className="sales-summary">
-            <strong>{money(insights?.sales.rolling15Minor ?? 0)}</strong>
-            <span>{insights ? `${money(insights.sales.rolling10Minor)} in last 10 days` : "No live sales data yet"}</span>
+            <strong>{money(selectedRange?.salesMinor ?? insights?.sales.rolling15Minor ?? 0)}</strong>
+            <span>{selectedRange ? `${money(selectedRange.collectedMinor)} collected · ${money(selectedRange.historicalSalesMinor)} imported history` : insights ? `${money(insights.sales.rolling10Minor)} in last 10 days` : "No live sales data yet"}</span>
           </div>
           <div className={`bar-chart ${chartRows.length ? "rolling-chart" : ""}`} aria-label="Rolling 15-day sales chart">
             {chartRows.map((row) => {
@@ -2873,8 +2937,16 @@ function POS({
               className="pos-add-customer-button"
               aria-expanded={showQuickCustomer}
               onClick={() => {
-                setShowQuickCustomer((current) => !current);
+                const opening = !showQuickCustomer;
+                setShowQuickCustomer(opening);
                 setQuickCustomerMessage("");
+                if (opening) {
+                  window.setTimeout(() => {
+                    document
+                      .getElementById("pos-quick-customer-form")
+                      ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                  }, 0);
+                }
               }}
             >
               {showQuickCustomer ? "Close new customer" : "+ Add new customer"}
@@ -2887,6 +2959,7 @@ function POS({
           </div>
           {showQuickCustomer && (
             <form
+              id="pos-quick-customer-form"
               className="pos-quick-customer"
               onSubmit={(event) => {
                 event.preventDefault();
@@ -2929,7 +3002,7 @@ function POS({
                 <span>Customer has agreed to receive service updates on WhatsApp</span>
               </label>
               <button className="button admin-primary" type="submit" disabled={quickCustomerBusy || !token || !quickCustomerName.trim() || Boolean(quickCustomerVisitDate && !quickCustomerService.trim())}>
-                {quickCustomerBusy ? "Checking & saving…" : "Save & select customer"}
+                {quickCustomerBusy ? "Checking & selecting…" : "Save & Select Customer"}
               </button>
             </form>
           )}
@@ -3134,7 +3207,6 @@ function Customers({
   const [referralPhone, setReferralPhone] = useState("");
   const [waConsent, setWaConsent] = useState(false);
   const [emailConsent, setEmailConsent] = useState(false);
-  const [addEarlierVisit, setAddEarlierVisit] = useState(false);
   const [initialVisitDate, setInitialVisitDate] = useState("");
   const [initialVisitService, setInitialVisitService] = useState("");
   const [initialVisitAmount, setInitialVisitAmount] = useState(0);
@@ -3205,7 +3277,7 @@ function Customers({
         waConsent,
         emailConsent,
         companions: newCompanions.length ? newCompanions : undefined,
-        initialVisit: addEarlierVisit && initialVisitDate && initialVisitService.trim() ? {
+        initialVisit: initialVisitDate && initialVisitService.trim() ? {
           visitedAt: new Date(`${initialVisitDate}T12:00:00`).toISOString(),
           serviceName: initialVisitService.trim(),
           amountMinor: Math.round(initialVisitAmount * 100),
@@ -3220,7 +3292,7 @@ function Customers({
       setReferralPhone("");
       setWaConsent(false);
       setEmailConsent(false);
-      setAddEarlierVisit(false); setInitialVisitDate(""); setInitialVisitService(""); setInitialVisitAmount(0); setInitialVisitStaff("");
+      setInitialVisitDate(""); setInitialVisitService(""); setInitialVisitAmount(0); setInitialVisitStaff("");
       setNewCompanions([]); setCompanionName(""); setCompanionRelation("");
       setShowCreate(false);
       const loyalty = data.settings.loyalty as Record<string, unknown> | undefined;
@@ -3300,7 +3372,7 @@ function Customers({
     <div className="customers-view">
       {message && <div className="calendar-message">{message}</div>}
       <div className="crm-toolbar">
-        <label>
+        <label className="crm-search admin-search-field">
           <span>⌕</span>
           <input
             value={search}
@@ -3385,8 +3457,15 @@ function Customers({
             {newCompanions.map((companion, index) => <span key={`${companion.name}-${index}`}>{companion.name}{companion.relation ? ` · ${companion.relation}` : ""}<button type="button" aria-label={`Remove ${companion.name}`} onClick={() => setNewCompanions((current) => current.filter((_, itemIndex) => itemIndex !== index))}>×</button></span>)}
           </div>
           <div className="historical-customer-create">
-            <label className="consent-box"><input type="checkbox" checked={addEarlierVisit} onChange={(event) => setAddEarlierVisit(event.target.checked)} /><span>This is an existing customer; add their earlier visit now</span></label>
-            {addEarlierVisit && <><label>Earlier visit date<input type="date" max={new Date().toISOString().slice(0, 10)} value={initialVisitDate} onChange={(event) => setInitialVisitDate(event.target.value)} /></label><label>Earlier service<input value={initialVisitService} onChange={(event) => setInitialVisitService(event.target.value)} placeholder="Haircut + colour" /></label><label>Earlier sale (₹)<input type="number" min="0" value={initialVisitAmount || ""} placeholder="0" onChange={(event) => setInitialVisitAmount(Math.max(0, Number(event.target.value)))} /></label><label>Staff (optional)<input value={initialVisitStaff} onChange={(event) => setInitialVisitStaff(event.target.value)} /></label></>}
+            <div className="historical-customer-heading">
+              <strong>Customer since / historical visit</strong>
+              <small>For an old register customer, add their first known visit date and service. Leave blank for a brand-new customer.</small>
+            </div>
+            <label>
+              Customer since / first visit date (optional)
+              <input type="date" max={new Date().toISOString().slice(0, 10)} value={initialVisitDate} onChange={(event) => setInitialVisitDate(event.target.value)} />
+            </label>
+            {initialVisitDate && <><label>Earlier service<input value={initialVisitService} onChange={(event) => setInitialVisitService(event.target.value)} placeholder="Haircut + colour" required /></label><label>Earlier sale (₹)<input type="number" min="0" value={initialVisitAmount || ""} placeholder="0" onChange={(event) => setInitialVisitAmount(Math.max(0, Number(event.target.value)))} /></label><label>Staff (optional)<input value={initialVisitStaff} onChange={(event) => setInitialVisitStaff(event.target.value)} /></label></>}
           </div>
           <fieldset>
             <legend>Communication consent</legend>
@@ -3395,7 +3474,7 @@ function Customers({
           </fieldset>
           <button
             className="button admin-primary"
-            disabled={busy || !token || !name || Boolean(duplicate) || (source === "referral" && !referralName.trim()) || (addEarlierVisit && (!initialVisitDate || !initialVisitService.trim()))}
+            disabled={busy || !token || !name || Boolean(duplicate) || (source === "referral" && !referralName.trim()) || Boolean(initialVisitDate && !initialVisitService.trim())}
             onClick={() => void create()}
           >
             {busy ? "Saving…" : "Create customer"}
@@ -5907,6 +5986,175 @@ function Payroll({ data }: { data: BackendSnapshot }) {
   );
 }
 
+function Invoices({
+  token,
+  data,
+  onRefresh,
+}: {
+  token: string;
+  data: BackendSnapshot;
+  onRefresh: () => void;
+}) {
+  const [archive, setArchive] = useState<BackendInvoiceArchive | null>(null);
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [busyId, setBusyId] = useState("");
+  const [message, setMessage] = useState("");
+
+  const fallbackItems: BackendInvoiceArchiveItem[] = data.invoices.map((invoice) => ({
+    id: invoice.id,
+    number: invoice.number,
+    status: invoice.status,
+    subtotalMinor: invoice.subtotalMinor,
+    discountMinor: invoice.discountMinor,
+    taxMinor: invoice.taxMinor,
+    totalMinor: invoice.totalMinor,
+    paidMinor: invoice.paidMinor,
+    createdAt: invoice.createdAt,
+    pdfReady: Boolean(invoice.pdfUrl),
+    downloadPath: `/api/v1/invoices/${invoice.id}/pdf?download=1`,
+    customer: invoice.customer,
+  }));
+
+  const loadArchive = async (page = 1) => {
+    if (!token) return;
+    setLoading(true);
+    setMessage("");
+    try {
+      const result = await backendApi.invoiceArchive(token, {
+        branchId: "main",
+        q: query.trim() || undefined,
+        status: status || undefined,
+        from: from ? new Date(`${from}T00:00:00`).toISOString() : undefined,
+        to: to ? new Date(`${to}T23:59:59.999`).toISOString() : undefined,
+        page,
+        pageSize: 25,
+      });
+      setArchive(result);
+    } catch (cause) {
+      setMessage(cause instanceof Error ? `Invoice archive could not load: ${prettyStatus(cause.message)}.` : "Invoice archive could not load.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!token) return;
+    backendApi.invoiceArchive(token, { branchId: "main", page: 1, pageSize: 25 })
+      .then((result) => { if (!cancelled) setArchive(result); })
+      .catch((cause) => { if (!cancelled) setMessage(cause instanceof Error ? `Invoice archive could not load: ${prettyStatus(cause.message)}.` : "Invoice archive could not load."); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [token]);
+
+  const openPdf = async (invoice: BackendInvoiceArchiveItem, download: boolean) => {
+    if (!token) return;
+    setBusyId(invoice.id);
+    setMessage("");
+    try {
+      const url = await backendApi.invoicePdfBlob(token, invoice.id);
+      if (download) {
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `${invoice.number}.pdf`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+        setMessage(`${invoice.number} downloaded.`);
+      } else {
+        const opened = window.open(url, "_blank", "noopener,noreferrer");
+        window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        setMessage(opened ? `${invoice.number} opened in a new tab.` : "Allow pop-ups to open the PDF preview.");
+      }
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Invoice PDF could not be opened.");
+    } finally {
+      setBusyId("");
+    }
+  };
+
+  const deliver = async (
+    invoice: BackendInvoiceArchiveItem,
+    channel: "EMAIL" | "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL",
+  ) => {
+    if (!token) return;
+    setBusyId(invoice.id);
+    setMessage("");
+    try {
+      const result = await backendApi.sendInvoice(token, invoice.id, channel);
+      setMessage(`${invoice.number} ${result.queued ? "queued" : "processed"} via ${prettyStatus(channel)}.`);
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Invoice delivery failed.");
+    } finally {
+      setBusyId("");
+    }
+  };
+
+  const items = archive?.items ?? fallbackItems;
+  const summary = archive?.summary ?? {
+    totalMinor: fallbackItems.reduce((sum, invoice) => sum + invoice.totalMinor, 0),
+    paidMinor: fallbackItems.reduce((sum, invoice) => sum + invoice.paidMinor, 0),
+    balanceMinor: fallbackItems.reduce((sum, invoice) => sum + Math.max(0, invoice.totalMinor - invoice.paidMinor), 0),
+  };
+
+  return (
+    <div className="invoice-archive-view">
+      {message && <div className="calendar-message">{message}</div>}
+      <section className="invoice-archive-metrics" aria-label="Invoice archive summary">
+        <article><small>Matching invoices</small><strong>{archive?.total ?? fallbackItems.length}</strong></article>
+        <article><small>Invoice value</small><strong>{money(summary.totalMinor)}</strong></article>
+        <article><small>Collected</small><strong>{money(summary.paidMinor)}</strong></article>
+        <article><small>Balance</small><strong>{money(summary.balanceMinor)}</strong></article>
+      </section>
+      <section className="admin-card invoice-archive-card">
+        <div className="card-head">
+          <div><p className="eyebrow">Stored billing records</p><h2>Invoice archive</h2><p>PDFs are generated once, retained by the backend storage adapter and remain available for accounts and customer delivery.</p></div>
+          <button className="button" disabled={loading} onClick={() => void loadArchive(1)}>{loading ? "Loading…" : "Refresh"}</button>
+        </div>
+        <form className="invoice-archive-filters" onSubmit={(event) => { event.preventDefault(); void loadArchive(1); }}>
+          <label className="admin-search-field invoice-search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Invoice, customer, phone or email" /></label>
+          <label><span>From</span><input type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
+          <label><span>To</span><input type="date" min={from || undefined} value={to} onChange={(event) => setTo(event.target.value)} /></label>
+          <label><span>Status</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All statuses</option><option value="PAID">Paid</option><option value="PARTIALLY_PAID">Part paid</option><option value="ISSUED">Issued</option><option value="VOID">Void</option></select></label>
+          <button className="button admin-primary" type="submit" disabled={loading}>{loading ? "Filtering…" : "Apply filters"}</button>
+          {(query || from || to || status) && <button className="button" type="button" onClick={() => { setQuery(""); setFrom(""); setTo(""); setStatus(""); window.setTimeout(() => void backendApi.invoiceArchive(token, { branchId: "main", page: 1, pageSize: 25 }).then(setArchive).catch(() => undefined), 0); }}>Clear</button>}
+        </form>
+        <div className="invoice-archive-table">
+          <header><span>Invoice</span><span>Customer</span><span>Issued</span><span>Total</span><span>Payment</span><span>Actions</span></header>
+          {items.map((invoice) => {
+            const balance = Math.max(0, invoice.totalMinor - invoice.paidMinor);
+            const customer = invoice.customer;
+            return (
+              <article key={invoice.id}>
+                <div><strong>{invoice.number}</strong><span className={`invoice-status status-${invoice.status.toLowerCase().replaceAll("_", "-")}`}>{prettyStatus(invoice.status)}</span></div>
+                <div><strong>{customer?.name ?? "Walk-in"}</strong><small>{customer?.phone ?? customer?.email ?? "No contact saved"}</small></div>
+                <time>{new Date(invoice.issuedAt ?? invoice.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</time>
+                <div><strong>{money(invoice.totalMinor)}</strong><small>Tax {money(invoice.taxMinor)}</small></div>
+                <div><strong>{balance ? `${money(balance)} due` : "Paid"}</strong><small>{money(invoice.paidMinor)} received</small></div>
+                <div className="invoice-row-actions">
+                  <button disabled={busyId === invoice.id} onClick={() => void openPdf(invoice, false)}>Open PDF</button>
+                  <button disabled={busyId === invoice.id} onClick={() => void openPdf(invoice, true)}>Download</button>
+                  <button disabled={busyId === invoice.id || !customer?.email} title={customer?.email ? `Send to ${customer.email}` : "Customer email is missing"} onClick={() => void deliver(invoice, "EMAIL")}>Email</button>
+                  <button disabled={busyId === invoice.id || !customer?.phone} title={customer?.phone ? `Send to ${customer.phone}` : "Customer phone is missing"} onClick={() => void deliver(invoice, "WHATSAPP_OFFICIAL")}>Official WA</button>
+                  <button disabled={busyId === invoice.id || !customer?.phone} title={customer?.phone ? `Send to ${customer.phone}` : "Customer phone is missing"} onClick={() => void deliver(invoice, "WHATSAPP_UNOFFICIAL")}>Unofficial WA</button>
+                </div>
+              </article>
+            );
+          })}
+          {!items.length && <div className="invoice-archive-empty"><strong>No invoices found</strong><small>Change the date or search filters, or create a bill in Point of sale.</small></div>}
+        </div>
+        {archive && archive.totalPages > 1 && <footer className="invoice-pagination"><button disabled={loading || archive.page <= 1} onClick={() => void loadArchive(archive.page - 1)}>← Previous</button><span>Page {archive.page} of {archive.totalPages}</span><button disabled={loading || archive.page >= archive.totalPages} onClick={() => void loadArchive(archive.page + 1)}>Next →</button></footer>}
+      </section>
+    </div>
+  );
+}
+
 function SystemAndAudit({ token, data }: { token: string; data: BackendSnapshot }) {
   const [healthOverride, setHealth] = useState<BackendSnapshot["systemHealth"]>(null);
   const [logsOverride, setLogs] = useState<BackendSnapshot["auditLogs"] | null>(null);
@@ -6027,6 +6275,19 @@ function Settings({
   const [redeemRupeesPerPoint, setRedeemRupeesPerPoint] = useState(1);
   const [minimumRedeemPoints, setMinimumRedeemPoints] = useState(50);
   const [inactiveDays, setInactiveDays] = useState(60);
+  const [autoInvoiceEmail, setAutoInvoiceEmail] = useState(true);
+  const [autoInvoiceWhatsapp, setAutoInvoiceWhatsapp] = useState(false);
+  const [invoiceWhatsappChannel, setInvoiceWhatsappChannel] = useState<"WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL">("WHATSAPP_UNOFFICIAL");
+  const [invoiceAttachPdf, setInvoiceAttachPdf] = useState(true);
+  const [invoiceEmailSubject, setInvoiceEmailSubject] = useState("Your Cutz & Bangs invoice {{invoiceNumber}}");
+  const [invoiceEmailBody, setInvoiceEmailBody] = useState("Hi {{name}}, thank you for visiting Cutz & Bangs. Your invoice {{invoiceNumber}} total is {{total}}.");
+  const [invoiceWhatsappBody, setInvoiceWhatsappBody] = useState("Thank you {{name}} for visiting Cutz & Bangs. Invoice {{invoiceNumber}} · {{total}}.");
+  const [nonReturningEnabled, setNonReturningEnabled] = useState(false);
+  const [nonReturningDays, setNonReturningDays] = useState(30);
+  const [nonReturningEmail, setNonReturningEmail] = useState(false);
+  const [nonReturningWhatsapp, setNonReturningWhatsapp] = useState(true);
+  const [nonReturningWhatsappChannel, setNonReturningWhatsappChannel] = useState<"WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL">("WHATSAPP_UNOFFICIAL");
+  const [nonReturningTemplate, setNonReturningTemplate] = useState("Hi {{name}}, we have missed you at Cutz & Bangs. It has been {{days}} days since your last visit. Reply BOOK and we will reserve a convenient slot.");
   const [testTo, setTestTo] = useState("");
   const [testMessage, setTestMessage] = useState("Hello from Cutz & Bangs");
   const [busy, setBusy] = useState(false);
@@ -6054,6 +6315,22 @@ function Settings({
     }
     const retention = settings.retention as Record<string, unknown> | undefined;
     if (retention) setInactiveDays(Number(retention.inactiveDays ?? 60));
+    const automation = settings.automation as Record<string, unknown> | undefined;
+    if (automation) {
+      setAutoInvoiceEmail(Boolean(automation.autoInvoiceEmail ?? true));
+      setAutoInvoiceWhatsapp(Boolean(automation.autoInvoiceWhatsapp ?? false));
+      setInvoiceWhatsappChannel(automation.invoiceWhatsappChannel === "WHATSAPP_OFFICIAL" ? "WHATSAPP_OFFICIAL" : "WHATSAPP_UNOFFICIAL");
+      setInvoiceAttachPdf(Boolean(automation.invoiceAttachPdf ?? true));
+      setInvoiceEmailSubject(String(automation.invoiceEmailSubject ?? "Your Cutz & Bangs invoice {{invoiceNumber}}"));
+      setInvoiceEmailBody(String(automation.invoiceEmailBody ?? "Hi {{name}}, thank you for visiting Cutz & Bangs. Your invoice {{invoiceNumber}} total is {{total}}."));
+      setInvoiceWhatsappBody(String(automation.invoiceWhatsappBody ?? "Thank you {{name}} for visiting Cutz & Bangs. Invoice {{invoiceNumber}} · {{total}}."));
+      setNonReturningEnabled(Boolean(automation.nonReturningEnabled ?? false));
+      setNonReturningDays(Number(automation.nonReturningDays ?? 30));
+      setNonReturningEmail(Boolean(automation.nonReturningEmail ?? false));
+      setNonReturningWhatsapp(Boolean(automation.nonReturningWhatsapp ?? true));
+      setNonReturningWhatsappChannel(automation.nonReturningWhatsappChannel === "WHATSAPP_OFFICIAL" ? "WHATSAPP_OFFICIAL" : "WHATSAPP_UNOFFICIAL");
+      setNonReturningTemplate(String(automation.nonReturningTemplate ?? "Hi {{name}}, we have missed you at Cutz & Bangs. It has been {{days}} days since your last visit. Reply BOOK and we will reserve a convenient slot."));
+    }
   };
 
   const loadIntegrations = async () => {
@@ -6152,6 +6429,52 @@ function Settings({
       onRefresh();
     } catch (cause) {
       setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Retention rule could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const automationPayload = () => ({
+    autoInvoiceEmail,
+    autoInvoiceWhatsapp,
+    invoiceWhatsappChannel,
+    invoiceAttachPdf,
+    invoiceEmailSubject,
+    invoiceEmailBody,
+    invoiceWhatsappBody,
+    nonReturningEnabled,
+    nonReturningDays: Math.min(365, Math.max(7, Math.round(nonReturningDays || 30))),
+    nonReturningEmail,
+    nonReturningWhatsapp,
+    nonReturningWhatsappChannel,
+    nonReturningTemplate,
+  });
+  const saveAutomation = async () => {
+    if (!token) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.updateBranchSetting(token, "automation", automationPayload());
+      setMessage("Invoice delivery and customer follow-up automation saved. New POS invoices use these rules immediately.");
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Automation settings could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const runFollowUpNow = async () => {
+    if (!token) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.updateBranchSetting(token, "automation", automationPayload());
+      const result = await backendApi.runNonReturningAutomation(token);
+      setMessage(result.enabled
+        ? `${result.eligible} customers matched · ${result.queued} consented deliveries queued · ${result.skippedDuplicate} duplicates safely skipped.`
+        : "Non-returning automation is disabled. Turn it on, choose a delivery channel and save the rule first.");
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Follow-up run could not be started.");
     } finally {
       setBusy(false);
     }
@@ -6394,6 +6717,46 @@ function Settings({
         <p className="loyalty-example">Customers whose last completed visit is older than this threshold appear on the dashboard follow-up list.</p>
         <div className="setting-row"><div><strong>Mark customer inactive after</strong><small>Used by retention KPIs and campaign follow-up</small></div><select value={inactiveDays} onChange={(event) => setInactiveDays(Number(event.target.value))}><option value="30">30 days</option><option value="45">45 days</option><option value="60">60 days</option><option value="90">90 days</option></select></div>
         <button className="button admin-primary" disabled={busy || !token} onClick={() => void saveRetention()}>{busy ? "Saving…" : "Save retention rule"}</button>
+      </article>
+      <article className="admin-card automation-settings-card">
+        <div className="card-head">
+          <div>
+            <p className="eyebrow">Delivery automation</p>
+            <h2>Invoice & customer follow-up</h2>
+            <p>Choose what POS sends automatically, then schedule consent-aware messages for customers who have not returned.</p>
+          </div>
+          <span className={nonReturningEnabled ? "integration-badge connected" : "integration-badge"}>{nonReturningEnabled ? "Follow-up active" : "Manual only"}</span>
+        </div>
+        <div className="automation-delivery-grid">
+          <section className="automation-panel">
+            <header><div><strong>After a POS invoice</strong><small>Delivery begins only after the invoice and payment are saved.</small></div></header>
+            <div className="automation-toggle-grid">
+              <div className="setting-row"><div><strong>Auto email</strong><small>Send to customers with a saved email and consent</small></div><button type="button" aria-label="Toggle automatic invoice email" className={`toggle ${autoInvoiceEmail ? "active" : ""}`} onClick={() => setAutoInvoiceEmail((current) => !current)}><i /></button></div>
+              <div className="setting-row"><div><strong>Auto WhatsApp</strong><small>Send to opted-in customers with a phone number</small></div><button type="button" aria-label="Toggle automatic invoice WhatsApp" className={`toggle ${autoInvoiceWhatsapp ? "active" : ""}`} onClick={() => setAutoInvoiceWhatsapp((current) => !current)}><i /></button></div>
+              <div className="setting-row"><div><strong>Attach invoice PDF</strong><small>Include the stored PDF with automated delivery</small></div><button type="button" aria-label="Toggle invoice PDF attachment" className={`toggle ${invoiceAttachPdf ? "active" : ""}`} onClick={() => setInvoiceAttachPdf((current) => !current)}><i /></button></div>
+            </div>
+            <label>WhatsApp provider<select value={invoiceWhatsappChannel} disabled={!autoInvoiceWhatsapp} onChange={(event) => setInvoiceWhatsappChannel(event.target.value as "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL")}><option value="WHATSAPP_OFFICIAL">Official Meta Cloud API</option><option value="WHATSAPP_UNOFFICIAL">Unofficial QR connector</option></select></label>
+            <label>Email subject<input value={invoiceEmailSubject} onChange={(event) => setInvoiceEmailSubject(event.target.value)} placeholder="Your invoice {{invoiceNumber}}" /></label>
+            <label>Email message<textarea rows={4} value={invoiceEmailBody} onChange={(event) => setInvoiceEmailBody(event.target.value)} /></label>
+            <label>WhatsApp message<textarea rows={4} value={invoiceWhatsappBody} onChange={(event) => setInvoiceWhatsappBody(event.target.value)} /></label>
+          </section>
+          <section className="automation-panel non-returning-panel">
+            <header><div><strong>Not-returning customers</strong><small>A customer is selected after the configured number of days without a completed visit.</small></div><button type="button" aria-label="Toggle non-returning customer automation" className={`toggle ${nonReturningEnabled ? "active" : ""}`} onClick={() => setNonReturningEnabled((current) => !current)}><i /></button></header>
+            <label>Follow up after<input type="number" min="7" max="365" value={nonReturningDays} onChange={(event) => setNonReturningDays(Math.min(365, Math.max(7, Number(event.target.value) || 7)))} /><small>days since the customer’s last visit</small></label>
+            <div className="automation-toggle-grid compact">
+              <div className="setting-row"><div><strong>Email</strong><small>Requires email consent</small></div><button type="button" aria-label="Toggle non-returning email" className={`toggle ${nonReturningEmail ? "active" : ""}`} onClick={() => setNonReturningEmail((current) => !current)}><i /></button></div>
+              <div className="setting-row"><div><strong>WhatsApp</strong><small>Requires WhatsApp opt-in</small></div><button type="button" aria-label="Toggle non-returning WhatsApp" className={`toggle ${nonReturningWhatsapp ? "active" : ""}`} onClick={() => setNonReturningWhatsapp((current) => !current)}><i /></button></div>
+            </div>
+            <label>WhatsApp provider<select value={nonReturningWhatsappChannel} disabled={!nonReturningWhatsapp} onChange={(event) => setNonReturningWhatsappChannel(event.target.value as "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL")}><option value="WHATSAPP_OFFICIAL">Official Meta Cloud API</option><option value="WHATSAPP_UNOFFICIAL">Unofficial QR connector</option></select></label>
+            <label>Follow-up message<textarea rows={7} value={nonReturningTemplate} onChange={(event) => setNonReturningTemplate(event.target.value)} /></label>
+            <p className="automation-safety-note">The backend checks recorded consent, phone/email availability and a 30-day duplicate window before queueing. Unofficial WhatsApp pacing is still controlled by the daily cap and message interval above.</p>
+          </section>
+        </div>
+        <p className="template-variable-note"><strong>Template variables:</strong> <code>{"{{name}}"}</code> <code>{"{{invoiceNumber}}"}</code> <code>{"{{total}}"}</code> <code>{"{{days}}"}</code></p>
+        <div className="automation-actions">
+          <button className="button admin-primary" disabled={busy || !token || !invoiceEmailSubject.trim() || !invoiceEmailBody.trim() || !invoiceWhatsappBody.trim() || !nonReturningTemplate.trim()} onClick={() => void saveAutomation()}>{busy ? "Saving…" : "Save automation rules"}</button>
+          <button className="button" disabled={busy || !token || !nonReturningEnabled || (!nonReturningEmail && !nonReturningWhatsapp)} onClick={() => void runFollowUpNow()}>{busy ? "Running…" : "Run follow-up now"}</button>
+        </div>
       </article>
       <article className="admin-card provider-config-card">
         <div className="card-head"><div><p className="eyebrow">Secure email setup</p><h2>SMTP configuration</h2><p>Add or rotate the salon mailbox without editing server files. Passwords are encrypted and never returned to this screen.</p></div><span className={emailHealth?.connected ? "integration-badge connected" : "integration-badge"}>{emailHealth?.connected ? "Connected" : providerConfig.smtp.hasPassword ? "Saved" : "Needs setup"}</span></div>

@@ -510,6 +510,23 @@ export type BackendDashboardInsights = {
   generatedAt: string;
   timezone: string;
   thresholds: { inactiveDays: number; repeatMinVisits: number };
+  selectedRange?: {
+    source: "custom" | "rolling";
+    from: string;
+    to: string;
+    days: number;
+    salesMinor: number;
+    liveSalesMinor: number;
+    historicalSalesMinor: number;
+    collectedMinor: number;
+    bills: number;
+    appointments: number;
+    completedAppointments: number;
+    walkIns: number;
+    newCustomers: number;
+    tickets: { minimumMinor: number; maximumMinor: number; averageMinor: number };
+    maxDaily: { date: string; salesMinor: number };
+  };
   sales: {
     todayMinor: number;
     rolling10Minor: number;
@@ -640,6 +657,45 @@ export type BackendInvoice = {
     reference?: string | null;
     createdAt: string;
   }>;
+};
+export type BackendInvoiceArchiveItem = {
+  id: string;
+  number: string;
+  status: string;
+  subtotalMinor: number;
+  discountMinor: number;
+  taxMinor: number;
+  totalMinor: number;
+  paidMinor: number;
+  createdAt: string;
+  issuedAt?: string | null;
+  pdfReady: boolean;
+  downloadPath: string;
+  customer?: {
+    id: string;
+    name: string;
+    email?: string | null;
+    phone?: string | null;
+  } | null;
+};
+export type BackendInvoiceArchive = {
+  items: BackendInvoiceArchiveItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  summary: {
+    totalMinor: number;
+    paidMinor: number;
+    balanceMinor: number;
+  };
+};
+export type BackendNonReturningAutomationRun = {
+  enabled: boolean;
+  eligible: number;
+  queued: number;
+  skippedDuplicate: number;
+  campaigns: string[];
 };
 export type BackendCustomerDetail = Omit<BackendCustomer, "segments"> & {
   notes?: string | null;
@@ -969,6 +1025,12 @@ export const backendApi = {
     request<BackendAppointment[]>(`/appointments?branchId=${encodeURIComponent(branchId)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, {}, token),
   rangeReport: (token: string, from: string, to: string, branchId = "main", filters?: { staffId?: string; serviceId?: string }) =>
     request<BackendRangeReport>(`/reports/range?branchId=${encodeURIComponent(branchId)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${filters?.staffId ? `&staffId=${encodeURIComponent(filters.staffId)}` : ""}${filters?.serviceId ? `&serviceId=${encodeURIComponent(filters.serviceId)}` : ""}`, {}, token),
+  dashboardReport: (token: string, from: string, to: string, branchId = "main") =>
+    request<BackendDashboardInsights>(
+      `/reports/dashboard?branchId=${encodeURIComponent(branchId)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+      {},
+      token,
+    ),
   customerRetentionMatrix: (token: string, from: string, to: string, branchId = "main", bucket: "day" | "week" | "month" = "month", inactiveDays = 60) =>
     request<BackendCustomerRetentionMatrix>(`/reports/customer-retention-matrix?branchId=${encodeURIComponent(branchId)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&bucket=${bucket}&inactiveDays=${inactiveDays}`, {}, token),
   createCustomer: (
@@ -1169,6 +1231,28 @@ export const backendApi = {
       { method: "POST", body: "{}" },
       token,
     ),
+  invoiceArchive: (
+    token: string,
+    filters: {
+      branchId?: string;
+      q?: string;
+      status?: string;
+      from?: string;
+      to?: string;
+      page?: number;
+      pageSize?: number;
+    } = {},
+  ) => {
+    const query = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    });
+    return request<BackendInvoiceArchive>(
+      `/invoices/archive${query.size ? `?${query.toString()}` : ""}`,
+      {},
+      token,
+    );
+  },
   invoicePdfBlob: async (token: string, invoiceId: string) => {
     const response = await fetch(
       `/api/backend/invoices/${encodeURIComponent(invoiceId)}/pdf`,
@@ -1449,6 +1533,12 @@ export const backendApi = {
     request<{ key: string }>(
       `/settings/${branchId}/${encodeURIComponent(name)}`,
       { method: "PUT", body: JSON.stringify(value) },
+      token,
+    ),
+  runNonReturningAutomation: (token: string, branchId = "main") =>
+    request<BackendNonReturningAutomationRun>(
+      "/automations/non-returning/run",
+      { method: "POST", body: JSON.stringify({ branchId }) },
       token,
     ),
   scanVendorBill: (

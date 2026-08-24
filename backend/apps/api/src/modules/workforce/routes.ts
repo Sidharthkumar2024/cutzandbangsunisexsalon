@@ -7,6 +7,7 @@ import { audit } from "../../lib/audit.js";
 import { parseCsv } from "../../lib/csv.js";
 import { assertStaffImportRowLimit, parseStaffImportRow, staffDedupeKey, staffPhoneKey } from "./import.js";
 import { lateMinutesForCheckIn } from "../attendance/calculations.js";
+import { DEFAULT_CLOSED_WEEKDAYS, isSalonClosedWeekday } from "../bookings/business-hours.js";
 
 const MANAGERS = ["OWNER", "ADMIN", "MANAGER"] as const;
 const WORKFORCE = ["OWNER", "ADMIN", "MANAGER", "RECEPTION", "STAFF"] as const;
@@ -150,15 +151,19 @@ export default async function workforceRoutes(app: FastifyInstance) {
     const existing = await prisma.staff.findFirst({ where: { id, deletedAt: null } });
     if (!existing) return reply.code(404).send({ error: "staff_not_found" });
     if (req.user?.role === "MANAGER" && req.user.branchId !== existing.branchId) return reply.code(403).send({ error: "forbidden" });
-    const { shifts, ...profile } = body;
+    const { shifts, weeklyOff, ...profile } = body;
+    const normalizedWeeklyOff = weeklyOff
+      ? [...new Set([...weeklyOff, ...DEFAULT_CLOSED_WEEKDAYS])].sort((a, b) => a - b)
+      : undefined;
     const updated = await prisma.$transaction(async (tx) => {
       if (shifts) {
         await tx.shift.deleteMany({ where: { staffId: id } });
-        if (shifts.length) await tx.shift.createMany({ data: shifts.map((shift) => ({ staffId: id, ...shift })) });
+        const workingShifts = shifts.filter((shift) => !isSalonClosedWeekday(shift.weekday));
+        if (workingShifts.length) await tx.shift.createMany({ data: workingShifts.map((shift) => ({ staffId: id, ...shift })) });
       }
       return tx.staff.update({
         where: { id },
-        data: profile,
+        data: { ...profile, ...(normalizedWeeklyOff ? { weeklyOff: normalizedWeeklyOff } : {}) },
         include: { shifts: { orderBy: [{ weekday: "asc" }, { startMin: "asc" }] }, leaves: { orderBy: { startDate: "desc" }, take: 20 }, user: { select: { id: true, email: true, role: true, isActive: true } } },
       });
     });

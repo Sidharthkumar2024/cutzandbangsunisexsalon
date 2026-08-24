@@ -29,6 +29,26 @@ afterEach(() => {
 });
 
 describe("Cloudinary storage privacy", () => {
+  it("can retire a legacy public object without uploading or touching private storage", async () => {
+    const destroy = vi.fn().mockResolvedValue({ result: "ok" });
+    const uploadStream = vi.fn();
+    const client = {
+      config: vi.fn(),
+      uploader: { destroy, upload_stream: uploadStream },
+      utils: { private_download_url: vi.fn() },
+    };
+    const provider = new CloudinaryStorageProvider(client as never);
+
+    await expect(provider.retireLegacyPublicObject("invoices/INV-OLD.pdf")).resolves.toBeUndefined();
+
+    expect(destroy).toHaveBeenCalledWith("private-salon/invoices/INV-OLD.pdf", {
+      resource_type: "raw",
+      type: "upload",
+      invalidate: true,
+    });
+    expect(uploadStream).not.toHaveBeenCalled();
+  });
+
   it("removes a legacy public twin and uploads the replacement as authenticated raw media", async () => {
     const chunks: Buffer[] = [];
     const destroy = vi.fn().mockResolvedValue({ result: "not found" });

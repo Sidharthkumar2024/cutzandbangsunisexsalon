@@ -78,6 +78,12 @@ export interface StorageProvider {
   signedUrl(key: string, expiresInSec: number): Promise<string>;
   /** Read an object's bytes back (null if missing). Used to stream stored PDFs. */
   get(key: string): Promise<Buffer | null>;
+  /**
+   * Optional migration hook for providers that previously exposed public
+   * objects. Private/local providers can omit it; callers must not delete
+   * their historical object when no public twin exists.
+   */
+  retireLegacyPublicObject?(key: string): Promise<void>;
 }
 
 export interface AIProvider {

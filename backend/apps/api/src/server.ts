@@ -32,6 +32,7 @@ import providerConfigRoutes from "./modules/provider-config/routes.js";
 import systemRoutes from "./modules/system/routes.js";
 import operationsRoutes from "./modules/operations/routes.js";
 import workforceRoutes from "./modules/workforce/routes.js";
+import automationRoutes from "./modules/automation/routes.js";
 
 export function buildServer() {
   const app = Fastify({
@@ -97,6 +98,7 @@ export function buildServer() {
   app.register(systemRoutes, v1);
   app.register(operationsRoutes, v1);
   app.register(workforceRoutes, v1);
+  app.register(automationRoutes, v1);
 
   // Compatibility adapter for the Codex salon UI (POST /api/bookings).
   app.register(integrationRoutes, { prefix: "/api" });

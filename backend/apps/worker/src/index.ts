@@ -126,17 +126,26 @@ new Worker<CampaignJob>(
       return;
     }
     try {
+      const content = campaign.content.replace(/\{\{([a-zA-Z][a-zA-Z0-9_]*)\}\}/gu, (_match, key: string) => {
+        const values: Record<string, string | number> = {
+          name: customer.name,
+          days: customer.lastVisitAt
+            ? Math.max(0, Math.floor((Date.now() - customer.lastVisitAt.getTime()) / 86_400_000))
+            : 0,
+        };
+        return String(values[key] ?? "");
+      });
       const mediaUrl = campaign.mediaKey ? await providers.storage().signedUrl(campaign.mediaKey, 3_600) : undefined;
       let externalId: string | undefined;
       if (campaign.channel === "EMAIL" && customer.email && customer.emailConsent) {
         const image = mediaUrl && campaign.mediaType === "image" ? `<p><img src="${mediaUrl}" alt="" style="max-width:100%;height:auto" /></p>` : "";
-        const result = await emailProvider.send({ to: customer.email, subject: campaign.name, html: `${image}<p>${campaign.content}</p>` });
+        const result = await emailProvider.send({ to: customer.email, subject: campaign.name, html: `${image}<p>${content}</p>` });
         if (result.status === "failed") throw new Error(result.error ?? "email_send_failed");
         externalId = result.externalId || undefined;
       } else if (["WHATSAPP_OFFICIAL", "WHATSAPP_UNOFFICIAL"].includes(campaign.channel) && customer.phone && customer.waConsent) {
-        const body = campaign.channel === "WHATSAPP_UNOFFICIAL" && !/reply\s+stop|बंद/i.test(campaign.content)
-          ? `${campaign.content}\n\nReply STOP to opt out.`
-          : campaign.content;
+        const body = campaign.channel === "WHATSAPP_UNOFFICIAL" && !/reply\s+stop|बंद/i.test(content)
+          ? `${content}\n\nReply STOP to opt out.`
+          : content;
         const result = await (campaign.channel === "WHATSAPP_UNOFFICIAL" ? unofficialMessaging : officialMessaging).send({
           to: customer.phone,
           body,

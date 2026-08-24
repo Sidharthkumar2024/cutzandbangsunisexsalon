@@ -123,6 +123,21 @@ export class CloudinaryStorageProvider implements StorageProvider {
     });
   }
 
+  async retireLegacyPublicObject(key: string): Promise<void> {
+    this.configure();
+    try {
+      await this.client.uploader.destroy(this.publicId(key), {
+        resource_type: "raw",
+        type: "upload",
+        invalidate: true,
+      });
+    } catch {
+      // A failed delete may leave a previously public customer invoice
+      // reachable. Fail closed instead of silently creating a private twin.
+      throw new Error("cloudinary_legacy_cleanup_failed");
+    }
+  }
+
   async put(key: string, body: Buffer, contentType: string): Promise<string> {
     this.configure();
     const publicId = this.publicId(key);
@@ -131,17 +146,7 @@ export class CloudinaryStorageProvider implements StorageProvider {
     // Remove an object created by the previous public-delivery implementation
     // before replacing it. Otherwise that legacy `/raw/upload/...` URL would
     // remain accessible even after an authenticated twin was uploaded.
-    try {
-      await this.client.uploader.destroy(publicId, {
-        resource_type: "raw",
-        type: "upload",
-        invalidate: true,
-      });
-    } catch {
-      // Fail closed: do not leave the legacy public object beside a new private
-      // copy, and do not leak provider response details into an API error.
-      throw new Error("cloudinary_legacy_cleanup_failed");
-    }
+    await this.retireLegacyPublicObject(key);
 
     await new Promise<void>((resolveUpload, rejectUpload) => {
       const stream = this.client.uploader.upload_stream(

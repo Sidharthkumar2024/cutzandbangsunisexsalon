@@ -1,4 +1,4 @@
-import { FastifyInstance } from "fastify";
+import { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@cutz/db";
@@ -12,6 +12,11 @@ import { audit } from "../../lib/audit.js";
 import { calculateRedemptionMinor, earnForPaidInvoice, getLoyaltyRules, postLoyaltyEntry } from "../loyalty/ledger.js";
 import { consumeCoupon, quoteCoupon } from "../coupons/engine.js";
 import { applyProviderSettings } from "../provider-config/config.js";
+import {
+  fillAutomationTemplate,
+  normalizeReceiptAutomationSettings,
+  plainTextEmailHtml,
+} from "../../lib/automationSettings.js";
 
 const paymentSchema = z.object({
   method: z.enum(["CASH", "UPI", "CARD", "SPLIT", "MEMBERSHIP_CREDIT", "WALLET"]),
@@ -20,6 +25,44 @@ const paymentSchema = z.object({
   membershipId: z.string().optional(),
 });
 const moneyText = (minor: number) => `₹${(minor / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const invoicePdfPrefix = "invoices/v2/";
+
+const invoiceArchiveQuerySchema = z.object({
+  branchId: z.string().trim().min(1).optional(),
+  customerId: z.string().trim().min(1).optional(),
+  status: z.enum(["DRAFT", "ISSUED", "PAID", "PARTIALLY_PAID", "VOID"]).optional(),
+  q: z.string().trim().max(120).optional(),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+});
+
+function invoiceArchiveWhere(
+  query: z.infer<typeof invoiceArchiveQuerySchema>,
+  user: NonNullable<FastifyRequest["user"]>,
+): Prisma.InvoiceWhereInput {
+  const requestedBranch = ["OWNER", "ADMIN"].includes(user.role) ? query.branchId : user.branchId ?? undefined;
+  const search = query.q?.trim();
+  return {
+    ...(requestedBranch ? { branchId: requestedBranch } : {}),
+    ...(query.customerId ? { customerId: query.customerId } : {}),
+    ...(query.status ? { status: query.status } : {}),
+    ...(query.from || query.to
+      ? { createdAt: { ...(query.from ? { gte: query.from } : {}), ...(query.to ? { lte: query.to } : {}) } }
+      : {}),
+    ...(search
+      ? {
+          OR: [
+            { number: { contains: search, mode: "insensitive" } },
+            { customer: { is: { name: { contains: search, mode: "insensitive" } } } },
+            { customer: { is: { phone: { contains: search } } } },
+            { customer: { is: { email: { contains: search, mode: "insensitive" } } } },
+          ],
+        }
+      : {}),
+  };
+}
 
 const posSchema = z.object({
   branchId: z.string(),
@@ -83,6 +126,60 @@ export default async function posRoutes(app: FastifyInstance) {
     },
   );
 
+  // Paginated, filterable invoice archive for finance/admin screens. The
+  // existing /invoices endpoint stays array-shaped for backwards compatibility.
+  app.get(
+    "/invoices/archive",
+    { preHandler: authorize("OWNER", "ADMIN", "MANAGER", "RECEPTION") },
+    async (req, reply) => {
+      const parsed = invoiceArchiveQuerySchema.safeParse(req.query);
+      if (!parsed.success) return reply.code(400).send({ error: "invalid_query", details: parsed.error.flatten() });
+      const query = parsed.data;
+      if (query.from && query.to && query.from > query.to) {
+        return reply.code(400).send({ error: "invalid_date_range" });
+      }
+      const where = invoiceArchiveWhere(query, req.user!);
+      const [rows, total, totals] = await Promise.all([
+        prisma.invoice.findMany({
+          where,
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          skip: (query.page - 1) * query.pageSize,
+          take: query.pageSize,
+          select: {
+            id: true,
+            number: true,
+            status: true,
+            subtotalMinor: true,
+            discountMinor: true,
+            taxMinor: true,
+            totalMinor: true,
+            paidMinor: true,
+            pdfUrl: true,
+            issuedAt: true,
+            createdAt: true,
+            customer: { select: { id: true, name: true, email: true, phone: true } },
+          },
+        }),
+        prisma.invoice.count({ where }),
+        prisma.invoice.aggregate({ where, _sum: { totalMinor: true, paidMinor: true } }),
+      ]);
+      const totalMinor = totals._sum.totalMinor ?? 0;
+      const paidMinor = totals._sum.paidMinor ?? 0;
+      return {
+        items: rows.map(({ pdfUrl, ...invoice }) => ({
+          ...invoice,
+          pdfReady: Boolean(pdfUrl),
+          downloadPath: `/api/v1/invoices/${invoice.id}/pdf?download=1`,
+        })),
+        page: query.page,
+        pageSize: query.pageSize,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / query.pageSize)),
+        summary: { totalMinor, paidMinor, balanceMinor: Math.max(0, totalMinor - paidMinor) },
+      };
+    },
+  );
+
   app.get(
     "/invoices/:id",
     { preHandler: authorize("OWNER", "ADMIN", "MANAGER", "RECEPTION") },
@@ -121,7 +218,7 @@ export default async function posRoutes(app: FastifyInstance) {
       }
       const [branch, customer, appointment, staffCount, companions, services, products, cashSession] = await Promise.all([
         prisma.branch.findFirst({ where: { id: body.branchId, deletedAt: null }, select: { id: true } }),
-        body.customerId ? prisma.customer.findFirst({ where: { id: body.customerId, branchId: body.branchId, deletedAt: null }, select: { id: true, name: true, email: true, phone: true, waConsent: true, loyaltyPoints: true } }) : null,
+        body.customerId ? prisma.customer.findFirst({ where: { id: body.customerId, branchId: body.branchId, deletedAt: null }, select: { id: true, name: true, email: true, phone: true, emailConsent: true, waConsent: true, loyaltyPoints: true } }) : null,
         body.appointmentId ? prisma.appointment.findFirst({ where: { id: body.appointmentId, branchId: body.branchId, deletedAt: null }, select: { id: true } }) : null,
         prisma.staff.count({ where: { id: { in: body.lines.flatMap((line) => line.staffId ? [line.staffId] : []) }, branchId: body.branchId, deletedAt: null } }),
         prisma.customerCompanion.findMany({
@@ -451,31 +548,67 @@ export default async function posRoutes(app: FastifyInstance) {
           };
         });
 
-        if (result.invoice.status === "PAID" && customer?.email) {
+        let archivedPdf: Awaited<ReturnType<typeof buildAndStorePdf>> | undefined;
+        if (result.invoice.status === "PAID") {
           try {
-            const pdf = await buildAndStorePdf(result.invoice.id);
-            if (pdf) await enqueueEmail({ branchId: body.branchId, to: customer.email, subject: `Your Cutz & Bangs invoice ${result.invoice.number}`, html: invoiceEmail({ name: customer.name, invoiceNumber: result.invoice.number, totalMinor: result.invoice.totalMinor }), attachments: [{ filename: `${result.invoice.number}.pdf`, storageKey: pdf.key }], dedupeKey: `invoice-auto:${result.invoice.id}:email` });
+            archivedPdf = await buildAndStorePdf(result.invoice.id);
           } catch (error) {
-            app.log.error({ err: error, invoiceId: result.invoice.id }, "automatic invoice email could not be queued");
+            app.log.error({ err: error, invoiceId: result.invoice.id }, "invoice PDF archive could not be stored");
           }
         }
-        if (result.invoice.status === "PAID" && customer?.phone && customer.waConsent) {
-          try {
-            const providerContext = await applyProviderSettings(body.branchId);
-            const messaging = providerContext.whatsapp("WHATSAPP_UNOFFICIAL");
-            const channel = await prisma.channel.findFirst({ where: { type: "WHATSAPP_UNOFFICIAL", isActive: true } });
-            if (channel) {
-              const pdf = await buildAndStorePdf(result.invoice.id);
-              const mediaUrl = pdf ? await providers.storage().signedUrl(pdf.key, 3600) : undefined;
-              await messaging.send({
-                to: customer.phone,
-                body: `Thank you ${customer.name} for visiting Cutz & Bangs. Invoice ${result.invoice.number} · ${moneyText(result.invoice.totalMinor)}.`,
-                mediaUrl,
-                mediaType: mediaUrl ? "document" : undefined,
+        if (result.invoice.status === "PAID" && customer) {
+          const storedAutomation = await prisma.setting.findUnique({
+            where: { key: `branch:${body.branchId}:automation` },
+          });
+          const automation = normalizeReceiptAutomationSettings(storedAutomation?.value);
+          const templateValues = {
+            name: customer.name,
+            invoiceNumber: result.invoice.number,
+            total: moneyText(result.invoice.totalMinor),
+          };
+          const receiptPdf = async () => {
+            if (!automation.invoiceAttachPdf) return undefined;
+            archivedPdf ??= await buildAndStorePdf(result.invoice.id);
+            return archivedPdf;
+          };
+
+          if (automation.autoInvoiceEmail && customer.email && customer.emailConsent) {
+            try {
+              const pdf = await receiptPdf();
+              await enqueueEmail({
+                branchId: body.branchId,
+                to: customer.email,
+                subject: fillAutomationTemplate(automation.invoiceEmailSubject, templateValues),
+                html: plainTextEmailHtml(fillAutomationTemplate(automation.invoiceEmailBody, templateValues)),
+                attachments: pdf
+                  ? [{ filename: `${result.invoice.number}.pdf`, storageKey: pdf.key }]
+                  : undefined,
+                dedupeKey: `invoice-auto:${result.invoice.id}:email`,
               });
+            } catch (error) {
+              app.log.error({ err: error, invoiceId: result.invoice.id }, "automatic invoice email could not be queued");
             }
-          } catch (error) {
-            app.log.warn({ err: error, invoiceId: result.invoice.id }, "automatic WhatsApp receipt was skipped");
+          }
+          if (automation.autoInvoiceWhatsapp && customer.phone && customer.waConsent) {
+            try {
+              const channel = await prisma.channel.findFirst({
+                where: { type: automation.invoiceWhatsappChannel, isActive: true },
+              });
+              if (channel) {
+                const providerContext = await applyProviderSettings(body.branchId);
+                const messaging = providerContext.whatsapp(automation.invoiceWhatsappChannel);
+                const pdf = await receiptPdf();
+                const mediaUrl = pdf ? await providers.storage().signedUrl(pdf.key, 3_600) : undefined;
+                await messaging.send({
+                  to: customer.phone,
+                  body: fillAutomationTemplate(automation.invoiceWhatsappBody, templateValues),
+                  mediaUrl,
+                  mediaType: mediaUrl ? "document" : undefined,
+                });
+              }
+            } catch (error) {
+              app.log.warn({ err: error, invoiceId: result.invoice.id }, "automatic WhatsApp receipt was skipped");
+            }
           }
         }
         return reply.code(201).send({
@@ -548,7 +681,13 @@ export default async function posRoutes(app: FastifyInstance) {
           }
           const updated = await tx.invoice.update({
             where: { id },
-            data: { paidMinor: nextPaid, status: nextPaid === fresh.totalMinor ? "PAID" : "PARTIALLY_PAID" },
+            data: {
+              paidMinor: nextPaid,
+              status: nextPaid === fresh.totalMinor ? "PAID" : "PARTIALLY_PAID",
+              // Paid/status values are printed in the PDF. Invalidate the
+              // stored rendition so the next open/send regenerates it.
+              pdfUrl: null,
+            },
             include: { payments: true },
           });
           if (updated.status === "PAID" && updated.customerId) {
@@ -607,8 +746,15 @@ export default async function posRoutes(app: FastifyInstance) {
       paidMinor: inv.paidMinor,
       currency: inv.branch.currency,
     });
-    const key = `invoices/${inv.number}.pdf`;
-    const storedKey = await providers.storage().put(key, buf, "application/pdf");
+    const key = `${invoicePdfPrefix}${inv.number}.pdf`;
+    const storage = providers.storage();
+    if (inv.pdfUrl && !inv.pdfUrl.startsWith(invoicePdfPrefix)) {
+      // Cloudinary's old delivery mode exposed raw objects publicly. Its
+      // adapter implements this hook; S3/local private storage intentionally
+      // omits it so migration cannot remove an otherwise valid private file.
+      await storage.retireLegacyPublicObject?.(inv.pdfUrl);
+    }
+    const storedKey = await storage.put(key, buf, "application/pdf");
     await prisma.invoice.update({ where: { id }, data: { pdfUrl: storedKey } });
     return { key: storedKey, buf, number: inv.number };
   }
@@ -638,13 +784,19 @@ export default async function posRoutes(app: FastifyInstance) {
     { preHandler: authorize("OWNER", "ADMIN", "MANAGER", "RECEPTION") },
     async (req, reply) => {
       const { id } = req.params as { id: string };
+      const query = z.object({ download: z.enum(["1", "true"]).optional() }).parse(req.query ?? {});
       const inv = await prisma.invoice.findUnique({ where: { id }, select: { pdfUrl: true, number: true, branchId: true } });
       if (!inv) return reply.code(404).send({ error: "not_found" });
       if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user?.branchId !== inv.branchId) {
         return reply.code(403).send({ error: "forbidden" });
       }
 
-      let bytes = inv.pdfUrl ? await providers.storage().get(inv.pdfUrl) : null;
+      // A versioned key lets template fixes apply to older invoices lazily.
+      // Legacy PDFs are regenerated on first open/download instead of serving
+      // a permanently broken layout from storage.
+      let bytes = inv.pdfUrl?.startsWith(invoicePdfPrefix)
+        ? await providers.storage().get(inv.pdfUrl)
+        : null;
       let number = inv.number;
       if (!bytes) {
         const out = await buildAndStorePdf(id);
@@ -653,7 +805,8 @@ export default async function posRoutes(app: FastifyInstance) {
         number = out.number;
       }
       reply.header("Content-Type", "application/pdf");
-      reply.header("Content-Disposition", `inline; filename="${number}.pdf"`);
+      reply.header("Content-Disposition", `${query.download ? "attachment" : "inline"}; filename="${number}.pdf"`);
+      reply.header("Cache-Control", "private, no-store");
       return reply.send(bytes);
     },
   );
@@ -672,11 +825,15 @@ export default async function posRoutes(app: FastifyInstance) {
       }
       // Auto-generate the PDF if it hasn't been rendered yet.
       let key = inv.pdfUrl;
-      if (!key) {
+      const storedPdf = key?.startsWith(invoicePdfPrefix)
+        ? await providers.storage().get(key)
+        : null;
+      if (!storedPdf) {
         const out = await buildAndStorePdf(id);
         if (!out) return reply.code(404).send({ error: "not_found" });
         key = out.key;
       }
+      if (!key) return reply.code(503).send({ error: "invoice_pdf_unavailable" });
 
       if (channel === "EMAIL") {
         const to = inv.customer?.email;

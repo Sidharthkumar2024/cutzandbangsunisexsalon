@@ -14,6 +14,7 @@
 // the transaction is the guarantee.
 
 import { PrismaClient, AppointmentStatus } from "@prisma/client";
+import { isSalonClosedWeekday } from "./business-hours.js";
 
 const ACTIVE_STATUSES: AppointmentStatus[] = [
   "PENDING",
@@ -84,6 +85,9 @@ export async function resolveSlot(
   req: SlotRequest,
   opts: ResolveOptions = {},
 ): Promise<ResolvedSlot> {
+  const { weekday, min: startMin } = minutesInTz(req.startAt, branchTimezone);
+  if (isSalonClosedWeekday(weekday)) throw new SlotUnavailableError("salon_closed", req);
+
   const service = await db.service.findFirst({
     where: { id: req.serviceId, isActive: true, deletedAt: null },
   });
@@ -108,7 +112,6 @@ export async function resolveSlot(
   if (!skilled) throw new SlotUnavailableError("staff_not_skilled", req);
 
   // 2 & 3. shift + break (in salon tz)
-  const { weekday, min: startMin } = minutesInTz(req.startAt, branchTimezone);
   const endMin = startMin + service.durationMin; // buffer may run past shift end; only service time must fit
   const shifts = await db.shift.findMany({ where: { staffId: req.staffId, weekday } });
   const fitsShift = shifts.some((s) => {

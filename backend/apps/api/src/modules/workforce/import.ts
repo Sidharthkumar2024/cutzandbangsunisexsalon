@@ -134,8 +134,8 @@ export function parseStaffImportRow(input: RawRow): StaffImportRow {
   const startValue = valueFor(row, "startMin", "shiftStartMin", "startTime", "shiftStart");
   const endValue = valueFor(row, "endMin", "shiftEndMin", "endTime", "shiftEnd");
   if ((startValue === undefined) !== (endValue === undefined)) throw new Error("shift_start_and_end_required_together");
-  const weekdays = parseWeekdays(valueFor(row, "weekdays", "workingDays"), [0, 1, 2, 3, 4, 5, 6]);
-  const weeklyOff = parseWeekdays(valueFor(row, "weeklyOff", "offDays"), []);
+  const weekdays = parseWeekdays(valueFor(row, "weekdays", "workingDays"), [0, 1, 3, 4, 5, 6]).filter((weekday) => weekday !== 2);
+  const weeklyOff = [...new Set([...parseWeekdays(valueFor(row, "weeklyOff", "offDays"), []), 2])].sort((a, b) => a - b);
   const startMin = startValue === undefined ? undefined : parseClockMinutes(startValue);
   const endMin = endValue === undefined ? undefined : parseClockMinutes(endValue);
   if (startMin !== undefined && endMin !== undefined && endMin <= startMin) throw new Error("shift_end_must_be_after_start");
