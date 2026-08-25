@@ -40,7 +40,7 @@ async function buildRebook(customerId: string) {
 export default async function rebookRoutes(app: FastifyInstance) {
   // Customer portal: rebook for the logged-in customer.
   app.get("/portal/customer/rebook", { preHandler: authorize("CUSTOMER") }, async (req, reply) => {
-    const customer = await prisma.customer.findUnique({ where: { userId: req.user!.id }, select: { id: true } });
+    const customer = await prisma.customer.findFirst({ where: { userId: req.user!.id, deletedAt: null }, select: { id: true } });
     if (!customer) return reply.code(404).send({ error: "customer_profile_not_found" });
     return buildRebook(customer.id);
   });
@@ -48,7 +48,7 @@ export default async function rebookRoutes(app: FastifyInstance) {
   // Staff/reception: rebook suggestion for a given customer (branch-scoped).
   app.get("/customers/:id/rebook", { preHandler: authorize("OWNER", "ADMIN", "MANAGER", "RECEPTION", "STAFF") }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const customer = await prisma.customer.findUnique({ where: { id }, select: { branchId: true } });
+    const customer = await prisma.customer.findFirst({ where: { id, deletedAt: null }, select: { branchId: true } });
     if (!customer) return reply.code(404).send({ error: "not_found" });
     if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user!.branchId !== customer.branchId) {
       return reply.code(403).send({ error: "forbidden" });

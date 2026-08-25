@@ -31,7 +31,7 @@ export default async function loyaltyRoutes(app: FastifyInstance) {
           reason: z.string().trim().min(3).max(240),
         })
         .parse(req.body);
-      const customer = await prisma.customer.findUnique({ where: { id } });
+      const customer = await prisma.customer.findFirst({ where: { id, deletedAt: null } });
       if (!customer) return reply.code(404).send({ error: "customer_not_found" });
       if (req.user?.role === "MANAGER" && req.user.branchId !== customer.branchId) {
         return reply.code(403).send({ error: "forbidden" });

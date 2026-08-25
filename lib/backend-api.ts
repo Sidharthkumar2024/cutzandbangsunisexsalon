@@ -1058,6 +1058,12 @@ export const backendApi = {
     ),
   customerDetail: (token: string, customerId: string) =>
     request<BackendCustomerDetail>(`/customers/${customerId}`, {}, token),
+  deleteCustomer: (token: string, customerId: string) =>
+    request<void>(
+      `/customers/${encodeURIComponent(customerId)}`,
+      { method: "DELETE" },
+      token,
+    ),
   lookupCustomer: (token: string, phone: string, branchId = "main") =>
     request<(BackendCustomer & { invoices: BackendInvoice[]; historyEntries: BackendCustomerHistoryEntry[] }) | null>(
       `/customers/lookup?branchId=${encodeURIComponent(branchId)}&phone=${encodeURIComponent(phone)}`,

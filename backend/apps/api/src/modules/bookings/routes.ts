@@ -80,7 +80,7 @@ export default async function bookingRoutes(app: FastifyInstance) {
     }
     if (body.customerId) {
       if (!req.user) return reply.code(401).send({ error: "customer_booking_requires_session" });
-      const customer = await prisma.customer.findUnique({ where: { id: body.customerId }, select: { userId: true, branchId: true } });
+      const customer = await prisma.customer.findFirst({ where: { id: body.customerId, deletedAt: null }, select: { userId: true, branchId: true } });
       if (!customer) return reply.code(404).send({ error: "customer_not_found" });
       if (req.user.role === "CUSTOMER" && customer.userId !== req.user.id) return reply.code(403).send({ error: "forbidden" });
       if (!["OWNER", "ADMIN", "SUPERADMIN"].includes(req.user.role) && customer.branchId !== req.user.branchId) return reply.code(403).send({ error: "forbidden" });

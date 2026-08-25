@@ -106,6 +106,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
       const existing = await prisma.customer.findUnique({ where: { branchId_phone: { branchId: body.branchId, phone } } });
       const source = row.consentSource || "Admin CSV marketing import";
       if (existing) {
+        if (existing.deletedAt) { invalid += 1; continue; }
         await prisma.customer.update({
           where: { id: existing.id },
           data: {
@@ -114,7 +115,6 @@ export default async function campaignRoutes(app: FastifyInstance) {
             waConsent: existing.waConsent || row.waConsent,
             emailConsent: existing.emailConsent || row.emailConsent,
             source,
-            deletedAt: null,
           },
         });
         updated += 1;

@@ -319,7 +319,9 @@ const viewTitles: Record<View, [string, string]> = {
 
 export default function AdminPage() {
   const [view, setView] = useState<View>("dashboard");
-  const [search, setSearch] = useState("");
+  const [customerSearchQuery, setCustomerSearchQuery] = useState("");
+  const [posCustomerId, setPosCustomerId] = useState("");
+  const [headerCustomerSearchOpen, setHeaderCustomerSearchOpen] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [memberCredit, setMemberCredit] = useState(false);
   const [paid, setPaid] = useState(false);
@@ -348,6 +350,20 @@ export default function AdminPage() {
   const total = subtotal + tax;
   const activeBranch = backend.data.branches.find((branch) => branch.id === (backend.data.user?.branchId ?? "main")) ?? backend.data.branches[0];
   const role = backend.data.user?.role;
+  const headerCustomerQuery = customerSearchQuery.trim();
+  const headerCustomerDigits = headerCustomerQuery.replace(/\D/gu, "");
+  const headerCustomerNameQuery = headerCustomerQuery.toLocaleLowerCase();
+  const headerCustomerMatches = view === "pos" && headerCustomerQuery
+    ? backend.data.customers
+        .filter((customer) =>
+          customer.name.toLocaleLowerCase().includes(headerCustomerNameQuery) ||
+          Boolean(
+            headerCustomerDigits &&
+              (customer.phone ?? "").replace(/\D/gu, "").includes(headerCustomerDigits),
+          ),
+        )
+        .slice(0, 8)
+    : [];
   const adminRoles = new Set(["OWNER", "ADMIN", "MANAGER", "RECEPTION"]);
   if (backend.status !== "connected" || !backend.data.user) {
     return <AdminAccessGate status={backend.status} error={backend.error} />;
@@ -375,7 +391,13 @@ export default function AdminPage() {
   const selectView = (next: View) => {
     setView(next);
     setMobileNav(false);
+    setHeaderCustomerSearchOpen(false);
     setPaid(false);
+  };
+  const selectHeaderPosCustomer = (customer: BackendSnapshot["customers"][number]) => {
+    setPosCustomerId(customer.id);
+    setCustomerSearchQuery(customer.phone ?? customer.name);
+    setHeaderCustomerSearchOpen(false);
   };
   const addItem = (item: SaleService) => {
     const backendService = backend.data.categories
@@ -478,17 +500,82 @@ export default function AdminPage() {
             </div>
           </div>
           <div className="admin-actions">
-            <label className="global-search admin-search-field">
-              <span>⌕</span>
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && search.trim()) selectView("customers");
-                }}
-                placeholder="Search customers by name or phone…"
-              />
-            </label>
+            <div className="global-search-control">
+              <label className="global-search admin-search-field">
+                <span>⌕</span>
+                <input
+                  value={customerSearchQuery}
+                  onFocus={() => view === "pos" && setHeaderCustomerSearchOpen(true)}
+                  onBlur={() => window.setTimeout(() => setHeaderCustomerSearchOpen(false), 150)}
+                  onInput={(event) => {
+                    setCustomerSearchQuery(event.currentTarget.value);
+                    if (view === "pos") setHeaderCustomerSearchOpen(true);
+                  }}
+                  onChange={(event) => {
+                    setCustomerSearchQuery(event.target.value);
+                    if (view === "pos") setHeaderCustomerSearchOpen(true);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      setHeaderCustomerSearchOpen(false);
+                      return;
+                    }
+                    if (event.key !== "Enter" || !customerSearchQuery.trim()) return;
+                    if (view === "pos") {
+                      if (headerCustomerMatches[0]) selectHeaderPosCustomer(headerCustomerMatches[0]);
+                      return;
+                    }
+                    selectView("customers");
+                  }}
+                  placeholder={
+                    view === "pos"
+                      ? "Find POS customer by name or phone…"
+                      : "Search customers by name or phone…"
+                  }
+                  role={view === "pos" ? "combobox" : undefined}
+                  aria-autocomplete={view === "pos" ? "list" : undefined}
+                  aria-expanded={view === "pos" ? headerCustomerSearchOpen && Boolean(headerCustomerQuery) : undefined}
+                  aria-controls={view === "pos" ? "header-pos-customer-results" : undefined}
+                />
+              </label>
+              {view === "pos" && headerCustomerSearchOpen && headerCustomerQuery && (
+                <div
+                  id="header-pos-customer-results"
+                  className="global-customer-results"
+                  role="listbox"
+                  aria-label="POS matching customers"
+                >
+                  {headerCustomerMatches.map((customer) => (
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={customer.id === posCustomerId}
+                      key={customer.id}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => selectHeaderPosCustomer(customer)}
+                    >
+                      <span>{initialsFor(customer.name)}</span>
+                      <span><strong>{customer.name}</strong><small>{customer.phone ?? "No phone number"}</small></span>
+                      <small>{customer.visitCount} visits</small>
+                    </button>
+                  ))}
+                  {!headerCustomerMatches.length && (
+                    <button
+                      type="button"
+                      className="global-customer-empty"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        setHeaderCustomerSearchOpen(false);
+                        document.getElementById("pos-customer-search")?.focus();
+                        document.getElementById("pos-quick-customer-form")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                      }}
+                    >
+                      No match · add this customer in POS
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
             <div className="notification-control">
               <button
                 className="icon-button"
@@ -568,6 +655,10 @@ export default function AdminPage() {
               setMemberCredit={setMemberCredit}
               paid={paid}
               setPaid={setPaid}
+              customerId={posCustomerId}
+              onCustomerIdChange={setPosCustomerId}
+              headerCustomerSearch={customerSearchQuery}
+              onHeaderCustomerSearchChange={setCustomerSearchQuery}
               onRefresh={() => void backend.refresh()}
               onOpenCashbook={() => selectView("cash")}
             />
@@ -576,8 +667,8 @@ export default function AdminPage() {
             <Customers
               token={backend.token}
               data={backend.data}
-              search={search}
-              setSearch={setSearch}
+              customerSearchQuery={customerSearchQuery}
+              setCustomerSearchQuery={setCustomerSearchQuery}
               onRefresh={() => void backend.refresh()}
             />
           )}
@@ -2350,6 +2441,10 @@ function POS({
   setMemberCredit,
   paid,
   setPaid,
+  customerId,
+  onCustomerIdChange,
+  headerCustomerSearch,
+  onHeaderCustomerSearchChange,
   onRefresh,
   onOpenCashbook,
 }: {
@@ -2371,6 +2466,10 @@ function POS({
   setMemberCredit: (value: boolean) => void;
   paid: boolean;
   setPaid: (value: boolean) => void;
+  customerId: string;
+  onCustomerIdChange: (value: string) => void;
+  headerCustomerSearch: string;
+  onHeaderCustomerSearchChange: (value: string) => void;
   onRefresh: () => void;
   onOpenCashbook: () => void;
 }) {
@@ -2380,8 +2479,7 @@ function POS({
   const [charging, setCharging] = useState(false);
   const [catalogQuery, setCatalogQuery] = useState("");
   const [catalogFilter, setCatalogFilter] = useState("All");
-  const [customerId, setCustomerId] = useState("");
-  const [customerSearch, setCustomerSearch] = useState("");
+  const [customerSearchOpen, setCustomerSearchOpen] = useState(false);
   const [customerDetail, setCustomerDetail] =
     useState<BackendCustomerDetail | null>(null);
   const [showQuickCustomer, setShowQuickCustomer] = useState(false);
@@ -2392,6 +2490,7 @@ function POS({
   const [quickCustomerService, setQuickCustomerService] = useState("");
   const [quickCustomerAmount, setQuickCustomerAmount] = useState(0);
   const [quickCustomerWaConsent, setQuickCustomerWaConsent] = useState(false);
+  const [quickCustomerEmailConsent, setQuickCustomerEmailConsent] = useState(false);
   const [quickCustomerBusy, setQuickCustomerBusy] = useState(false);
   const [quickCustomerMessage, setQuickCustomerMessage] = useState("");
   const [membershipId, setMembershipId] = useState("");
@@ -2403,6 +2502,10 @@ function POS({
   const [paymentMethod, setPaymentMethod] = useState<
     "CASH" | "UPI" | "CARD" | "SPLIT"
   >("UPI");
+  const [receiptEmailEnabled, setReceiptEmailEnabled] = useState(false);
+  const [receiptWhatsappChannel, setReceiptWhatsappChannel] = useState<
+    "OFF" | "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL"
+  >("OFF");
   const [deliveryMessage, setDeliveryMessage] = useState("");
   const [openingBreakdown, setOpeningBreakdown] = useState<CashBreakdown>(emptyCashBreakdown);
   const [openingConfirmation, setOpeningConfirmation] = useState(0);
@@ -2442,19 +2545,31 @@ function POS({
       (catalogFilter === "All" || catalogFilter === "Products") &&
       (!queryKey || `${product.name} ${product.brand ?? ""} ${product.sku ?? ""}`.toLowerCase().includes(queryKey)),
   );
-  const posCustomerQuery = customerSearch.trim();
+  const posCustomerQuery = headerCustomerSearch.trim();
   const posCustomerDigits = posCustomerQuery.replace(/\D/gu, "");
+  const posCustomerNameQuery = posCustomerQuery.toLocaleLowerCase();
   const matchingCustomers = data.customers
-    .filter((item) => !posCustomerQuery || (posCustomerDigits
-      ? (item.phone ?? "").replace(/\D/gu, "").includes(posCustomerDigits)
-      : item.name.toLowerCase().includes(posCustomerQuery.toLowerCase())))
+    .filter((item) => {
+      if (!posCustomerQuery) return false;
+      const nameMatches = item.name.toLocaleLowerCase().includes(posCustomerNameQuery);
+      const phoneMatches = Boolean(
+        posCustomerDigits &&
+          (item.phone ?? "").replace(/\D/gu, "").includes(posCustomerDigits),
+      );
+      return nameMatches || phoneMatches;
+    })
     .sort((left, right) => {
-      if (!posCustomerDigits) return left.name.localeCompare(right.name);
       const leftPhone = (left.phone ?? "").replace(/\D/gu, "");
       const rightPhone = (right.phone ?? "").replace(/\D/gu, "");
-      return Number(rightPhone === posCustomerDigits) - Number(leftPhone === posCustomerDigits);
+      const exactPhoneRank =
+        Number(rightPhone === posCustomerDigits) - Number(leftPhone === posCustomerDigits);
+      if (exactPhoneRank) return exactPhoneRank;
+      const nameStartRank =
+        Number(right.name.toLocaleLowerCase().startsWith(posCustomerNameQuery)) -
+        Number(left.name.toLocaleLowerCase().startsWith(posCustomerNameQuery));
+      return nameStartRank || left.name.localeCompare(right.name);
     })
-    .slice(0, 30);
+    .slice(0, 8);
   const membership = customerDetail?.memberships.find(
     (item) => item.id === membershipId && item.isActive,
   );
@@ -2543,9 +2658,23 @@ function POS({
     memberCredit && membership
       ? Math.min(membership.balanceMinor, afterCouponMinor - loyaltyMinor)
       : 0;
+  const emailDeliveryBlockedReason = !selectedCustomer
+    ? "Select a customer before sending a receipt."
+    : !selectedCustomer.email
+      ? "This customer does not have an email address."
+      : !selectedCustomer.emailConsent
+        ? "Email consent is not recorded for this customer."
+        : "";
+  const whatsappDeliveryBlockedReason = !selectedCustomer
+    ? "Select a customer before sending a receipt."
+    : !selectedCustomer.phone
+      ? "This customer does not have a mobile number."
+      : !selectedCustomer.waConsent
+        ? "WhatsApp consent is not recorded for this customer."
+        : "";
 
   const selectCustomer = (nextCustomerId: string) => {
-    setCustomerId(nextCustomerId);
+    onCustomerIdChange(nextCustomerId);
     setCustomerDetail(null);
     setMembershipId("");
     setPackageRedemptionEnabled(true);
@@ -2553,6 +2682,28 @@ function POS({
     setLoyaltyPoints(0);
     setRedeemLoyalty(false);
     setQuickCustomerMessage("");
+    setReceiptEmailEnabled(false);
+    setReceiptWhatsappChannel("OFF");
+  };
+
+  const selectSearchCustomer = (nextCustomer: BackendSnapshot["customers"][number]) => {
+    const selectedLabel = nextCustomer.phone ?? nextCustomer.name;
+    onHeaderCustomerSearchChange(selectedLabel);
+    setCustomerSearchOpen(false);
+    selectCustomer(nextCustomer.id);
+  };
+
+  const openQuickCustomerFromSearch = () => {
+    setShowQuickCustomer(true);
+    setQuickCustomerMessage("");
+    setCustomerSearchOpen(false);
+    if (posCustomerDigits) setQuickCustomerPhone(posCustomerDigits);
+    else if (posCustomerQuery) setQuickCustomerName(posCustomerQuery);
+    window.setTimeout(() => {
+      document
+        .getElementById("pos-quick-customer-form")
+        ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 0);
   };
 
   useEffect(() => {
@@ -2653,11 +2804,64 @@ function POS({
       setRewardMessage(
         `${result.loyalty.redeemedPoints ? `${result.loyalty.redeemedPoints} points redeemed. ` : ""}${result.loyalty.earnedPoints} points earned${result.loyalty.balanceAfter != null ? ` · balance ${result.loyalty.balanceAfter}` : ""}.`,
       );
+      let pdfMessage = "Branded PDF invoice ready.";
       try {
         await backendApi.generateInvoicePdf(token, result.id);
-        setDeliveryMessage("Branded PDF invoice ready.");
       } catch {
-        setDeliveryMessage("Invoice saved; PDF can be generated again.");
+        pdfMessage = "Invoice saved; PDF can be generated again.";
+      }
+
+      const deliveryJobs: Array<{
+        label: string;
+        promise: Promise<unknown>;
+      }> = [];
+      if (receiptEmailEnabled && !emailDeliveryBlockedReason) {
+        deliveryJobs.push({
+          label: "email",
+          promise: backendApi.sendInvoice(token, result.id, "EMAIL"),
+        });
+      }
+      if (
+        receiptWhatsappChannel !== "OFF" &&
+        !whatsappDeliveryBlockedReason
+      ) {
+        deliveryJobs.push({
+          label:
+            receiptWhatsappChannel === "WHATSAPP_OFFICIAL"
+              ? "official WhatsApp"
+              : "unofficial WhatsApp",
+          promise: backendApi.sendInvoice(
+            token,
+            result.id,
+            receiptWhatsappChannel,
+          ),
+        });
+      }
+      if (!deliveryJobs.length) {
+        setDeliveryMessage(`${pdfMessage} Automatic delivery was off.`);
+      } else {
+        const deliveryResults = await Promise.allSettled(
+          deliveryJobs.map((job) => job.promise),
+        );
+        const delivered = deliveryJobs
+          .filter((_, index) => deliveryResults[index]?.status === "fulfilled")
+          .map((job) => job.label);
+        const failed = deliveryJobs
+          .filter((_, index) => deliveryResults[index]?.status === "rejected")
+          .map((job) => job.label);
+        setDeliveryMessage(
+          [
+            pdfMessage,
+            delivered.length
+              ? `Receipt queued via ${delivered.join(" + ")}.`
+              : "",
+            failed.length
+              ? `${failed.join(" + ")} delivery failed; use the retry buttons below.`
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" "),
+        );
       }
     } catch (cause) {
       setCheckoutError(
@@ -2750,7 +2954,7 @@ function POS({
         ? await backendApi.lookupCustomer(token, phone)
         : null;
       if (existing) {
-        setCustomerSearch(existing.phone ?? existing.name);
+        onHeaderCustomerSearchChange(existing.phone ?? existing.name);
         selectCustomer(existing.id);
         setCustomerDetail(await backendApi.customerDetail(token, existing.id));
         setShowQuickCustomer(false);
@@ -2764,6 +2968,7 @@ function POS({
         email: quickCustomerEmail.trim() || undefined,
         source: "walk_in",
         waConsent: quickCustomerWaConsent,
+        emailConsent: quickCustomerEmailConsent,
         initialVisit: quickCustomerVisitDate && quickCustomerService.trim()
           ? {
               visitedAt: new Date(`${quickCustomerVisitDate}T12:00:00`).toISOString(),
@@ -2772,7 +2977,7 @@ function POS({
             }
           : undefined,
       });
-      setCustomerSearch(created.phone ?? created.name);
+      onHeaderCustomerSearchChange(created.phone ?? created.name);
       selectCustomer(created.id);
       setCustomerDetail(await backendApi.customerDetail(token, created.id));
       setQuickCustomerName("");
@@ -2782,6 +2987,7 @@ function POS({
       setQuickCustomerService("");
       setQuickCustomerAmount(0);
       setQuickCustomerWaConsent(false);
+      setQuickCustomerEmailConsent(false);
       setShowQuickCustomer(false);
       setQuickCustomerMessage(`${created.name} created and selected for this bill.`);
       onRefresh();
@@ -2916,21 +3122,74 @@ function POS({
                 : "Choose a customer for CRM and membership"}
             </p>
           </div>
-          <label className="pos-customer-search"><span>Find by phone first</span><input inputMode="tel" value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder="Phone number (or name)" /></label>
-          <select
-            value={customerId}
-            onChange={(event) => {
-              selectCustomer(event.target.value);
-            }}
-            aria-label="Select POS customer"
-          >
-            <option value="">Walk-in</option>
-            {matchingCustomers.map((item) => (
-              <option value={item.id} key={item.id}>
-                {item.name} · {item.phone ?? "No phone"}
-              </option>
-            ))}
-          </select>
+          <div className="pos-customer-lookup">
+            <label className="pos-customer-search" htmlFor="pos-customer-search">
+              <span>Find customer by name or phone</span>
+              <input
+                id="pos-customer-search"
+                type="search"
+                autoComplete="off"
+                value={headerCustomerSearch}
+                onFocus={() => setCustomerSearchOpen(true)}
+                onBlur={() => window.setTimeout(() => setCustomerSearchOpen(false), 150)}
+                onChange={(event) => {
+                  const nextSearch = event.target.value;
+                  onHeaderCustomerSearchChange(nextSearch);
+                  setCustomerSearchOpen(true);
+                }}
+                onInput={(event) => {
+                  onHeaderCustomerSearchChange(event.currentTarget.value);
+                  setCustomerSearchOpen(true);
+                }}
+                placeholder="Type any part of a name or phone number"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={customerSearchOpen && Boolean(posCustomerQuery)}
+                aria-controls="pos-customer-results"
+              />
+            </label>
+            {customerSearchOpen && posCustomerQuery && (
+              <div
+                id="pos-customer-results"
+                className="pos-customer-results"
+                role="listbox"
+                aria-label="Matching customers"
+              >
+                {matchingCustomers.map((item) => (
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={item.id === customerId}
+                    key={item.id}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => selectSearchCustomer(item)}
+                  >
+                    <span>{initialsFor(item.name)}</span>
+                    <span>
+                      <strong>{item.name}</strong>
+                      <small>{item.phone ?? "No phone number"}</small>
+                    </span>
+                    <small>{item.visitCount} visits</small>
+                  </button>
+                ))}
+                {!matchingCustomers.length && (
+                  <div className="pos-customer-no-results" role="status">
+                    <span>
+                      <strong>No matching customer</strong>
+                      <small>Create a profile without leaving this bill.</small>
+                    </span>
+                    <button
+                      type="button"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={openQuickCustomerFromSearch}
+                    >
+                      + Add new customer
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           <div className="pos-customer-actions">
             <button
               type="button"
@@ -2952,7 +3211,7 @@ function POS({
               {showQuickCustomer ? "Close new customer" : "+ Add new customer"}
             </button>
             {customerId && (
-              <button type="button" className="pos-clear-customer-button" onClick={() => { selectCustomer(""); setCustomerSearch(""); }}>
+              <button type="button" className="pos-clear-customer-button" onClick={() => { selectCustomer(""); onHeaderCustomerSearchChange(""); }}>
                 Use walk-in instead
               </button>
             )}
@@ -2997,10 +3256,16 @@ function POS({
                   </label>
                 </>
               )}
-              <label className="pos-quick-consent">
-                <input type="checkbox" checked={quickCustomerWaConsent} onChange={(event) => setQuickCustomerWaConsent(event.target.checked)} />
-                <span>Customer has agreed to receive service updates on WhatsApp</span>
-              </label>
+              <div className="pos-quick-consents">
+                <label className="pos-quick-consent">
+                  <input type="checkbox" checked={quickCustomerWaConsent} onChange={(event) => setQuickCustomerWaConsent(event.target.checked)} />
+                  <span>Customer agreed to receive WhatsApp service updates</span>
+                </label>
+                <label className="pos-quick-consent">
+                  <input type="checkbox" checked={quickCustomerEmailConsent} onChange={(event) => setQuickCustomerEmailConsent(event.target.checked)} />
+                  <span>Customer agreed to receive email receipts and updates</span>
+                </label>
+              </div>
               <button className="button admin-primary" type="submit" disabled={quickCustomerBusy || !token || !quickCustomerName.trim() || Boolean(quickCustomerVisitDate && !quickCustomerService.trim())}>
                 {quickCustomerBusy ? "Checking & selecting…" : "Save & Select Customer"}
               </button>
@@ -3113,6 +3378,58 @@ function POS({
             <strong>{money(afterCouponMinor)}</strong>
           </p>
         </div>
+        {!paid && (
+          <section className="pos-receipt-delivery" aria-labelledby="pos-receipt-delivery-title">
+            <header>
+              <div>
+                <strong id="pos-receipt-delivery-title">Receipt delivery — choose before payment</strong>
+                <small>The sale stays saved even if a delivery provider is unavailable.</small>
+              </div>
+              <span>Before payment</span>
+            </header>
+            <label className={`pos-receipt-email ${emailDeliveryBlockedReason ? "disabled" : ""}`}>
+              <input
+                type="checkbox"
+                checked={receiptEmailEnabled}
+                disabled={Boolean(emailDeliveryBlockedReason) || charging}
+                onChange={(event) => setReceiptEmailEnabled(event.target.checked)}
+              />
+              <span>
+                <strong>Email PDF receipt</strong>
+                <small>
+                  {emailDeliveryBlockedReason || selectedCustomer?.email}
+                </small>
+              </span>
+            </label>
+            <div className={`pos-receipt-whatsapp ${whatsappDeliveryBlockedReason ? "disabled" : ""}`}>
+              <span>
+                <strong>WhatsApp receipt</strong>
+                <small>
+                  {whatsappDeliveryBlockedReason || selectedCustomer?.phone}
+                </small>
+              </span>
+              <div role="radiogroup" aria-label="WhatsApp receipt channel">
+                {([
+                  ["OFF", "Off"],
+                  ["WHATSAPP_OFFICIAL", "Official"],
+                  ["WHATSAPP_UNOFFICIAL", "Unofficial"],
+                ] as const).map(([channel, label]) => (
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={receiptWhatsappChannel === channel}
+                    className={receiptWhatsappChannel === channel ? "active" : ""}
+                    disabled={Boolean(whatsappDeliveryBlockedReason) || charging}
+                    key={channel}
+                    onClick={() => setReceiptWhatsappChannel(channel)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </section>
+        )}
         {checkoutError && <p className="checkout-error">{checkoutError}</p>}
         {paid ? (
           <div className="payment-success">
@@ -3147,6 +3464,8 @@ function POS({
                 setLoyaltyPoints(0);
                 setRedeemLoyalty(false);
                 setRewardMessage("");
+                setReceiptEmailEnabled(false);
+                setReceiptWhatsappChannel("OFF");
                 resetCart();
               }}
             >
@@ -3187,14 +3506,14 @@ function POS({
 function Customers({
   token,
   data,
-  search,
-  setSearch,
+  customerSearchQuery,
+  setCustomerSearchQuery,
   onRefresh,
 }: {
   token: string;
   data: BackendSnapshot;
-  search: string;
-  setSearch: (value: string) => void;
+  customerSearchQuery: string;
+  setCustomerSearchQuery: (value: string) => void;
   onRefresh: () => void;
 }) {
   const [segment, setSegment] = useState("ALL");
@@ -3226,7 +3545,10 @@ function Customers({
   const [loyaltyReason, setLoyaltyReason] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  const customerQuery = search.trim();
+  const canDeleteCustomer = ["OWNER", "ADMIN", "MANAGER"].includes(
+    data.user?.role ?? "",
+  );
+  const customerQuery = customerSearchQuery.trim();
   const customerQueryDigits = customerQuery.replace(/\D/gu, "");
   const liveRows = data.customers
     .filter((customer) => {
@@ -3367,6 +3689,31 @@ function Customers({
     } catch (cause) { setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Companion could not be saved."); }
     finally { setBusy(false); }
   };
+  const deleteCustomer = async () => {
+    if (!token || !detail || !canDeleteCustomer) return;
+    const confirmed = window.confirm(
+      `Delete ${detail.name} from the active customer list? Existing invoices, sales and visit history will remain preserved for audit.`,
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.deleteCustomer(token, detail.id);
+      setDetail(null);
+      setMessage(
+        "Customer deleted from the active list. Historical invoices and sales remain preserved.",
+      );
+      onRefresh();
+    } catch (cause) {
+      setMessage(
+        cause instanceof Error
+          ? prettyStatus(cause.message)
+          : "Customer could not be deleted.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div className="customers-view">
@@ -3375,8 +3722,9 @@ function Customers({
         <label className="crm-search admin-search-field">
           <span>⌕</span>
           <input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            value={customerSearchQuery}
+            onChange={(event) => setCustomerSearchQuery(event.target.value)}
+            onInput={(event) => setCustomerSearchQuery(event.currentTarget.value)}
             placeholder="Search phone number (recommended) or name…"
           />
         </label>
@@ -3544,7 +3892,19 @@ function Customers({
               <h2>{detail.name}</h2>
               <span>{detail.phone ?? detail.email ?? "No contact"} · {prettyStatus(detail.source ?? "walk_in")}{detail.referralName ? ` · referred by ${detail.referralName}${detail.referralPhone ? ` (${detail.referralPhone})` : ""}` : ""}</span>
             </div>
-            <button onClick={() => setDetail(null)}>Close</button>
+            <div className="customer-360-actions">
+              {canDeleteCustomer && (
+                <button
+                  type="button"
+                  className="customer-delete-button"
+                  disabled={busy}
+                  onClick={() => void deleteCustomer()}
+                >
+                  {busy ? "Working…" : "Delete customer"}
+                </button>
+              )}
+              <button type="button" disabled={busy} onClick={() => setDetail(null)}>Close</button>
+            </div>
           </header>
           <div className="customer-360-metrics">
             <span>

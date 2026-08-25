@@ -102,12 +102,7 @@ async function findOrCreateInboundCustomer(branchId: string, rawPhone: string, d
   const existing = await prisma.customer.findFirst({
     where: { branchId, phone: { endsWith: suffix } },
   });
-  if (existing) {
-    if (existing.deletedAt) {
-      return prisma.customer.update({ where: { id: existing.id }, data: { deletedAt: null } });
-    }
-    return existing;
-  }
+  if (existing) return existing;
   return prisma.customer.create({
     data: {
       branchId,
@@ -143,7 +138,8 @@ export default async function inboxRoutes(app: FastifyInstance) {
     await ensureChannels();
     const digits = body.phone.replace(/\D/gu, "");
     const normalizedPhone = digits.length === 10 ? `+91${digits}` : `+${digits}`;
-    let customer = await prisma.customer.findFirst({ where: { branchId: body.branchId, phone: normalizedPhone, deletedAt: null } });
+    let customer = await prisma.customer.findFirst({ where: { branchId: body.branchId, phone: normalizedPhone } });
+    if (customer?.deletedAt) return reply.code(410).send({ error: "chat_unavailable" });
     if (!customer) {
       customer = await prisma.customer.create({ data: { branchId: body.branchId, name: body.name, phone: normalizedPhone, source: "Website chat" } });
     }
@@ -162,11 +158,11 @@ export default async function inboxRoutes(app: FastifyInstance) {
       where: { externalThreadId: threadId },
       select: {
         externalThreadId: true,
-        customer: { select: { name: true } },
+        customer: { select: { name: true, deletedAt: true } },
         messages: { where: { direction: { in: ["in", "out"] } }, orderBy: { createdAt: "asc" }, take: 200, select: { id: true, direction: true, body: true, status: true, createdAt: true } },
       },
     });
-    if (!conversation) return reply.code(404).send({ error: "chat_not_found" });
+    if (!conversation || conversation.customer?.deletedAt) return reply.code(404).send({ error: "chat_not_found" });
     return conversation;
   });
 
@@ -280,7 +276,7 @@ export default async function inboxRoutes(app: FastifyInstance) {
     return prisma.conversation.findMany({
       where: {
         ...(unread === "true" ? { unread: true } : {}),
-        ...(scopedBranch ? { customer: { is: { branchId: scopedBranch } } } : {}),
+        customer: { is: { deletedAt: null, ...(scopedBranch ? { branchId: scopedBranch } : {}) } },
       },
       orderBy: { lastMessageAt: "desc" },
       take: 100,
@@ -292,7 +288,7 @@ export default async function inboxRoutes(app: FastifyInstance) {
     const body = z.object({ customerId: z.string(), channel: z.enum(WHATSAPP_CHANNELS) }).parse(req.body);
     await ensureChannels();
     const [customer, channel] = await Promise.all([
-      prisma.customer.findUnique({ where: { id: body.customerId } }),
+      prisma.customer.findFirst({ where: { id: body.customerId, deletedAt: null } }),
       prisma.channel.findFirst({ where: { type: body.channel } }),
     ]);
     if (!customer) return reply.code(404).send({ error: "customer_not_found" });
@@ -314,7 +310,7 @@ export default async function inboxRoutes(app: FastifyInstance) {
       where: { id },
       include: { messages: { orderBy: { createdAt: "asc" }, include: { attachments: true } }, customer: true, channel: true },
     });
-    if (!conversation) return reply.code(404).send({ error: "not_found" });
+    if (!conversation || conversation.customer?.deletedAt) return reply.code(404).send({ error: "not_found" });
     if (!["OWNER", "ADMIN"].includes(req.user!.role) && conversation.customer?.branchId !== req.user?.branchId) {
       return reply.code(403).send({ error: "forbidden" });
     }
@@ -325,8 +321,8 @@ export default async function inboxRoutes(app: FastifyInstance) {
   app.patch("/inbox/:id", { preHandler: authorize(...STAFF) }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = z.object({ assignedTo: z.string().nullable().optional(), tags: z.array(z.string()).optional(), unread: z.boolean().optional() }).parse(req.body);
-    const existing = await prisma.conversation.findUnique({ where: { id }, include: { customer: { select: { branchId: true } } } });
-    if (!existing) return reply.code(404).send({ error: "not_found" });
+    const existing = await prisma.conversation.findUnique({ where: { id }, include: { customer: { select: { branchId: true, deletedAt: true } } } });
+    if (!existing || existing.customer?.deletedAt) return reply.code(404).send({ error: "not_found" });
     if (!["OWNER", "ADMIN"].includes(req.user!.role) && existing.customer?.branchId !== req.user?.branchId) {
       return reply.code(403).send({ error: "forbidden" });
     }
@@ -345,7 +341,7 @@ export default async function inboxRoutes(app: FastifyInstance) {
       location: z.object({ latitude: z.number(), longitude: z.number(), name: z.string().optional(), address: z.string().optional() }).optional(),
     }).refine((value) => value.internal ? value.body.length > 0 : Boolean(value.body || value.templateName || value.mediaUrl || value.location), "message_content_required").parse(req.body);
     const conversation = await prisma.conversation.findUnique({ where: { id }, include: { customer: true, channel: true } });
-    if (!conversation) return reply.code(404).send({ error: "not_found" });
+    if (!conversation || conversation.customer?.deletedAt) return reply.code(404).send({ error: "not_found" });
     if (!["OWNER", "ADMIN"].includes(req.user!.role) && conversation.customer?.branchId !== req.user?.branchId) {
       return reply.code(403).send({ error: "forbidden" });
     }

@@ -33,7 +33,7 @@ export default async function mediaRoutes(app: FastifyInstance) {
   app.get("/media/url", { preHandler: authorize("OWNER", "ADMIN", "MANAGER", "RECEPTION", "STAFF", "CUSTOMER") }, async (req, reply) => {
     const { key } = z.object({ key: z.string().min(3).max(512).regex(/^[a-zA-Z0-9/_\-.]+$/) }).parse(req.query);
     if (req.user?.role === "CUSTOMER") {
-      const customer = await prisma.customer.findUnique({ where: { userId: req.user.id }, select: { id: true } });
+      const customer = await prisma.customer.findFirst({ where: { userId: req.user.id, deletedAt: null }, select: { id: true } });
       const invoice = customer ? await prisma.invoice.findFirst({ where: { customerId: customer.id, pdfUrl: key }, select: { id: true } }) : null;
       if (!invoice) return reply.code(403).send({ error: "forbidden" });
     } else if (!["OWNER", "ADMIN"].includes(req.user!.role)) {

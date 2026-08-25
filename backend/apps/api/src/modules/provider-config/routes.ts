@@ -131,12 +131,13 @@ export default async function providerConfigRoutes(app: FastifyInstance) {
         if (contact.number.length < 8 || contact.number.length > 15) { skipped += 1; continue; }
         const existing = await prisma.customer.findUnique({
           where: { branchId_phone: { branchId: body.branchId, phone: contact.number } },
-          select: { id: true },
+          select: { id: true, deletedAt: true },
         });
         if (existing) {
+          if (existing.deletedAt) { skipped += 1; continue; }
           await prisma.customer.update({
             where: { id: existing.id },
-            data: { name: contact.name, source: "WAHA contact sync", deletedAt: null },
+            data: { name: contact.name, source: "WAHA contact sync" },
           });
           updated += 1;
         } else {

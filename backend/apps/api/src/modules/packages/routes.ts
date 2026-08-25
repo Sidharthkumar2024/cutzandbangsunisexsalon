@@ -83,8 +83,8 @@ export default async function packageRoutes(app: FastifyInstance) {
     { preHandler: authorize(...ADMIN, "RECEPTION", "CUSTOMER") },
     async (req, reply) => {
       const { customerId } = z.object({ customerId: z.string() }).parse(req.query);
-      const customer = await prisma.customer.findUnique({
-        where: { id: customerId },
+      const customer = await prisma.customer.findFirst({
+        where: { id: customerId, deletedAt: null },
         select: { userId: true, branchId: true },
       });
       if (!customer) return reply.code(404).send({ error: "customer_not_found" });
@@ -111,7 +111,7 @@ export default async function packageRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const body = z.object({ customerId: z.string(), packageId: z.string(), soldByStaffId: z.string().optional() }).parse(req.body);
       const [customer, plan, salesperson] = await Promise.all([
-        prisma.customer.findUnique({ where: { id: body.customerId }, select: { branchId: true } }),
+        prisma.customer.findFirst({ where: { id: body.customerId, deletedAt: null }, select: { branchId: true } }),
         prisma.servicePackagePlan.findFirst({
           where: { id: body.packageId, isActive: true, deletedAt: null },
           include: { items: true },
@@ -184,9 +184,9 @@ export default async function packageRoutes(app: FastifyInstance) {
             await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${id})) IS NULL AS locked`;
             const enrollment = await tx.customerServicePackage.findUnique({
               where: { id },
-              include: { customer: { select: { branchId: true } }, package: { include: { items: true } } },
+              include: { customer: { select: { branchId: true, deletedAt: true } }, package: { include: { items: true } } },
             });
-            if (!enrollment || !enrollment.isActive) throw new Error("package_not_found");
+            if (!enrollment || !enrollment.isActive || enrollment.customer.deletedAt) throw new Error("package_not_found");
             if (enrollment.expiresAt && enrollment.expiresAt < new Date()) throw new Error("package_expired");
             if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user?.branchId !== enrollment.customer.branchId) {
               throw new Error("forbidden");

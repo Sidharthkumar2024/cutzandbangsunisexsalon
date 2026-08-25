@@ -24,10 +24,12 @@ const initialVisitSchema = z.object({
 
 export default async function customerRoutes(app: FastifyInstance) {
   // List + search + segment filter
-  app.get("/customers", { preHandler: authorize(...STAFF_ROLES) }, async (req) => {
+  app.get("/customers", { preHandler: authorize(...STAFF_ROLES) }, async (req, reply) => {
     const { q, branchId, segment, take = "50", skip = "0" } = req.query as Record<string, string>;
     const where: Record<string, unknown> = { deletedAt: null };
-    const scopedBranch = ["OWNER", "ADMIN"].includes(req.user!.role) ? branchId : req.user!.branchId;
+    const elevated = ["OWNER", "ADMIN"].includes(req.user!.role);
+    if (!elevated && !req.user!.branchId) return reply.code(403).send({ error: "branch_required" });
+    const scopedBranch = elevated ? branchId : req.user!.branchId;
     if (scopedBranch) where.branchId = scopedBranch;
     if (q)
       where.OR = [
@@ -165,8 +167,9 @@ export default async function customerRoutes(app: FastifyInstance) {
   // Customer 360 timeline
   app.get("/customers/:id", { preHandler: authorize(...STAFF_ROLES) }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const c = await prisma.customer.findUnique({
-      where: { id },
+    const elevated = ["OWNER", "ADMIN"].includes(req.user!.role);
+    const c = await prisma.customer.findFirst({
+      where: { id, deletedAt: null, ...(!elevated ? { branchId: req.user!.branchId ?? "__none__" } : {}) },
       include: {
         appointments: {
           orderBy: { startAt: "desc" },
@@ -194,10 +197,50 @@ export default async function customerRoutes(app: FastifyInstance) {
     return c;
   });
 
+  // Archive the CRM profile while retaining every related appointment,
+  // invoice, ledger entry and historical visit for audit/recovery purposes.
+  app.delete("/customers/:id", { preHandler: authorize("OWNER", "ADMIN", "MANAGER") }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (req.user!.role === "MANAGER" && !req.user!.branchId) {
+      return reply.code(403).send({ error: "branch_required" });
+    }
+    const scopedWhere = {
+      id,
+      deletedAt: null,
+      ...(req.user!.role === "MANAGER" ? { branchId: req.user!.branchId! } : {}),
+    };
+
+    const archived = await prisma.$transaction(async (tx) => {
+      const current = await tx.customer.findFirst({
+        where: scopedWhere,
+        include: { user: { select: { id: true, role: true, isActive: true } } },
+      });
+      if (!current) return null;
+
+      const deletedAt = new Date();
+      await tx.customer.update({ where: { id: current.id }, data: { deletedAt } });
+      const linkedCustomerUser = current.user?.role === "CUSTOMER" ? current.user : null;
+      if (linkedCustomerUser) {
+        await tx.user.update({ where: { id: linkedCustomerUser.id }, data: { isActive: false } });
+        await tx.session.deleteMany({ where: { userId: linkedCustomerUser.id } });
+      }
+      await audit("customer.archive", "Customer", current.id, {
+        actorUserId: req.user?.id,
+        before: current,
+        after: { deletedAt, customerAccessRevoked: Boolean(linkedCustomerUser) },
+        ip: req.ip,
+      }, tx);
+      return current.id;
+    });
+
+    if (!archived) return reply.code(404).send({ error: "not_found" });
+    return reply.code(204).send();
+  });
+
   app.post("/customers/:id/companions", { preHandler: authorize("OWNER", "ADMIN", "MANAGER", "RECEPTION") }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = companionSchema.parse(req.body);
-    const customer = await prisma.customer.findUnique({ where: { id } });
+    const customer = await prisma.customer.findFirst({ where: { id, deletedAt: null } });
     if (!customer) return reply.code(404).send({ error: "not_found" });
     if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user!.branchId !== customer.branchId) return reply.code(403).send({ error: "forbidden" });
     const companion = await prisma.customerCompanion.create({
@@ -210,7 +253,10 @@ export default async function customerRoutes(app: FastifyInstance) {
   app.patch("/customers/:id/companions/:companionId", { preHandler: authorize("OWNER", "ADMIN", "MANAGER", "RECEPTION") }, async (req, reply) => {
     const { id, companionId } = req.params as { id: string; companionId: string };
     const body = companionSchema.partial().parse(req.body);
-    const companion = await prisma.customerCompanion.findFirst({ where: { id: companionId, customerId: id, deletedAt: null }, include: { customer: true } });
+    const companion = await prisma.customerCompanion.findFirst({
+      where: { id: companionId, customerId: id, deletedAt: null, customer: { deletedAt: null } },
+      include: { customer: true },
+    });
     if (!companion) return reply.code(404).send({ error: "companion_not_found" });
     if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user!.branchId !== companion.customer.branchId) return reply.code(403).send({ error: "forbidden" });
     const updated = await prisma.customerCompanion.update({
@@ -223,7 +269,10 @@ export default async function customerRoutes(app: FastifyInstance) {
 
   app.delete("/customers/:id/companions/:companionId", { preHandler: authorize("OWNER", "ADMIN", "MANAGER") }, async (req, reply) => {
     const { id, companionId } = req.params as { id: string; companionId: string };
-    const companion = await prisma.customerCompanion.findFirst({ where: { id: companionId, customerId: id, deletedAt: null }, include: { customer: true } });
+    const companion = await prisma.customerCompanion.findFirst({
+      where: { id: companionId, customerId: id, deletedAt: null, customer: { deletedAt: null } },
+      include: { customer: true },
+    });
     if (!companion) return reply.code(404).send({ error: "companion_not_found" });
     if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user!.branchId !== companion.customer.branchId) return reply.code(403).send({ error: "forbidden" });
     await prisma.customerCompanion.update({ where: { id: companionId }, data: { deletedAt: new Date() } });
@@ -243,7 +292,7 @@ export default async function customerRoutes(app: FastifyInstance) {
       notes: z.string().trim().max(1000).optional(),
     }).parse(req.body);
     if (body.visitedAt > new Date()) return reply.code(400).send({ error: "historical_visit_cannot_be_future" });
-    const customer = await prisma.customer.findUnique({ where: { id } });
+    const customer = await prisma.customer.findFirst({ where: { id, deletedAt: null } });
     if (!customer) return reply.code(404).send({ error: "not_found" });
     if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user!.branchId !== customer.branchId) return reply.code(403).send({ error: "forbidden" });
     const entry = await prisma.$transaction(async (tx) => {
@@ -278,7 +327,7 @@ export default async function customerRoutes(app: FastifyInstance) {
       emailConsent: z.boolean().optional(),
       smsConsent: z.boolean().optional(),
     }).parse(req.body);
-    const current = await prisma.customer.findUnique({ where: { id } });
+    const current = await prisma.customer.findFirst({ where: { id, deletedAt: null } });
     if (!current) return reply.code(404).send({ error: "not_found" });
     if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user!.branchId !== current.branchId) {
       return reply.code(403).send({ error: "forbidden" });
@@ -311,7 +360,6 @@ export default async function customerRoutes(app: FastifyInstance) {
       const dup = await prisma.customer.findFirst({
         where: {
           branchId,
-          deletedAt: null,
           OR: [
             ...(pk ? [{ phone: { endsWith: pk } }] : []),
             ...(email ? [{ email }] : []),

@@ -35,7 +35,7 @@ export default async function membershipRoutes(app: FastifyInstance) {
     const { customerId, planId, soldByStaffId } = z.object({ customerId: z.string(), planId: z.string(), soldByStaffId: z.string().optional() }).parse(req.body);
     const [plan, customer, duplicate, salesperson] = await Promise.all([
       prisma.membershipPlan.findUnique({ where: { id: planId } }),
-      prisma.customer.findUnique({ where: { id: customerId }, select: { branchId: true } }),
+      prisma.customer.findFirst({ where: { id: customerId, deletedAt: null }, select: { branchId: true } }),
       prisma.membership.findFirst({ where: { customerId, planId, isActive: true }, select: { id: true } }),
       soldByStaffId ? prisma.staff.findFirst({ where: { id: soldByStaffId, isActive: true, deletedAt: null } }) : null,
     ]);
