@@ -2,7 +2,7 @@
 // Swap an implementation here without touching call sites.
 
 import { SmtpEmailProvider } from "./email.js";
-import { WhatsAppOfficialProvider, WhatsAppUnofficialProvider } from "./whatsapp.js";
+import { WAHA_INLINE_MEDIA_MAX_BYTES, WhatsAppOfficialProvider, WhatsAppUnofficialProvider } from "./whatsapp.js";
 import { S3StorageProvider, LocalStorageProvider, CloudinaryStorageProvider } from "./storage.js";
 import { AnthropicAIProvider } from "./ai.js";
 import { UpiPaymentProvider } from "./payment.js";
@@ -75,7 +75,13 @@ export const providers = {
   },
 };
 
-export { SmtpEmailProvider, WhatsAppOfficialProvider, WhatsAppUnofficialProvider, CloudinaryStorageProvider };
+export {
+  SmtpEmailProvider,
+  WhatsAppOfficialProvider,
+  WhatsAppUnofficialProvider,
+  WAHA_INLINE_MEDIA_MAX_BYTES,
+  CloudinaryStorageProvider,
+};
 export type { SmtpEmailConfig, WhatsAppOfficialConfig, WhatsAppUnofficialConfig };
 export { isRestrictedWahaHost, normalizeWahaBaseUrl, validateWahaBaseUrl } from "./waha-url.js";
 export { encryptSecret, decryptSecret } from "./secrets.js";

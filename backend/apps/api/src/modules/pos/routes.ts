@@ -6,7 +6,7 @@ import { authorize } from "../../plugins/auth.js";
 import { computeLine, computeInvoiceTotals, allocateProportional } from "../../lib/money.js";
 import { redeem, InsufficientCreditError } from "../memberships/ledger.js";
 import { renderInvoicePdf } from "../../lib/invoicePdf.js";
-import { invoiceEmail, providers } from "@cutz/providers";
+import { invoiceEmail, isRestrictedWahaHost, providers, WAHA_INLINE_MEDIA_MAX_BYTES } from "@cutz/providers";
 import { enqueueEmail } from "@cutz/queue";
 import { audit } from "../../lib/audit.js";
 import { calculateRedemptionMinor, earnForPaidInvoice, getLoyaltyRules, postLoyaltyEntry } from "../loyalty/ledger.js";
@@ -26,6 +26,29 @@ const paymentSchema = z.object({
 });
 const moneyText = (minor: number) => `₹${(minor / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const invoicePdfPrefix = "invoices/v2/";
+
+function inlineInvoicePdfError(bytes: Buffer) {
+  if (bytes.length > WAHA_INLINE_MEDIA_MAX_BYTES) return "invoice_pdf_too_large_for_inline_whatsapp";
+  if (bytes.length < 5 || bytes.subarray(0, 5).toString("ascii") !== "%PDF-") return "invoice_pdf_invalid";
+  return null;
+}
+
+function invoiceWhatsAppMediaError(
+  channel: "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL",
+  value: string,
+) {
+  try {
+    const url = new URL(value);
+    if (!url.hostname || !["http:", "https:"].includes(url.protocol)) return "invoice_public_url_required";
+    // Meta must be able to retrieve the document over the public internet.
+    // WAHA may intentionally use a private HTTP address on the same network.
+    if (channel === "WHATSAPP_OFFICIAL" && url.protocol !== "https:") return "invoice_https_url_required";
+    if (channel === "WHATSAPP_OFFICIAL" && isRestrictedWahaHost(url.hostname)) return "invoice_public_url_required";
+    return null;
+  } catch {
+    return "invoice_public_url_required";
+  }
+}
 
 const invoiceArchiveQuerySchema = z.object({
   branchId: z.string().trim().min(1).optional(),
@@ -598,13 +621,29 @@ export default async function posRoutes(app: FastifyInstance) {
                 const providerContext = await applyProviderSettings(body.branchId);
                 const messaging = providerContext.whatsapp(automation.invoiceWhatsappChannel);
                 const pdf = await receiptPdf();
-                const mediaUrl = pdf ? await providers.storage().signedUrl(pdf.key, 3_600) : undefined;
-                await messaging.send({
+                let mediaUrl: string | undefined;
+                let mediaData: string | undefined;
+                if (pdf && automation.invoiceWhatsappChannel === "WHATSAPP_UNOFFICIAL") {
+                  const pdfError = inlineInvoicePdfError(pdf.buf);
+                  if (pdfError) throw new Error(pdfError);
+                  mediaData = pdf.buf.toString("base64");
+                } else if (pdf) {
+                  mediaUrl = await providers.storage().signedUrl(pdf.key, 3_600);
+                  const mediaError = invoiceWhatsAppMediaError(automation.invoiceWhatsappChannel, mediaUrl);
+                  if (mediaError) throw new Error(mediaError);
+                }
+                const sendResult = await messaging.send({
                   to: customer.phone,
                   body: fillAutomationTemplate(automation.invoiceWhatsappBody, templateValues),
                   mediaUrl,
-                  mediaType: mediaUrl ? "document" : undefined,
+                  mediaData,
+                  mediaMimeType: mediaData ? "application/pdf" : undefined,
+                  mediaFilename: pdf ? `${result.invoice.number}.pdf` : undefined,
+                  mediaType: mediaUrl || mediaData ? "document" : undefined,
                 });
+                if (sendResult.status === "failed") {
+                  throw new Error([sendResult.error ?? "whatsapp_send_failed", sendResult.detail].filter(Boolean).join(": "));
+                }
               }
             } catch (error) {
               app.log.warn({ err: error, invoiceId: result.invoice.id }, "automatic WhatsApp receipt was skipped");
@@ -823,21 +862,28 @@ export default async function posRoutes(app: FastifyInstance) {
       if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user?.branchId !== inv.branchId) {
         return reply.code(403).send({ error: "forbidden" });
       }
+      const emailRecipient = channel === "EMAIL" ? inv.customer?.email : undefined;
+      const whatsappRecipient = channel === "EMAIL" ? undefined : inv.customer?.phone;
+      if (channel === "EMAIL" && !emailRecipient) return reply.code(400).send({ error: "customer_has_no_email" });
+      if (channel !== "EMAIL" && !whatsappRecipient) return reply.code(400).send({ error: "customer_has_no_phone" });
+      if (channel !== "EMAIL" && !inv.customer?.waConsent) {
+        return reply.code(409).send({ error: "whatsapp_consent_required" });
+      }
       // Auto-generate the PDF if it hasn't been rendered yet.
       let key = inv.pdfUrl;
-      const storedPdf = key?.startsWith(invoicePdfPrefix)
+      let storedPdf = key?.startsWith(invoicePdfPrefix)
         ? await providers.storage().get(key)
         : null;
       if (!storedPdf) {
         const out = await buildAndStorePdf(id);
         if (!out) return reply.code(404).send({ error: "not_found" });
         key = out.key;
+        storedPdf = out.buf;
       }
       if (!key) return reply.code(503).send({ error: "invoice_pdf_unavailable" });
 
       if (channel === "EMAIL") {
-        const to = inv.customer?.email;
-        if (!to) return reply.code(400).send({ error: "customer_has_no_email" });
+        const to = emailRecipient!;
         await enqueueEmail({
           branchId: inv.branchId,
           to,
@@ -851,21 +897,75 @@ export default async function posRoutes(app: FastifyInstance) {
         return { queued: true, channel };
       }
 
-      const phone = inv.customer?.phone;
-      if (!phone) return reply.code(400).send({ error: "customer_has_no_phone" });
-      if (!inv.customer?.waConsent) return reply.code(409).send({ error: "whatsapp_consent_required" });
+      const phone = whatsappRecipient!;
       const providerContext = await applyProviderSettings(inv.branchId);
       const messaging = providerContext.whatsapp(channel);
-      const url = await providers.storage().signedUrl(key, 3600);
+      const providerHealth = await messaging.health?.();
+      if (providerHealth?.configured === false) {
+        const error = channel === "WHATSAPP_OFFICIAL" ? "wa_official_not_configured" : "wa_unofficial_not_configured";
+        app.log.warn({ invoiceId: id, branchId: inv.branchId, channel, error }, "invoice WhatsApp provider is not configured");
+        return reply.code(503).send({ error, channel, detail: providerHealth.detail });
+      }
+      if (providerHealth?.configured && providerHealth.connected === false) {
+        const error = channel === "WHATSAPP_OFFICIAL" ? "wa_official_not_connected" : "wa_unofficial_not_connected";
+        app.log.warn({ invoiceId: id, branchId: inv.branchId, channel, error, providerStatus: providerHealth.status }, "invoice WhatsApp provider is not connected");
+        return reply.code(503).send({ error, channel, detail: providerHealth.detail, providerStatus: providerHealth.status });
+      }
+      let mediaUrl: string | undefined;
+      let mediaData: string | undefined;
+      if (channel === "WHATSAPP_UNOFFICIAL") {
+        const pdfError = inlineInvoicePdfError(storedPdf);
+        if (pdfError) {
+          app.log.warn({ invoiceId: id, branchId: inv.branchId, channel, pdfError, size: storedPdf.length }, "invoice PDF cannot be sent inline");
+          return reply.code(pdfError.includes("too_large") ? 413 : 503).send({ error: pdfError, channel });
+        }
+        mediaData = storedPdf.toString("base64");
+      } else {
+        try {
+          mediaUrl = await providers.storage().signedUrl(key, 3600);
+        } catch (error) {
+          app.log.warn({ err: error, invoiceId: id, branchId: inv.branchId, channel }, "invoice WhatsApp media URL could not be created");
+          return reply.code(503).send({
+            error: "invoice_public_url_unavailable",
+            channel,
+            detail: "Configure S3/Cloudinary storage with a provider-reachable invoice URL.",
+          });
+        }
+        const mediaError = invoiceWhatsAppMediaError(channel, mediaUrl);
+        if (mediaError) {
+          app.log.warn({ invoiceId: id, branchId: inv.branchId, channel, mediaError }, "invoice WhatsApp media URL is not provider-reachable");
+          return reply.code(503).send({
+            error: mediaError,
+            channel,
+            detail: "Official WhatsApp invoice media requires a public HTTPS URL; configure S3 or Cloudinary storage.",
+          });
+        }
+      }
       const result = await messaging.send({
         to: phone,
         body: `Thank you for visiting Cutz & Bangs. Invoice ${inv.number}`,
-        mediaUrl: url,
+        mediaUrl,
+        mediaData,
+        mediaMimeType: mediaData ? "application/pdf" : undefined,
+        mediaFilename: `${inv.number}.pdf`,
         mediaType: "document",
       });
-      if (result.status === "failed") return reply.code(422).send(result);
+      if (result.status === "failed") {
+        app.log.warn({
+          invoiceId: id,
+          branchId: inv.branchId,
+          channel,
+          error: result.error,
+          providerCode: result.providerCode,
+        }, "invoice WhatsApp delivery was rejected");
+        const unavailable = result.error === "wa_official_not_configured"
+          || result.error === "wa_unofficial_not_configured"
+          || result.error === "wa_official_unavailable";
+        return reply.code(unavailable ? 503 : 422).send({ ...result, channel });
+      }
       await audit("invoice.send", "Invoice", id, { actorUserId: req.user?.id, after: { channel, recipient: phone, status: result.status }, ip: req.ip });
-      return { queued: result.status === "queued", channel, status: result.status };
+      app.log.info({ invoiceId: id, branchId: inv.branchId, channel, status: result.status, externalId: result.externalId }, "invoice WhatsApp delivery accepted");
+      return { queued: result.status === "queued", channel, status: result.status, externalId: result.externalId };
     },
   );
 }

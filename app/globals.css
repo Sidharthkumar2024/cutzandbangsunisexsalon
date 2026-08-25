@@ -1234,12 +1234,27 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .invoice-status.status-paid{background:#e6f1e3;color:#4e734e}
 .invoice-status.status-partially-paid,.invoice-status.status-issued{background:#fff0d8;color:#8a601f}
 .invoice-status.status-void{background:#fae5e2;color:#934e46}
-.invoice-row-actions{display:flex!important;flex-wrap:wrap;align-items:center;gap:6px!important}
+.invoice-row-actions{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch;gap:6px!important}
 .invoice-row-actions button,.invoice-pagination button{
-  min-height:34px;padding:0 9px;border:1px solid #cdbeb5;border-radius:8px;background:#fff;color:var(--wine);font-size:10px;font-weight:900;cursor:pointer;
+  min-width:0;min-height:34px;padding:0 9px;border:1px solid #cdbeb5;border-radius:8px;background:#fff;color:var(--wine);font-size:10px;font-weight:900;line-height:1.2;white-space:normal;cursor:pointer;
 }
 .invoice-row-actions button:first-child{border-color:var(--wine);background:var(--wine);color:#fff}
 .invoice-row-actions button:disabled,.invoice-pagination button:disabled{cursor:not-allowed;opacity:.42}
+.invoice-row-feedback{
+  grid-column:1/-1;
+  margin:2px 0 0;
+  padding:8px 9px;
+  border:1px solid #c8d7c3;
+  border-radius:8px;
+  background:#f5faf3;
+  color:#496447;
+  font-size:10px;
+  font-weight:700;
+  line-height:1.45;
+}
+.invoice-row-feedback.sending{border-color:#d2c4a4;background:#fff9e9;color:#765f2e}
+.invoice-row-feedback.success{border-color:#a9c6a4;background:#edf7ea;color:#3f693e}
+.invoice-row-feedback.error{border-color:#dfb5ac;background:#fff3f0;color:#8d4339}
 .invoice-archive-empty{display:grid;place-items:center;gap:5px;min-height:180px;padding:25px;color:#746a64;text-align:center}
 .invoice-pagination{display:flex;align-items:center;justify-content:flex-end;gap:12px;padding-top:15px;color:#655b55;font-size:11px;font-weight:800}
 
@@ -1399,6 +1414,63 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .pos-receipt-whatsapp button.active{border-color:var(--wine);background:var(--wine);color:#fff}
 .pos-receipt-email.disabled,.pos-receipt-whatsapp.disabled{background:#f5f2ef;opacity:.72}
 .pos-receipt-delivery :disabled{cursor:not-allowed}
+
+/* Keep post-payment actions inside the receipt card and explain WhatsApp state. */
+.payment-success{
+  grid-template-columns:32px minmax(0,1fr);
+  align-items:center;
+}
+.payment-success-details,.payment-success>.invoice-actions,.payment-success>.invoice-action-feedback,.payment-success>.new-bill-action{
+  grid-column:1/-1;
+}
+.payment-success-details{display:grid;gap:4px}
+.payment-success-details small{color:#63745f!important;font-size:10px!important;line-height:1.45}
+.payment-success>.invoice-actions{
+  width:100%;
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:7px;
+}
+.payment-success>.invoice-actions button{
+  min-width:0;
+  min-height:42px;
+  border:1px solid #b9cbb4;
+  border-radius:9px;
+  background:#fff;
+  padding:8px 9px;
+  color:#496447;
+  font-size:10px;
+  line-height:1.25;
+  cursor:pointer;
+}
+.payment-success>.invoice-actions button[aria-disabled="true"]{
+  border-color:#cdbeb6;
+  border-style:dashed;
+  background:#f8f4f1;
+  color:#786b64;
+  cursor:help;
+  opacity:1;
+}
+.payment-success>.invoice-actions button:disabled{cursor:not-allowed}
+.invoice-action-feedback{
+  margin:0;
+  padding:9px 10px;
+  border:1px solid #c8d7c3;
+  border-radius:8px;
+  background:#f5faf3;
+  color:#496447;
+  font-size:10px;
+  line-height:1.5;
+}
+.invoice-action-feedback.sending{border-color:#d2c4a4;background:#fff9e9;color:#765f2e}
+.invoice-action-feedback.success{border-color:#a9c6a4;background:#edf7ea;color:#3f693e}
+.invoice-action-feedback.error{border-color:#dfb5ac;background:#fff3f0;color:#8d4339}
+.payment-success>.new-bill-action{
+  justify-self:start;
+  min-height:36px;
+  padding:0 4px;
+  cursor:pointer;
+}
 
 @media(max-width:620px){
   .pos-customer-no-results{grid-template-columns:1fr}

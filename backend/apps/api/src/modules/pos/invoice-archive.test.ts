@@ -19,6 +19,9 @@ const mocks = vi.hoisted(() => ({
   txInvoiceFindUnique: vi.fn(),
   txInvoiceUpdate: vi.fn(),
   txPaymentCreate: vi.fn(),
+  applyProviderSettings: vi.fn(),
+  whatsappSend: vi.fn(),
+  whatsappHealth: vi.fn(),
 }));
 
 vi.mock("@cutz/db", () => ({
@@ -35,6 +38,7 @@ vi.mock("@cutz/db", () => ({
   },
 }));
 vi.mock("@cutz/providers", () => ({
+  WAHA_INLINE_MEDIA_MAX_BYTES: 8 * 1024 * 1024,
   providers: {
     storage: () => ({
       get: mocks.storageGet,
@@ -44,9 +48,11 @@ vi.mock("@cutz/providers", () => ({
     }),
   },
   invoiceEmail: vi.fn(() => "<p>invoice</p>"),
+  isRestrictedWahaHost: vi.fn(() => false),
 }));
 vi.mock("@cutz/queue", () => ({ enqueueEmail: mocks.enqueueEmail }));
 vi.mock("../../lib/audit.js", () => ({ audit: mocks.audit }));
+vi.mock("../provider-config/config.js", () => ({ applyProviderSettings: mocks.applyProviderSettings }));
 
 import posRoutes from "./routes.js";
 
@@ -66,7 +72,13 @@ async function testApp(role: "OWNER" | "MANAGER" = "OWNER") {
 }
 
 describe("invoice archive", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.whatsappHealth.mockResolvedValue(undefined);
+    mocks.applyProviderSettings.mockResolvedValue({
+      whatsapp: () => ({ send: mocks.whatsappSend, health: mocks.whatsappHealth }),
+    });
+  });
 
   it("returns a searchable paginated archive with finance totals and download paths", async () => {
     mocks.invoiceFindMany.mockResolvedValue([
@@ -237,6 +249,176 @@ describe("invoice archive", () => {
     expect(mocks.enqueueEmail).toHaveBeenCalledWith(expect.objectContaining({
       attachments: [{ filename: "CB-2026-000001.pdf", storageKey: "invoices/v2/CB-2026-000001.pdf" }],
     }));
+    await app.close();
+  });
+
+  it("reports that local-only invoice media cannot be sent to official WhatsApp", async () => {
+    mocks.invoiceFindUnique.mockResolvedValue({
+      id: "invoice-1",
+      pdfUrl: "invoices/v2/CB-2026-000001.pdf",
+      number: "CB-2026-000001",
+      branchId: "dwarka",
+      totalMinor: 118_000,
+      customer: { name: "Ishita Priya", email: null, phone: "+919876543210", waConsent: true },
+    });
+    mocks.storageGet.mockResolvedValue(Buffer.from("%PDF-private"));
+    mocks.storageSignedUrl.mockResolvedValue("local://invoices/v2/CB-2026-000001.pdf");
+    const app = await testApp();
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/invoices/invoice-1/send",
+      payload: { channel: "WHATSAPP_OFFICIAL" },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      error: "invoice_public_url_required",
+      channel: "WHATSAPP_OFFICIAL",
+    });
+    expect(mocks.whatsappSend).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("sends a local invoice PDF inline to unofficial WAHA without exposing a file route", async () => {
+    const pdf = Buffer.from("%PDF-private");
+    mocks.invoiceFindUnique.mockResolvedValue({
+      id: "invoice-1",
+      pdfUrl: "invoices/v2/CB-2026-000001.pdf",
+      number: "CB-2026-000001",
+      branchId: "dwarka",
+      totalMinor: 118_000,
+      customer: { name: "Ishita Priya", email: null, phone: "+919876543210", waConsent: true },
+    });
+    mocks.storageGet.mockResolvedValue(pdf);
+    mocks.whatsappSend.mockResolvedValue({ externalId: "waha-inline", status: "sent" });
+    const app = await testApp();
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/invoices/invoice-1/send",
+      payload: { channel: "WHATSAPP_UNOFFICIAL" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.storageSignedUrl).not.toHaveBeenCalled();
+    expect(mocks.whatsappSend).toHaveBeenCalledWith({
+      to: "+919876543210",
+      body: "Thank you for visiting Cutz & Bangs. Invoice CB-2026-000001",
+      mediaUrl: undefined,
+      mediaData: pdf.toString("base64"),
+      mediaMimeType: "application/pdf",
+      mediaFilename: "CB-2026-000001.pdf",
+      mediaType: "document",
+    });
+    await app.close();
+  });
+
+  it("reports an unconfigured official provider before attempting delivery", async () => {
+    mocks.invoiceFindUnique.mockResolvedValue({
+      id: "invoice-1",
+      pdfUrl: "invoices/v2/CB-2026-000001.pdf",
+      number: "CB-2026-000001",
+      branchId: "dwarka",
+      totalMinor: 118_000,
+      customer: { name: "Ishita Priya", email: null, phone: "+919876543210", waConsent: true },
+    });
+    mocks.storageGet.mockResolvedValue(Buffer.from("%PDF-private"));
+    mocks.whatsappHealth.mockResolvedValue({
+      configured: false,
+      connected: false,
+      detail: "Add the Meta token and phone-number ID.",
+    });
+    const app = await testApp();
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/invoices/invoice-1/send",
+      payload: { channel: "WHATSAPP_OFFICIAL" },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      error: "wa_official_not_configured",
+      channel: "WHATSAPP_OFFICIAL",
+      detail: "Add the Meta token and phone-number ID.",
+    });
+    expect(mocks.storageSignedUrl).not.toHaveBeenCalled();
+    expect(mocks.whatsappSend).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("preserves actionable Meta rejection details in the invoice response", async () => {
+    mocks.invoiceFindUnique.mockResolvedValue({
+      id: "invoice-1",
+      pdfUrl: "invoices/v2/CB-2026-000001.pdf",
+      number: "CB-2026-000001",
+      branchId: "dwarka",
+      totalMinor: 118_000,
+      customer: { name: "Ishita Priya", email: null, phone: "+919876543210", waConsent: true },
+    });
+    mocks.storageGet.mockResolvedValue(Buffer.from("%PDF-private"));
+    mocks.storageSignedUrl.mockResolvedValue("https://media.example.com/invoices/CB-2026-000001.pdf?sig=test");
+    mocks.whatsappSend.mockResolvedValue({
+      externalId: "",
+      status: "failed",
+      error: "wa_official_rejected",
+      detail: "Use an approved template outside the customer service window.",
+      providerCode: "131047",
+    });
+    const app = await testApp();
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/invoices/invoice-1/send",
+      payload: { channel: "WHATSAPP_OFFICIAL" },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toEqual({
+      externalId: "",
+      status: "failed",
+      error: "wa_official_rejected",
+      detail: "Use an approved template outside the customer service window.",
+      providerCode: "131047",
+      channel: "WHATSAPP_OFFICIAL",
+    });
+    await app.close();
+  });
+
+  it("returns the provider message id when Meta accepts an invoice", async () => {
+    mocks.invoiceFindUnique.mockResolvedValue({
+      id: "invoice-1",
+      pdfUrl: "invoices/v2/CB-2026-000001.pdf",
+      number: "CB-2026-000001",
+      branchId: "dwarka",
+      totalMinor: 118_000,
+      customer: { name: "Ishita Priya", email: null, phone: "+919876543210", waConsent: true },
+    });
+    mocks.storageGet.mockResolvedValue(Buffer.from("%PDF-private"));
+    mocks.storageSignedUrl.mockResolvedValue("https://media.example.com/invoices/CB-2026-000001.pdf?sig=test");
+    mocks.whatsappSend.mockResolvedValue({ externalId: "wamid.accepted", status: "sent" });
+    const app = await testApp();
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/invoices/invoice-1/send",
+      payload: { channel: "WHATSAPP_OFFICIAL" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      queued: false,
+      channel: "WHATSAPP_OFFICIAL",
+      status: "sent",
+      externalId: "wamid.accepted",
+    });
+    expect(mocks.audit).toHaveBeenCalledWith(
+      "invoice.send",
+      "Invoice",
+      "invoice-1",
+      expect.objectContaining({ after: expect.objectContaining({ channel: "WHATSAPP_OFFICIAL", status: "sent" }) }),
+    );
     await app.close();
   });
 

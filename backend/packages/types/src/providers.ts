@@ -13,6 +13,10 @@ export interface OutboundMessage {
   templateLanguage?: string;
   variables?: Record<string, string>;
   mediaUrl?: string;
+  /** Bare base64 bytes for providers that support inline media (never a data: URL). */
+  mediaData?: string;
+  mediaMimeType?: string;
+  mediaFilename?: string;
   mediaType?: "image" | "document" | "video" | "audio";
   location?: { latitude: number; longitude: number; name?: string; address?: string };
 }
@@ -20,7 +24,12 @@ export interface OutboundMessage {
 export interface SendResult {
   externalId: string;
   status: "sent" | "queued" | "failed";
+  /** Stable machine-readable failure code. */
   error?: string;
+  /** Provider/user-facing context; callers must never populate it with credentials. */
+  detail?: string;
+  /** Optional upstream provider error code (for example a Meta Graph code). */
+  providerCode?: string;
 }
 
 export type WhatsAppSessionAction = "create" | "start" | "restart" | "stop" | "logout";

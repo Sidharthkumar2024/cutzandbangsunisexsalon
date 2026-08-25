@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isRestrictedWahaHost, validateWahaBaseUrl, WhatsAppUnofficialProvider } from "@cutz/providers";
+import {
+  isRestrictedWahaHost,
+  validateWahaBaseUrl,
+  WAHA_INLINE_MEDIA_MAX_BYTES,
+  WhatsAppUnofficialProvider,
+} from "@cutz/providers";
 
 const config = {
   enabled: true,
@@ -33,6 +38,80 @@ describe("WAHA provider", () => {
     expect(init.redirect).toBe("error");
     expect(JSON.parse(String(init.body))).toEqual({ session: "cutz-bangs-main", chatId: "919876543210@c.us", text: "Hello" });
     expect(String(init.body)).not.toContain(config.apiKey);
+  });
+
+  it("normalizes a 10-digit Indian mobile before creating the WAHA chat id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "msg-local" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new WhatsAppUnofficialProvider(config).send({ to: "9876543210", body: "Hello" });
+
+    expect(result).toEqual({ externalId: "msg-local", status: "sent" });
+    const payload = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    expect(payload.chatId).toBe("919876543210@c.us");
+  });
+
+  it("sends a private invoice PDF as inline base64 through WAHA sendFile", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "msg-pdf" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const mediaData = Buffer.from("%PDF-1.7\nprivate invoice").toString("base64");
+
+    const result = await new WhatsAppUnofficialProvider(config).send({
+      to: "+91 98765 43210",
+      body: "Your invoice",
+      mediaType: "document",
+      mediaData,
+      mediaMimeType: "application/pdf",
+      mediaFilename: "CB-2026-000001.pdf",
+    });
+
+    expect(result).toEqual({ externalId: "msg-pdf", status: "sent" });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toBe("http://127.0.0.1:3005/api/sendFile");
+    expect(JSON.parse(String(init.body))).toEqual({
+      session: "cutz-bangs-main",
+      chatId: "919876543210@c.us",
+      file: {
+        data: mediaData,
+        mimetype: "application/pdf",
+        filename: "CB-2026-000001.pdf",
+      },
+      caption: "Your invoice",
+    });
+    expect(String(init.body)).not.toContain(config.apiKey);
+  });
+
+  it("rejects oversized inline media before contacting WAHA", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const mediaData = Buffer.alloc(WAHA_INLINE_MEDIA_MAX_BYTES + 1).toString("base64");
+
+    const result = await new WhatsAppUnofficialProvider(config).send({
+      to: "+919876543210",
+      mediaType: "document",
+      mediaData,
+      mediaMimeType: "application/pdf",
+      mediaFilename: "invoice.pdf",
+    });
+
+    expect(result).toMatchObject({ status: "failed", error: "whatsapp_media_too_large" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects inline bytes that are not a PDF before contacting WAHA", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new WhatsAppUnofficialProvider(config).send({
+      to: "+919876543210",
+      mediaType: "document",
+      mediaData: Buffer.from("not a pdf").toString("base64"),
+      mediaMimeType: "application/pdf",
+      mediaFilename: "invoice.pdf",
+    });
+
+    expect(result).toMatchObject({ status: "failed", error: "whatsapp_media_data_invalid" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("returns a refreshed QR only while the session requires scanning", async () => {

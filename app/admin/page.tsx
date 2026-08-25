@@ -58,6 +58,9 @@ type CartItem = {
   price: number;
   taxRateBps: number;
 };
+type InvoiceWhatsAppChannel =
+  | "WHATSAPP_OFFICIAL"
+  | "WHATSAPP_UNOFFICIAL";
 type SaleService = {
   id: string;
   name: string;
@@ -2507,6 +2510,11 @@ function POS({
     "OFF" | "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL"
   >("OFF");
   const [deliveryMessage, setDeliveryMessage] = useState("");
+  const [whatsappActionFeedback, setWhatsappActionFeedback] = useState<{
+    channel: InvoiceWhatsAppChannel;
+    state: "sending" | "success" | "error";
+    message: string;
+  } | null>(null);
   const [openingBreakdown, setOpeningBreakdown] = useState<CashBreakdown>(emptyCashBreakdown);
   const [openingConfirmation, setOpeningConfirmation] = useState(0);
   const [openingCountAcknowledged, setOpeningCountAcknowledged] = useState(false);
@@ -2672,6 +2680,25 @@ function POS({
       : !selectedCustomer.waConsent
         ? "WhatsApp consent is not recorded for this customer."
         : "";
+  const postPaymentWhatsappBlockedReason = !token
+    ? "The backend is disconnected. Reconnect it, then retry."
+    : !invoiceId
+      ? "The invoice is not ready to send. Reopen it from Invoice archive and retry."
+      : !selectedCustomer
+        ? "No customer is attached to this bill. Start a new bill with a customer selected."
+        : !selectedCustomer.phone
+          ? `Add a mobile number for ${selectedCustomer.name} in Customers, then retry from Invoice archive.`
+          : !selectedCustomer.waConsent
+            ? `Record WhatsApp consent for ${selectedCustomer.name} in Customers, then retry from Invoice archive.`
+            : "";
+  const whatsappActionStatusState =
+    whatsappActionFeedback?.state ??
+    (postPaymentWhatsappBlockedReason ? "error" : "ready");
+  const whatsappActionStatusMessage =
+    whatsappActionFeedback?.message ??
+    (postPaymentWhatsappBlockedReason
+      ? `WhatsApp unavailable: ${postPaymentWhatsappBlockedReason}`
+      : `Ready to send ${invoice || "this invoice"} to ${selectedCustomer?.phone}. Delivery runs in the background; no WhatsApp window will open here.`);
 
   const selectCustomer = (nextCustomerId: string) => {
     onCustomerIdChange(nextCustomerId);
@@ -2684,6 +2711,7 @@ function POS({
     setQuickCustomerMessage("");
     setReceiptEmailEnabled(false);
     setReceiptWhatsappChannel("OFF");
+    setWhatsappActionFeedback(null);
   };
 
   const selectSearchCustomer = (nextCustomer: BackendSnapshot["customers"][number]) => {
@@ -2764,6 +2792,7 @@ function POS({
     setCharging(true);
     setCheckoutError("");
     setDeliveryMessage("");
+    setWhatsappActionFeedback(null);
     setRewardMessage("");
     try {
       const payments = [
@@ -2905,15 +2934,50 @@ function POS({
       setCharging(false);
     }
   };
-  const whatsappInvoice = async (channel: "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL") => {
-    if (!token || !invoiceId) return;
+  const whatsappInvoice = async (channel: InvoiceWhatsAppChannel) => {
+    const channelLabel =
+      channel === "WHATSAPP_OFFICIAL"
+        ? "Official WhatsApp"
+        : "Unofficial WhatsApp";
+    if (postPaymentWhatsappBlockedReason) {
+      setCheckoutError("");
+      setWhatsappActionFeedback({
+        channel,
+        state: "error",
+        message: `${channelLabel} unavailable: ${postPaymentWhatsappBlockedReason}`,
+      });
+      return;
+    }
+    if (charging) return;
     setCharging(true);
     setCheckoutError("");
+    setWhatsappActionFeedback({
+      channel,
+      state: "sending",
+      message: `Sending ${invoice || "invoice"} through ${channelLabel} to ${selectedCustomer?.phone}…`,
+    });
     try {
-      await backendApi.sendInvoice(token, invoiceId, channel);
-      setDeliveryMessage(`Invoice sent through ${channel === "WHATSAPP_OFFICIAL" ? "official WhatsApp" : "the unofficial connector"}.`);
+      const result = await backendApi.sendInvoice(token, invoiceId, channel);
+      const outcome = result.queued
+        ? "queued"
+        : result.status
+          ? prettyStatus(result.status).toLowerCase()
+          : "processed";
+      setWhatsappActionFeedback({
+        channel,
+        state: "success",
+        message: `${invoice || "Invoice"} ${outcome} through ${channelLabel} to ${selectedCustomer?.phone}. Delivery runs in the background; no WhatsApp window opens here.`,
+      });
     } catch (cause) {
-      setCheckoutError(cause instanceof Error ? prettyStatus(cause.message) : "WhatsApp invoice failed.");
+      const reason =
+        cause instanceof Error
+          ? prettyStatus(cause.message)
+          : "WhatsApp invoice failed";
+      setWhatsappActionFeedback({
+        channel,
+        state: "error",
+        message: `${channelLabel} failed: ${reason}. Check the customer's phone and consent plus the provider status in Settings, then retry.`,
+      });
     } finally {
       setCharging(false);
     }
@@ -3430,30 +3494,62 @@ function POS({
             </div>
           </section>
         )}
-        {checkoutError && <p className="checkout-error">{checkoutError}</p>}
+        {checkoutError && <p className="checkout-error" role="alert">{checkoutError}</p>}
         {paid ? (
-          <div className="payment-success">
-            <span>✓</span>
+          <div className="payment-success" aria-labelledby="pos-payment-success-title">
+            <span aria-hidden="true">✓</span>
             <p>
-              <strong>Invoice and payment saved</strong>
+              <strong id="pos-payment-success-title">Invoice and payment saved</strong>
               <small>{invoice || "Invoice ready"}</small>
             </p>
-            {deliveryMessage && <small>{deliveryMessage}</small>}
-            {rewardMessage && <small>{rewardMessage}</small>}
-            <div className="invoice-actions">
-              <button disabled={charging} onClick={() => void openInvoice()}>
+            {(deliveryMessage || rewardMessage) && (
+              <div className="payment-success-details" aria-live="polite">
+                {deliveryMessage && <small>{deliveryMessage}</small>}
+                {rewardMessage && <small>{rewardMessage}</small>}
+              </div>
+            )}
+            <div className="invoice-actions" aria-label="Invoice actions">
+              <button type="button" disabled={charging} onClick={() => void openInvoice()}>
                 Open PDF
               </button>
               <button
+                type="button"
                 disabled={charging || !selectedCustomer?.email}
                 onClick={() => void emailInvoice()}
               >
                 Email invoice
               </button>
-              <button disabled={charging || !selectedCustomer?.phone || !selectedCustomer?.waConsent} onClick={() => void whatsappInvoice("WHATSAPP_OFFICIAL")}>Official WhatsApp</button>
-              <button disabled={charging || !selectedCustomer?.phone || !selectedCustomer?.waConsent} onClick={() => void whatsappInvoice("WHATSAPP_UNOFFICIAL")}>Unofficial WhatsApp</button>
+              {([
+                ["WHATSAPP_OFFICIAL", "Official WhatsApp"],
+                ["WHATSAPP_UNOFFICIAL", "Unofficial WhatsApp"],
+              ] as const).map(([channel, label]) => (
+                <button
+                  type="button"
+                  key={channel}
+                  disabled={charging}
+                  aria-disabled={Boolean(postPaymentWhatsappBlockedReason)}
+                  aria-describedby="pos-whatsapp-action-status"
+                  title={postPaymentWhatsappBlockedReason || `Send ${invoice || "invoice"} to ${selectedCustomer?.phone}`}
+                  onClick={() => void whatsappInvoice(channel)}
+                >
+                  {whatsappActionFeedback?.state === "sending" &&
+                  whatsappActionFeedback.channel === channel
+                    ? "Sending…"
+                    : label}
+                </button>
+              ))}
             </div>
+            <p
+              id="pos-whatsapp-action-status"
+              className={`invoice-action-feedback ${whatsappActionStatusState}`}
+              role={whatsappActionStatusState === "error" ? "alert" : "status"}
+              aria-live={whatsappActionStatusState === "error" ? "assertive" : "polite"}
+            >
+              {whatsappActionStatusMessage}
+            </p>
             <button
+              type="button"
+              className="new-bill-action"
               onClick={() => {
                 setPaid(false);
                 setInvoice("");
@@ -3466,6 +3562,7 @@ function POS({
                 setRewardMessage("");
                 setReceiptEmailEnabled(false);
                 setReceiptWhatsappChannel("OFF");
+                setWhatsappActionFeedback(null);
                 resetCart();
               }}
             >
@@ -6363,6 +6460,11 @@ function Invoices({
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState("");
   const [message, setMessage] = useState("");
+  const [deliveryStatus, setDeliveryStatus] = useState<{
+    invoiceId: string;
+    kind: "sending" | "success" | "error";
+    text: string;
+  } | null>(null);
 
   const fallbackItems: BackendInvoiceArchiveItem[] = data.invoices.map((invoice) => ({
     id: invoice.id,
@@ -6444,13 +6546,36 @@ function Invoices({
     channel: "EMAIL" | "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL",
   ) => {
     if (!token) return;
+    const customer = invoice.customer;
+    if (channel === "EMAIL" && !customer?.email) {
+      setDeliveryStatus({ invoiceId: invoice.id, kind: "error", text: "Customer email is missing." });
+      return;
+    }
+    if (channel !== "EMAIL" && !customer?.phone) {
+      setDeliveryStatus({ invoiceId: invoice.id, kind: "error", text: "Customer mobile number is missing." });
+      return;
+    }
     setBusyId(invoice.id);
     setMessage("");
+    setDeliveryStatus({
+      invoiceId: invoice.id,
+      kind: "sending",
+      text: `${prettyStatus(channel)} delivery is running. WhatsApp sends in the background; no app window opens.`,
+    });
     try {
       const result = await backendApi.sendInvoice(token, invoice.id, channel);
-      setMessage(`${invoice.number} ${result.queued ? "queued" : "processed"} via ${prettyStatus(channel)}.`);
+      const text = `${invoice.number} ${result.queued ? "queued" : "sent"} via ${prettyStatus(channel)}.`;
+      setMessage(text);
+      setDeliveryStatus({ invoiceId: invoice.id, kind: "success", text });
     } catch (cause) {
-      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Invoice delivery failed.");
+      const raw = cause instanceof Error ? cause.message : "Invoice delivery failed.";
+      const text = raw.includes("wa_official_not_configured")
+        ? "Official WhatsApp is not configured yet. Add Meta token, phone-number ID and public invoice storage in Settings, or use Unofficial WhatsApp."
+        : raw.includes("invoice_public_url_unavailable") || raw.includes("invoice_media_url_not_public_https")
+          ? "Official WhatsApp needs a public HTTPS invoice PDF URL. Configure Cloudinary/S3 storage, or use Unofficial WhatsApp."
+          : prettyStatus(raw);
+      setMessage(text);
+      setDeliveryStatus({ invoiceId: invoice.id, kind: "error", text });
     } finally {
       setBusyId("");
     }
@@ -6503,6 +6628,9 @@ function Invoices({
                   <button disabled={busyId === invoice.id || !customer?.email} title={customer?.email ? `Send to ${customer.email}` : "Customer email is missing"} onClick={() => void deliver(invoice, "EMAIL")}>Email</button>
                   <button disabled={busyId === invoice.id || !customer?.phone} title={customer?.phone ? `Send to ${customer.phone}` : "Customer phone is missing"} onClick={() => void deliver(invoice, "WHATSAPP_OFFICIAL")}>Official WA</button>
                   <button disabled={busyId === invoice.id || !customer?.phone} title={customer?.phone ? `Send to ${customer.phone}` : "Customer phone is missing"} onClick={() => void deliver(invoice, "WHATSAPP_UNOFFICIAL")}>Unofficial WA</button>
+                  {deliveryStatus?.invoiceId === invoice.id && (
+                    <p className={`invoice-row-feedback ${deliveryStatus.kind}`} role="status">{deliveryStatus.text}</p>
+                  )}
                 </div>
               </article>
             );
