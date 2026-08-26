@@ -1,4 +1,3 @@
-import { env } from 'cloudflare:workers';
 import { defaultSiteContent } from './content-defaults';
 import type { FeaturedService, MembershipPlan, SiteContent, Testimonial } from './content-types';
 
@@ -48,8 +47,36 @@ const tableStatements = [
   'CREATE INDEX IF NOT EXISTS idx_membership_plans_active_order ON membership_plans(is_active, display_order)',
 ];
 
-function database() {
-  return env.DB as D1Database;
+async function database() {
+  try {
+    const mod = await import('cloudflare:workers');
+    return (mod.env as { DB?: D1Database }).DB ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function contentFilePath() {
+  return process.env.SITE_CONTENT_FILE?.trim() || '/app/.storage/site-content.json';
+}
+
+async function readFileContent(): Promise<SiteContent> {
+  try {
+    const fs = await import('node:fs/promises');
+    const raw = await fs.readFile(contentFilePath(), 'utf8');
+    return JSON.parse(raw) as SiteContent;
+  } catch {
+    return structuredClone(defaultSiteContent);
+  }
+}
+
+async function writeFileContent(content: SiteContent): Promise<SiteContent> {
+  const fs = await import('node:fs/promises');
+  const path = await import('node:path');
+  const file = contentFilePath();
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify(content, null, 2));
+  return structuredClone(content);
 }
 
 async function ensureSchema(db: D1Database) {
@@ -105,7 +132,8 @@ function membershipInsert(db: D1Database, item: MembershipPlan, now: string) {
 
 export async function getSiteContent(): Promise<SiteContent> {
   try {
-    const db = database();
+    const db = await database();
+    if (!db) return readFileContent();
     await ensureSchema(db);
     await migrateLegacySeedContent(db);
     await seedDefaults(db);
@@ -126,7 +154,8 @@ export async function getSiteContent(): Promise<SiteContent> {
 }
 
 export async function replaceSiteContent(content: SiteContent): Promise<SiteContent> {
-  const db = database();
+  const db = await database();
+  if (!db) return writeFileContent(content);
   await ensureSchema(db);
   await migrateLegacySeedContent(db);
   const now = new Date().toISOString();
