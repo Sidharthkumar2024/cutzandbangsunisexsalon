@@ -2,15 +2,15 @@
 {$DOMAIN:localhost} {
 	encode gzip
 
-	# API + webhooks
-	handle /api/* {
+	# Versioned backend API + webhooks live in Fastify.
+	handle /api/v1/* {
 		reverse_proxy api:4000
 	}
 	handle /health* {
 		reverse_proxy api:4000
 	}
 
-	# Everything else -> Next.js web app
+	# Next.js owns /api/backend, /api/admin/content and other app routes.
 	handle {
 		reverse_proxy web:3000
 	}
