@@ -65,10 +65,97 @@ type StoredProviderSettings = {
 };
 
 const keyFor = (branchId: string) => `branch:${branchId}:providers`;
+const envFlag = (value: string | undefined, fallback = false) => {
+  if (value == null || value === "") return fallback;
+  return /^(1|true|yes|on)$/iu.test(value.trim());
+};
 
 async function storedSettings(branchId: string): Promise<StoredProviderSettings> {
   const row = await prisma.setting.findUnique({ where: { key: keyFor(branchId) } });
   return (row?.value ?? {}) as StoredProviderSettings;
+}
+
+function envProviderSettings(): StoredProviderSettings {
+  const smtpConfigured = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && (process.env.SMTP_PASS || process.env.EMAIL_FROM));
+  const officialConfigured = Boolean(process.env.WA_OFFICIAL_TOKEN && process.env.WA_OFFICIAL_PHONE_ID);
+  const unofficialConfigured = Boolean(process.env.WA_UNOFFICIAL_URL && process.env.WAHA_API_KEY && process.env.WAHA_SESSION);
+  return {
+    smtp: {
+      enabled: envFlag(process.env.SMTP_ENABLED, smtpConfigured),
+      host: process.env.SMTP_HOST ?? "",
+      port: Number(process.env.SMTP_PORT ?? 587),
+      secure: envFlag(process.env.SMTP_SECURE, Number(process.env.SMTP_PORT) === 465),
+      user: process.env.SMTP_USER ?? "",
+      from: process.env.EMAIL_FROM ?? "",
+      passwordEncrypted: undefined,
+    },
+    whatsappOfficial: {
+      enabled: envFlag(process.env.WA_OFFICIAL_ENABLED, officialConfigured),
+      phoneId: process.env.WA_OFFICIAL_PHONE_ID ?? "",
+      wabaId: process.env.WA_OFFICIAL_WABA_ID ?? "",
+      graphVersion: process.env.WA_GRAPH_VERSION ?? "v23.0",
+      tokenEncrypted: undefined,
+      appSecretEncrypted: undefined,
+      webhookVerifyTokenEncrypted: undefined,
+    },
+    whatsappUnofficial: {
+      enabled: envFlag(process.env.WA_UNOFFICIAL_ENABLED, unofficialConfigured),
+      baseUrl: process.env.WA_UNOFFICIAL_URL ?? "",
+      callbackUrl: process.env.WA_UNOFFICIAL_CALLBACK_URL ?? "",
+      session: process.env.WAHA_SESSION ?? "cutz-bangs-main",
+      intervalSeconds: Number(process.env.WA_UNOFFICIAL_INTERVAL_SECONDS ?? 90),
+      dailyCap: Number(process.env.WA_UNOFFICIAL_DAILY_CAP ?? 75),
+      windowStartHour: Number(process.env.WA_UNOFFICIAL_WINDOW_START_HOUR ?? 10),
+      windowEndHour: Number(process.env.WA_UNOFFICIAL_WINDOW_END_HOUR ?? 20),
+      apiKeyEncrypted: undefined,
+      webhookSecretEncrypted: undefined,
+    },
+  };
+}
+
+function mergeStoredWithEnv(stored: StoredProviderSettings): StoredProviderSettings {
+  const env = envProviderSettings();
+  const envSmtp = env.smtp!;
+  const envOfficial = env.whatsappOfficial!;
+  const envUnofficial = env.whatsappUnofficial!;
+  return {
+    smtp: {
+      ...envSmtp,
+      ...stored.smtp,
+      enabled: stored.smtp?.enabled ?? envSmtp.enabled,
+      host: stored.smtp?.host ?? envSmtp.host,
+      port: stored.smtp?.port ?? envSmtp.port,
+      secure: stored.smtp?.secure ?? envSmtp.secure,
+      user: stored.smtp?.user ?? envSmtp.user,
+      from: stored.smtp?.from ?? envSmtp.from,
+      passwordEncrypted: stored.smtp?.passwordEncrypted,
+    },
+    whatsappOfficial: {
+      ...envOfficial,
+      ...stored.whatsappOfficial,
+      enabled: stored.whatsappOfficial?.enabled ?? envOfficial.enabled,
+      phoneId: stored.whatsappOfficial?.phoneId ?? envOfficial.phoneId,
+      wabaId: stored.whatsappOfficial?.wabaId ?? envOfficial.wabaId,
+      graphVersion: stored.whatsappOfficial?.graphVersion ?? envOfficial.graphVersion,
+      tokenEncrypted: stored.whatsappOfficial?.tokenEncrypted,
+      appSecretEncrypted: stored.whatsappOfficial?.appSecretEncrypted,
+      webhookVerifyTokenEncrypted: stored.whatsappOfficial?.webhookVerifyTokenEncrypted,
+    },
+    whatsappUnofficial: {
+      ...envUnofficial,
+      ...stored.whatsappUnofficial,
+      enabled: stored.whatsappUnofficial?.enabled ?? envUnofficial.enabled,
+      baseUrl: stored.whatsappUnofficial?.baseUrl ?? envUnofficial.baseUrl,
+      callbackUrl: stored.whatsappUnofficial?.callbackUrl ?? envUnofficial.callbackUrl,
+      session: stored.whatsappUnofficial?.session ?? envUnofficial.session,
+      intervalSeconds: stored.whatsappUnofficial?.intervalSeconds ?? envUnofficial.intervalSeconds,
+      dailyCap: stored.whatsappUnofficial?.dailyCap ?? envUnofficial.dailyCap,
+      windowStartHour: stored.whatsappUnofficial?.windowStartHour ?? envUnofficial.windowStartHour,
+      windowEndHour: stored.whatsappUnofficial?.windowEndHour ?? envUnofficial.windowEndHour,
+      apiKeyEncrypted: stored.whatsappUnofficial?.apiKeyEncrypted ?? stored.whatsappUnofficial?.secretEncrypted,
+      webhookSecretEncrypted: stored.whatsappUnofficial?.webhookSecretEncrypted,
+    },
+  };
 }
 
 async function configuredWebhookBranches(): Promise<WebhookProviderBranch[]> {
@@ -157,12 +244,12 @@ function runtimeConfig(stored: StoredProviderSettings): ProviderRuntimeConfig {
 }
 
 export async function applyProviderSettings(branchId = "main") {
-  const stored = await storedSettings(branchId);
+  const stored = mergeStoredWithEnv(await storedSettings(branchId));
   return providers.scoped(runtimeConfig(stored));
 }
 
 export async function publicProviderSettings(branchId = "main") {
-  const stored = await storedSettings(branchId);
+  const stored = mergeStoredWithEnv(await storedSettings(branchId));
   return {
     smtp: {
       enabled: stored.smtp?.enabled ?? false,

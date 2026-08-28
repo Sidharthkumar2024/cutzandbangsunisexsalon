@@ -95,6 +95,7 @@ SMS_AUTH_TOKEN=
 SMS_FROM=
 WA_OFFICIAL_TOKEN=
 WA_OFFICIAL_PHONE_ID=
+WA_OFFICIAL_WABA_ID=
 WA_APP_SECRET=
 WA_WEBHOOK_VERIFY_TOKEN=$wa_webhook_token
 WA_UNOFFICIAL_ENABLED=false
@@ -123,7 +124,11 @@ EOF
   chmod 600 /root/cutz-admin-login.txt
 fi
 
-docker compose --env-file "$ENV_FILE" -f docker-compose.vps.yml up -d --build db redis api worker web proxy
+if grep -Eq '^WA_UNOFFICIAL_ENABLED=(1|true|yes|on)$' "$ENV_FILE"; then
+  docker compose --env-file "$ENV_FILE" -f docker-compose.vps.yml --profile unofficial-wa up -d --build db redis api worker web waha proxy
+else
+  docker compose --env-file "$ENV_FILE" -f docker-compose.vps.yml up -d --build db redis api worker web proxy
+fi
 docker compose --env-file "$ENV_FILE" -f docker-compose.vps.yml exec -T api pnpm --filter @cutz/db exec prisma migrate deploy
 docker compose --env-file "$ENV_FILE" -f docker-compose.vps.yml exec -T api pnpm --filter @cutz/db exec tsx prisma/seed.ts
 docker compose --env-file "$ENV_FILE" -f docker-compose.vps.yml exec -T api pnpm --filter @cutz/db exec tsx prisma/seed-codex.ts
