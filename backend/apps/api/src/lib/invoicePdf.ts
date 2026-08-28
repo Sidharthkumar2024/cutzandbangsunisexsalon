@@ -201,7 +201,7 @@ export function renderInvoicePdf(data: InvoicePdfData): Promise<Buffer> {
       y += rowHeight;
     });
 
-    const summaryHeight = data.discountMinor ? 170 : 154;
+    const summaryHeight = data.discountMinor ? 150 : 134;
     if (y + summaryHeight > PAGE.footerTop - 16) {
       doc.addPage();
       drawContinuationHeader(doc, data);
@@ -214,7 +214,6 @@ export function renderInvoicePdf(data: InvoicePdfData): Promise<Buffer> {
     y += 13;
     y = drawSummaryRow(doc, y, "Subtotal", money(data.subtotalMinor, cur));
     if (data.discountMinor) y = drawSummaryRow(doc, y, "Discount", `-${money(data.discountMinor, cur)}`, { color: BRAND.green });
-    y = drawSummaryRow(doc, y, "GST", money(data.taxMinor, cur));
     y = drawSummaryRow(doc, y + 2, "Total", money(data.totalMinor, cur), { strong: true });
     y = drawSummaryRow(doc, y, "Paid", money(data.paidMinor, cur), { color: BRAND.green });
     const due = Math.max(0, data.totalMinor - data.paidMinor);

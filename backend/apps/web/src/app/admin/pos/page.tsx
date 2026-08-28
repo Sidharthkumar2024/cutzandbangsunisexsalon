@@ -7,7 +7,7 @@ import AdminNav from "@/components/AdminNav";
 
 interface Service { id: string; name: string; priceMinor: number; taxRateBps: number; }
 interface Category { services: Service[]; }
-interface Line { serviceId: string; description: string; qty: number; unitMinor: number; taxRateBps: number; }
+interface Line { serviceId: string; description: string; qty: number; unitMinor: number; }
 
 const BRANCH_ID = process.env.NEXT_PUBLIC_BRANCH_ID ?? "main";
 
@@ -26,18 +26,18 @@ export default function Pos() {
   }, [router]);
 
   function addService(s: Service) {
-    setLines((l) => [...l, { serviceId: s.id, description: s.name, qty: 1, unitMinor: s.priceMinor, taxRateBps: s.taxRateBps }]);
+    setLines((l) => [...l, { serviceId: s.id, description: s.name, qty: 1, unitMinor: s.priceMinor }]);
   }
 
-  // Mirror of the server's money math for a live preview.
+  // Cutz & Bangs bills are tax-inclusive at the catalogue level, so POS does
+  // not add a separate GST/tax amount on top of the displayed service price.
   const totals = lines.reduce(
     (acc, l) => {
       const base = l.qty * l.unitMinor;
-      const tax = Math.round((base * l.taxRateBps) / 10000);
-      acc.subtotal += base; acc.tax += tax; acc.total += base + tax;
+      acc.subtotal += base; acc.total += base;
       return acc;
     },
-    { subtotal: 0, tax: 0, total: 0 },
+    { subtotal: 0, total: 0 },
   );
 
   async function checkout() {
@@ -47,7 +47,7 @@ export default function Pos() {
         method: "POST",
         body: {
           branchId: BRANCH_ID,
-          lines: lines.map((l) => ({ kind: "service", serviceId: l.serviceId, description: l.description, qty: l.qty, unitMinor: l.unitMinor, taxRateBps: l.taxRateBps })),
+          lines: lines.map((l) => ({ kind: "service", serviceId: l.serviceId, description: l.description, qty: l.qty, unitMinor: l.unitMinor, taxRateBps: 0 })),
           payments: totals.total > 0 ? [{ method, amountMinor: totals.total }] : [],
         },
       });
@@ -85,7 +85,6 @@ export default function Pos() {
           ))}
           <hr style={{ border: 0, borderTop: "1px solid var(--border)", margin: "12px 0" }} />
           <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">Subtotal</span><span>{money(totals.subtotal)}</span></div>
-          <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">Tax</span><span>{money(totals.tax)}</span></div>
           <div className="row" style={{ justifyContent: "space-between", fontWeight: 700 }}><span>Total</span><span>{money(totals.total)}</span></div>
           <label>Payment method</label>
           <select value={method} onChange={(e) => setMethod(e.target.value)}>

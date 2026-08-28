@@ -345,12 +345,10 @@ export default function AdminPage() {
   const pointOfSaleServices = liveServices;
   const subtotal = cart.reduce((sum, item) => sum + item.price, 0);
   // Membership credit is an auditable payment tender, not a discount. Invoice
-  // tax and totals remain unchanged; redemption is posted to the ledger.
+  // totals remain unchanged; redemption is posted to the ledger.
   const credit = 0;
-  const tax = Math.round(
-    cart.reduce((sum, item) => sum + item.price * item.taxRateBps, 0) / 10_000,
-  );
-  const total = subtotal + tax;
+  const tax = 0;
+  const total = subtotal;
   const activeBranch = backend.data.branches.find((branch) => branch.id === (backend.data.user?.branchId ?? "main")) ?? backend.data.branches[0];
   const role = backend.data.user?.role;
   const headerCustomerQuery = customerSearchQuery.trim();
@@ -2623,7 +2621,7 @@ function POS({
     if (!remaining) return sum;
     coveredQtyByService.set(line.serviceId, remaining - 1);
     const base = line.price * 100;
-    return sum + base + Math.round((base * line.taxRateBps) / 10_000);
+    return sum + base;
   }, 0);
   const payableMinor = Math.max(0, total * 100 - packageDiscountMinor);
   const loyaltySettings = data.settings.loyalty as Record<string, unknown> | undefined;
@@ -2819,7 +2817,7 @@ function POS({
           qty: 1,
           unitMinor: item.price * 100,
           discountMinor: 0,
-          taxRateBps: item.taxRateBps,
+          taxRateBps: 0,
           companionId: item.companionId,
         })),
         payments,
@@ -3433,10 +3431,6 @@ function POS({
               <strong>−{money(loyaltyMinor)}</strong>
             </p>
           )}
-          <p>
-            <span>Tax</span>
-            <strong>₹{tax.toLocaleString("en-IN")}</strong>
-          </p>
           <p className="bill-total">
             <span>Total</span>
             <strong>{money(afterCouponMinor)}</strong>
@@ -6620,7 +6614,7 @@ function Invoices({
                 <div><strong>{invoice.number}</strong><span className={`invoice-status status-${invoice.status.toLowerCase().replaceAll("_", "-")}`}>{prettyStatus(invoice.status)}</span></div>
                 <div><strong>{customer?.name ?? "Walk-in"}</strong><small>{customer?.phone ?? customer?.email ?? "No contact saved"}</small></div>
                 <time>{new Date(invoice.issuedAt ?? invoice.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</time>
-                <div><strong>{money(invoice.totalMinor)}</strong><small>Tax {money(invoice.taxMinor)}</small></div>
+                <div><strong>{money(invoice.totalMinor)}</strong></div>
                 <div><strong>{balance ? `${money(balance)} due` : "Paid"}</strong><small>{money(invoice.paidMinor)} received</small></div>
                 <div className="invoice-row-actions">
                   <button disabled={busyId === invoice.id} onClick={() => void openPdf(invoice, false)}>Open PDF</button>
