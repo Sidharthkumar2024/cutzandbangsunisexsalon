@@ -283,7 +283,10 @@ export default async function posRoutes(app: FastifyInstance) {
           description: catalog!.name,
           servedFor: line.companionId ? companionById.get(line.companionId)?.name : body.customerId ? "Primary customer" : "Walk-in",
           unitMinor: line.kind === "service" ? serviceById.get(line.serviceId!)!.priceMinor : productById.get(line.productId!)!.sellMinor,
-          taxRateBps: catalog!.taxRateBps,
+          // Cutz & Bangs currently bills catalogue prices as the final payable
+          // price. Do not add a separate GST/tax amount in POS, even if older
+          // clients or catalogue rows still carry taxRateBps.
+          taxRateBps: 0,
           // Catalog prices are authoritative. Package redemptions are the only
           // automatic line discount in phase one; a future manual-discount
           // route can add explicit approval and audit requirements.
@@ -320,11 +323,9 @@ export default async function posRoutes(app: FastifyInstance) {
         }
       }
       const couponDiscountMinor = couponQuote?.discountMinor ?? 0;
-      // Apply an invoice-level coupon by allocating it across taxable line bases
-      // and recomputing tax, so both the stored per-line tax and the header tax
-      // reflect the real post-coupon amount (GST is not overstated). A
+      // Apply an invoice-level coupon by allocating it across line bases. A
       // largest-remainder split keeps the allocations summing exactly to the
-      // coupon value.
+      // coupon value while POS tax remains zero.
       if (couponDiscountMinor > 0) {
         const bases = computed.map((c) => Math.max(0, c.calc.qty * c.calc.unitMinor - c.calc.discountMinor));
         const alloc = allocateProportional(bases, couponDiscountMinor);
