@@ -1,3 +1,10 @@
+# Sallon SaaS
+
+Multi-salon SaaS product starting from the Cutz & Bangs operations platform.
+The SaaS conversion blueprint is in [docs/SAAS_ARCHITECTURE.md](docs/SAAS_ARCHITECTURE.md).
+
+## Current base app
+
 # Cutz & Bangs Unisex Salon
 
 Complete salon website and operations platform for Cutz & Bangs, Sector 15 Dwarka, New Delhi.
