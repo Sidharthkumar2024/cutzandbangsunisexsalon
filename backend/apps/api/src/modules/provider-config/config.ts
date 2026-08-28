@@ -69,6 +69,10 @@ const envFlag = (value: string | undefined, fallback = false) => {
   if (value == null || value === "") return fallback;
   return /^(1|true|yes|on)$/iu.test(value.trim());
 };
+const nonEmpty = (value: string | undefined) => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+};
 
 async function storedSettings(branchId: string): Promise<StoredProviderSettings> {
   const row = await prisma.setting.findUnique({ where: { key: keyFor(branchId) } });
@@ -122,21 +126,21 @@ function mergeStoredWithEnv(stored: StoredProviderSettings): StoredProviderSetti
     smtp: {
       ...envSmtp,
       ...stored.smtp,
-      enabled: stored.smtp?.enabled ?? envSmtp.enabled,
-      host: stored.smtp?.host ?? envSmtp.host,
+      enabled: envSmtp.enabled || (stored.smtp?.enabled ?? false),
+      host: nonEmpty(stored.smtp?.host) ?? envSmtp.host,
       port: stored.smtp?.port ?? envSmtp.port,
       secure: stored.smtp?.secure ?? envSmtp.secure,
-      user: stored.smtp?.user ?? envSmtp.user,
-      from: stored.smtp?.from ?? envSmtp.from,
+      user: nonEmpty(stored.smtp?.user) ?? envSmtp.user,
+      from: nonEmpty(stored.smtp?.from) ?? envSmtp.from,
       passwordEncrypted: stored.smtp?.passwordEncrypted,
     },
     whatsappOfficial: {
       ...envOfficial,
       ...stored.whatsappOfficial,
-      enabled: stored.whatsappOfficial?.enabled ?? envOfficial.enabled,
-      phoneId: stored.whatsappOfficial?.phoneId ?? envOfficial.phoneId,
-      wabaId: stored.whatsappOfficial?.wabaId ?? envOfficial.wabaId,
-      graphVersion: stored.whatsappOfficial?.graphVersion ?? envOfficial.graphVersion,
+      enabled: envOfficial.enabled || (stored.whatsappOfficial?.enabled ?? false),
+      phoneId: nonEmpty(stored.whatsappOfficial?.phoneId) ?? envOfficial.phoneId,
+      wabaId: nonEmpty(stored.whatsappOfficial?.wabaId) ?? envOfficial.wabaId,
+      graphVersion: nonEmpty(stored.whatsappOfficial?.graphVersion) ?? envOfficial.graphVersion,
       tokenEncrypted: stored.whatsappOfficial?.tokenEncrypted,
       appSecretEncrypted: stored.whatsappOfficial?.appSecretEncrypted,
       webhookVerifyTokenEncrypted: stored.whatsappOfficial?.webhookVerifyTokenEncrypted,
@@ -144,10 +148,10 @@ function mergeStoredWithEnv(stored: StoredProviderSettings): StoredProviderSetti
     whatsappUnofficial: {
       ...envUnofficial,
       ...stored.whatsappUnofficial,
-      enabled: stored.whatsappUnofficial?.enabled ?? envUnofficial.enabled,
-      baseUrl: stored.whatsappUnofficial?.baseUrl ?? envUnofficial.baseUrl,
-      callbackUrl: stored.whatsappUnofficial?.callbackUrl ?? envUnofficial.callbackUrl,
-      session: stored.whatsappUnofficial?.session ?? envUnofficial.session,
+      enabled: envUnofficial.enabled || (stored.whatsappUnofficial?.enabled ?? false),
+      baseUrl: nonEmpty(stored.whatsappUnofficial?.baseUrl) ?? envUnofficial.baseUrl,
+      callbackUrl: nonEmpty(stored.whatsappUnofficial?.callbackUrl) ?? envUnofficial.callbackUrl,
+      session: nonEmpty(stored.whatsappUnofficial?.session) ?? envUnofficial.session,
       intervalSeconds: stored.whatsappUnofficial?.intervalSeconds ?? envUnofficial.intervalSeconds,
       dailyCap: stored.whatsappUnofficial?.dailyCap ?? envUnofficial.dailyCap,
       windowStartHour: stored.whatsappUnofficial?.windowStartHour ?? envUnofficial.windowStartHour,
