@@ -25,7 +25,7 @@ function readableError(value: string) {
 
 export default function AdminLoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(CURRENT_OWNER_EMAIL);
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [recoveryMode, setRecoveryMode] = useState(false);
