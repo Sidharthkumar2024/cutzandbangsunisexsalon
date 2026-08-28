@@ -25,6 +25,29 @@ function sessionCookie(value: string, maxAge: number) {
   return `${sessionCookieName}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure}`;
 }
 
+function sameSiteOrigins(request: Request, incoming: URL) {
+  const origins = new Set([incoming.origin]);
+  const forwardedHost = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
+  const forwardedProto = request.headers.get('x-forwarded-proto') ?? incoming.protocol.replace(':', '');
+  if (forwardedHost) origins.add(`${forwardedProto}://${forwardedHost}`);
+  for (const raw of [
+    process.env.NEXT_PUBLIC_SITE_URL,
+    process.env.PUBLIC_SITE_URL,
+    process.env.APP_ORIGIN,
+    process.env.CORS_ORIGIN,
+  ]) {
+    for (const value of (raw ?? '').split(',')) {
+      const trimmed = value.trim().replace(/\/+$/, '');
+      if (trimmed && trimmed !== '*') origins.add(trimmed);
+    }
+  }
+  if (isProduction) {
+    origins.add('https://cutzandbangs.com');
+    origins.add('https://www.cutzandbangs.com');
+  }
+  return origins;
+}
+
 async function forward(request: Request, context: { params: Promise<{ path: string[] }> }) {
   const { path } = await context.params;
   const incoming = new URL(request.url);
@@ -42,7 +65,7 @@ async function forward(request: Request, context: { params: Promise<{ path: stri
   }
   const isMutation = !['GET', 'HEAD', 'OPTIONS'].includes(request.method);
   const origin = request.headers.get('origin');
-  if (isMutation && origin && origin !== incoming.origin) {
+  if (isMutation && origin && !sameSiteOrigins(request, incoming).has(origin.replace(/\/+$/, ''))) {
     return Response.json({ error: 'cross_site_request_rejected' }, { status: 403 });
   }
 
