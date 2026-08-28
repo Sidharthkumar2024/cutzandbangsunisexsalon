@@ -18,6 +18,51 @@ export type BackendTwoFactorStatus = {
   setupPending: boolean;
   recoveryCodesRemaining: number;
 };
+export type BackendPlan = {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  monthlyPriceMinor: number;
+  yearlyPriceMinor: number;
+  currency: string;
+  maxBranches: number;
+  maxStaff: number;
+  maxInvoicesPerMonth?: number | null;
+  features: string[];
+  isActive: boolean;
+};
+export type BackendTenant = {
+  id: string;
+  name: string;
+  slug: string;
+  status: string;
+  primaryDomain?: string | null;
+  timezone: string;
+  currency: string;
+  plan?: BackendPlan | null;
+  membershipRole?: string;
+  membershipBranchId?: string | null;
+  branches?: BackendBranch[];
+};
+export type BackendSubscription = {
+  id: string;
+  tenantId: string;
+  planId: string;
+  status: string;
+  interval: string;
+  currentPeriodStart?: string | null;
+  currentPeriodEnd?: string | null;
+  cancelAtPeriodEnd: boolean;
+  plan?: BackendPlan;
+};
+export type BackendTenantDomain = {
+  id: string;
+  tenantId: string;
+  hostname: string;
+  status: string;
+  verifiedAt?: string | null;
+};
 export type BackendToday = {
   appointments: number;
   walkIns: number;
@@ -928,6 +973,24 @@ export const backendApi = {
   previewStaffInvite: (token: string) => request<{ email: string; role: string; permissionKeys: string[]; expiresAt: string; staff: { displayName: string; designation: string } }>(`/auth/staff-invite/preview?token=${encodeURIComponent(token)}`),
   acceptStaffInvite: (token: string, password: string) => request<{ accepted: true; email: string; role: string }>("/auth/staff-invite/accept", { method: "POST", body: JSON.stringify({ token, password }) }),
   logout: (token: string) => request<unknown>("/auth/logout", { method: "POST", body: "{}" }, token),
+  switchTenant: (token: string, payload: { tenantId: string; branchId?: string }) =>
+    request<{ activeTenantId: string; branchId: string | null }>("/auth/tenant/switch", { method: "POST", body: JSON.stringify(payload) }, token),
+  plans: () => request<BackendPlan[]>("/plans"),
+  createPlan: (token: string, payload: Partial<BackendPlan> & { name: string }) =>
+    request<BackendPlan>("/plans", { method: "POST", body: JSON.stringify(payload) }, token),
+  tenants: (token: string) => request<BackendTenant[]>("/tenants", {}, token),
+  createTenant: (token: string, payload: { name: string; slug?: string; ownerEmail?: string; planSlug?: string; timezone?: string; currency?: string; branchName?: string }) =>
+    request<BackendTenant>("/tenants", { method: "POST", body: JSON.stringify(payload) }, token),
+  updateTenant: (token: string, tenantId: string, payload: Partial<Pick<BackendTenant, "name" | "status" | "primaryDomain" | "timezone" | "currency">> & { planId?: string | null; trialEndsAt?: string | null }) =>
+    request<BackendTenant>(`/tenants/${encodeURIComponent(tenantId)}`, { method: "PATCH", body: JSON.stringify(payload) }, token),
+  tenantSubscription: (token: string, tenantId: string) =>
+    request<BackendSubscription | null>(`/tenants/${encodeURIComponent(tenantId)}/subscription`, {}, token),
+  setTenantSubscription: (token: string, tenantId: string, payload: { planId: string; status?: string; interval?: string; currentPeriodStart?: string | null; currentPeriodEnd?: string | null; cancelAtPeriodEnd?: boolean }) =>
+    request<BackendSubscription>(`/tenants/${encodeURIComponent(tenantId)}/subscription`, { method: "PUT", body: JSON.stringify(payload) }, token),
+  tenantDomains: (token: string, tenantId: string) =>
+    request<BackendTenantDomain[]>(`/tenants/${encodeURIComponent(tenantId)}/domains`, {}, token),
+  createTenantDomain: (token: string, tenantId: string, hostname: string) =>
+    request<BackendTenantDomain>(`/tenants/${encodeURIComponent(tenantId)}/domains`, { method: "POST", body: JSON.stringify({ hostname }) }, token),
   registerCustomer: (payload: {
     name: string;
     email: string;

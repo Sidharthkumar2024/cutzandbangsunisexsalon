@@ -14,6 +14,29 @@ const OPERATIONS = ["OWNER", "ADMIN", "MANAGER", "RECEPTION", "STAFF"] as const;
 const slugify = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-|-$/gu, "").slice(0, 60);
 
 export default async function platformRoutes(app: FastifyInstance) {
+  app.get("/plans", async () =>
+    prisma.plan.findMany({ where: { isActive: true }, orderBy: [{ monthlyPriceMinor: "asc" }, { name: "asc" }] }),
+  );
+
+  app.post("/plans", { preHandler: authorize("SUPERADMIN") }, async (req, reply) => {
+    const body = z.object({
+      name: z.string().min(2),
+      slug: z.string().min(2).optional(),
+      description: z.string().optional(),
+      monthlyPriceMinor: z.number().int().min(0).default(0),
+      yearlyPriceMinor: z.number().int().min(0).default(0),
+      currency: z.string().length(3).default("INR"),
+      maxBranches: z.number().int().min(1).default(1),
+      maxStaff: z.number().int().min(1).default(5),
+      maxInvoicesPerMonth: z.number().int().min(1).nullable().optional(),
+      features: z.array(z.string()).default([]),
+    }).parse(req.body);
+    const slug = slugify(body.slug ?? body.name);
+    const plan = await prisma.plan.create({ data: { ...body, slug } });
+    await audit("plan.create", "Plan", plan.id, { actorUserId: req.user?.id, after: body, ip: req.ip });
+    return reply.code(201).send(plan);
+  });
+
   app.get("/tenants", { preHandler: authorize("SUPERADMIN", "OWNER", "ADMIN", "MANAGER", "RECEPTION", "STAFF") }, async (req) => {
     if (req.user!.role === "SUPERADMIN") {
       return prisma.tenant.findMany({
@@ -64,6 +87,88 @@ export default async function platformRoutes(app: FastifyInstance) {
     });
     await audit("tenant.create", "Tenant", tenant.id, { actorUserId: req.user?.id, after: { name: body.name, slug, planId: plan.id }, ip: req.ip });
     return reply.code(201).send(tenant);
+  });
+
+  app.patch("/tenants/:id", { preHandler: authorize("SUPERADMIN") }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z.object({
+      name: z.string().min(2).optional(),
+      status: z.enum(["TRIAL", "ACTIVE", "PAST_DUE", "SUSPENDED", "CANCELLED"]).optional(),
+      planId: z.string().nullable().optional(),
+      primaryDomain: z.string().nullable().optional(),
+      timezone: z.string().optional(),
+      currency: z.string().length(3).optional(),
+      trialEndsAt: z.string().datetime().nullable().optional(),
+    }).parse(req.body);
+    const before = await prisma.tenant.findUnique({ where: { id } });
+    if (!before) return reply.code(404).send({ error: "tenant_not_found" });
+    const tenant = await prisma.tenant.update({
+      where: { id },
+      data: { ...body, trialEndsAt: body.trialEndsAt === undefined ? undefined : body.trialEndsAt ? new Date(body.trialEndsAt) : null },
+      include: { plan: true, branches: { where: { deletedAt: null } }, ownerUser: { select: { id: true, email: true } } },
+    });
+    await audit("tenant.update", "Tenant", id, { actorUserId: req.user?.id, before, after: body, ip: req.ip });
+    return tenant;
+  });
+
+  app.get("/tenants/:id/subscription", { preHandler: authorize("SUPERADMIN", "OWNER", "ADMIN") }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const scope = await resolveTenantScope(req.user!, id);
+    if (!scope.ok) return reply.code(scope.statusCode).send({ error: scope.error });
+    return prisma.subscription.findFirst({
+      where: { tenantId: scope.tenantId },
+      orderBy: { createdAt: "desc" },
+      include: { plan: true },
+    });
+  });
+
+  app.put("/tenants/:id/subscription", { preHandler: authorize("SUPERADMIN") }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z.object({
+      planId: z.string(),
+      status: z.enum(["TRIALING", "ACTIVE", "PAST_DUE", "CANCELLED", "SUSPENDED"]).default("TRIALING"),
+      interval: z.enum(["MONTHLY", "YEARLY"]).default("MONTHLY"),
+      currentPeriodStart: z.string().datetime().nullable().optional(),
+      currentPeriodEnd: z.string().datetime().nullable().optional(),
+      cancelAtPeriodEnd: z.boolean().default(false),
+    }).parse(req.body);
+    const tenant = await prisma.tenant.findFirst({ where: { id, deletedAt: null }, select: { id: true } });
+    if (!tenant) return reply.code(404).send({ error: "tenant_not_found" });
+    const plan = await prisma.plan.findUnique({ where: { id: body.planId }, select: { id: true } });
+    if (!plan) return reply.code(400).send({ error: "plan_not_found" });
+    const subscription = await prisma.subscription.create({
+      data: {
+        tenantId: id,
+        planId: body.planId,
+        status: body.status,
+        interval: body.interval,
+        currentPeriodStart: body.currentPeriodStart ? new Date(body.currentPeriodStart) : undefined,
+        currentPeriodEnd: body.currentPeriodEnd ? new Date(body.currentPeriodEnd) : undefined,
+        cancelAtPeriodEnd: body.cancelAtPeriodEnd,
+      },
+      include: { plan: true },
+    });
+    await prisma.tenant.update({ where: { id }, data: { planId: body.planId, status: body.status === "ACTIVE" ? "ACTIVE" : body.status === "SUSPENDED" ? "SUSPENDED" : undefined } });
+    await audit("subscription.upsert", "Subscription", subscription.id, { actorUserId: req.user?.id, after: body, ip: req.ip });
+    return reply.code(201).send(subscription);
+  });
+
+  app.get("/tenants/:id/domains", { preHandler: authorize("SUPERADMIN", "OWNER", "ADMIN") }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const scope = await resolveTenantScope(req.user!, id);
+    if (!scope.ok) return reply.code(scope.statusCode).send({ error: scope.error });
+    return prisma.tenantDomain.findMany({ where: { tenantId: scope.tenantId }, orderBy: { createdAt: "desc" } });
+  });
+
+  app.post("/tenants/:id/domains", { preHandler: authorize("SUPERADMIN", "OWNER", "ADMIN") }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z.object({ hostname: z.string().min(3) }).parse(req.body);
+    const scope = await resolveTenantScope(req.user!, id);
+    if (!scope.ok) return reply.code(scope.statusCode).send({ error: scope.error });
+    const hostname = body.hostname.trim().toLowerCase().replace(/^https?:\/\//u, "").replace(/\/.*$/u, "");
+    const domain = await prisma.tenantDomain.create({ data: { tenantId: scope.tenantId, hostname, status: "PENDING" } });
+    await audit("tenant_domain.create", "TenantDomain", domain.id, { actorUserId: req.user?.id, after: { tenantId: scope.tenantId, hostname }, ip: req.ip });
+    return reply.code(201).send(domain);
   });
 
   app.get("/branches", { preHandler: authorize(...OPERATIONS) }, async (req, reply) => {

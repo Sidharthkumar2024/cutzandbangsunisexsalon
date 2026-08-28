@@ -293,6 +293,48 @@ export default async function authRoutes(app: FastifyInstance) {
     return reply.code(204).send();
   });
 
+  app.post("/auth/tenant/switch", { preHandler: authorize() }, async (req, reply) => {
+    const { tenantId, branchId } = z.object({
+      tenantId: z.string().min(1),
+      branchId: z.string().min(1).optional(),
+    }).parse(req.body);
+    const header = req.headers.authorization;
+    const tokenHash = header?.startsWith("Bearer ") ? hashToken(header.slice(7)) : undefined;
+    if (!tokenHash) return reply.code(401).send({ error: "unauthenticated" });
+
+    const tenant = await prisma.tenant.findFirst({
+      where: { id: tenantId, deletedAt: null },
+      include: { branches: { where: { deletedAt: null }, orderBy: { name: "asc" }, take: 1 } },
+    });
+    if (!tenant) return reply.code(404).send({ error: "tenant_not_found" });
+
+    let nextBranchId = branchId;
+    if (req.user!.role !== "SUPERADMIN") {
+      const membership = await prisma.tenantMembership.findFirst({
+        where: { tenantId, userId: req.user!.id, isActive: true },
+        select: { branchId: true, role: true, permissionKeys: true },
+      });
+      if (!membership) return reply.code(403).send({ error: "forbidden" });
+      nextBranchId = branchId ?? membership.branchId ?? tenant.branches[0]?.id;
+      if (nextBranchId) {
+        const branch = await prisma.branch.findFirst({ where: { id: nextBranchId, tenantId, deletedAt: null }, select: { id: true } });
+        if (!branch) return reply.code(403).send({ error: "branch_forbidden" });
+      }
+    } else if (nextBranchId) {
+      const branch = await prisma.branch.findFirst({ where: { id: nextBranchId, tenantId, deletedAt: null }, select: { id: true } });
+      if (!branch) return reply.code(400).send({ error: "branch_not_found" });
+    } else {
+      nextBranchId = tenant.branches[0]?.id;
+    }
+
+    await prisma.$transaction([
+      prisma.session.update({ where: { tokenHash }, data: { activeTenantId: tenantId } }),
+      prisma.user.update({ where: { id: req.user!.id }, data: { activeTenantId: tenantId, ...(nextBranchId ? { branchId: nextBranchId } : {}) } }),
+    ]);
+    await audit("auth.tenant_switch", "Tenant", tenantId, { actorUserId: req.user?.id, after: { tenantId, branchId: nextBranchId }, ip: req.ip });
+    return { activeTenantId: tenantId, branchId: nextBranchId ?? null };
+  });
+
   app.get("/auth/me", async (req, reply) => {
     if (!req.user) return reply.code(401).send({ error: "unauthenticated" });
     const user = await prisma.user.findUnique({
