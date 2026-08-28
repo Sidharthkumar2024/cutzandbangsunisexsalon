@@ -7,19 +7,79 @@ import { enqueueEmail } from "@cutz/queue";
 import { authorize, hashToken, WORKSPACE_PERMISSIONS } from "../../plugins/auth.js";
 import { audit } from "../../lib/audit.js";
 import { hashPassword } from "../../lib/password.js";
+import { resolveTenantScope } from "../../lib/tenant-scope.js";
 import { getLoyaltyRules } from "../loyalty/ledger.js";
 
 const OPERATIONS = ["OWNER", "ADMIN", "MANAGER", "RECEPTION", "STAFF"] as const;
+const slugify = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-|-$/gu, "").slice(0, 60);
 
 export default async function platformRoutes(app: FastifyInstance) {
-  app.get("/branches", { preHandler: authorize(...OPERATIONS) }, async (req) =>
-    prisma.branch.findMany({ where: { deletedAt: null, ...(!["OWNER", "ADMIN"].includes(req.user?.role ?? "") ? { id: req.user?.branchId ?? "__none__" } : {}) }, orderBy: { name: "asc" } }),
-  );
+  app.get("/tenants", { preHandler: authorize("SUPERADMIN", "OWNER", "ADMIN", "MANAGER", "RECEPTION", "STAFF") }, async (req) => {
+    if (req.user!.role === "SUPERADMIN") {
+      return prisma.tenant.findMany({
+        where: { deletedAt: null },
+        orderBy: { createdAt: "desc" },
+        include: { plan: true, branches: { where: { deletedAt: null }, orderBy: { name: "asc" } } },
+      });
+    }
+    const memberships = await prisma.tenantMembership.findMany({
+      where: { userId: req.user!.id, isActive: true, tenant: { deletedAt: null } },
+      orderBy: { createdAt: "asc" },
+      include: { tenant: { include: { plan: true, branches: { where: { deletedAt: null }, orderBy: { name: "asc" } } } } },
+    });
+    return memberships.map((membership) => ({ ...membership.tenant, membershipRole: membership.role, membershipBranchId: membership.branchId }));
+  });
+
+  app.post("/tenants", { preHandler: authorize("SUPERADMIN") }, async (req, reply) => {
+    const body = z.object({
+      name: z.string().min(2),
+      slug: z.string().min(2).optional(),
+      ownerEmail: z.string().email().optional(),
+      planSlug: z.string().default("starter"),
+      timezone: z.string().default("Asia/Kolkata"),
+      currency: z.string().length(3).default("INR"),
+      branchName: z.string().min(2).optional(),
+    }).parse(req.body);
+    const plan = await prisma.plan.findUnique({ where: { slug: body.planSlug } });
+    if (!plan) return reply.code(400).send({ error: "plan_not_found" });
+    const slug = slugify(body.slug ?? body.name);
+    if (!slug) return reply.code(400).send({ error: "invalid_slug" });
+    const tenant = await prisma.$transaction(async (tx) => {
+      const created = await tx.tenant.create({
+        data: { name: body.name, slug, status: "TRIAL", planId: plan.id, timezone: body.timezone, currency: body.currency },
+      });
+      const branch = await tx.branch.create({
+        data: { tenantId: created.id, name: body.branchName ?? `${body.name} — Main`, timezone: body.timezone, currency: body.currency },
+      });
+      if (body.ownerEmail) {
+        const owner = await tx.user.upsert({
+          where: { email: body.ownerEmail.toLowerCase() },
+          create: { email: body.ownerEmail.toLowerCase(), role: "OWNER", activeTenantId: created.id, branchId: branch.id },
+          update: { role: "OWNER", activeTenantId: created.id, branchId: branch.id, isActive: true },
+        });
+        await tx.tenant.update({ where: { id: created.id }, data: { ownerUserId: owner.id } });
+        await tx.tenantMembership.create({ data: { tenantId: created.id, userId: owner.id, role: "OWNER", branchId: branch.id } });
+      }
+      return tx.tenant.findUniqueOrThrow({ where: { id: created.id }, include: { plan: true, branches: true, ownerUser: { select: { id: true, email: true } } } });
+    });
+    await audit("tenant.create", "Tenant", tenant.id, { actorUserId: req.user?.id, after: { name: body.name, slug, planId: plan.id }, ip: req.ip });
+    return reply.code(201).send(tenant);
+  });
+
+  app.get("/branches", { preHandler: authorize(...OPERATIONS) }, async (req, reply) => {
+    const { tenantId } = req.query as Record<string, string>;
+    const scope = await resolveTenantScope(req.user!, tenantId);
+    if (!scope.ok) return reply.code(scope.statusCode).send({ error: scope.error });
+    return prisma.branch.findMany({ where: { tenantId: scope.tenantId, deletedAt: null, ...(!["OWNER", "ADMIN"].includes(req.user?.role ?? "") ? { id: req.user?.branchId ?? "__none__" } : {}) }, orderBy: { name: "asc" } });
+  });
 
   app.post("/branches", { preHandler: authorize("OWNER", "ADMIN") }, async (req, reply) => {
-    const body = z.object({ name: z.string().min(2), timezone: z.string().default("Asia/Kolkata"), currency: z.string().length(3).default("INR"), address: z.string().optional(), phone: z.string().optional(), latitude: z.number().min(-90).max(90).optional(), longitude: z.number().min(-180).max(180).optional() }).parse(req.body);
-    const branch = await prisma.branch.create({ data: body });
-    await audit("branch.create", "Branch", branch.id, { actorUserId: req.user?.id, after: body, ip: req.ip });
+    const body = z.object({ tenantId: z.string().optional(), name: z.string().min(2), timezone: z.string().default("Asia/Kolkata"), currency: z.string().length(3).default("INR"), address: z.string().optional(), phone: z.string().optional(), latitude: z.number().min(-90).max(90).optional(), longitude: z.number().min(-180).max(180).optional() }).parse(req.body);
+    const scope = await resolveTenantScope(req.user!, body.tenantId);
+    if (!scope.ok) return reply.code(scope.statusCode).send({ error: scope.error });
+    const { tenantId: _tenantId, ...branchData } = body;
+    const branch = await prisma.branch.create({ data: { ...branchData, tenantId: scope.tenantId } });
+    await audit("branch.create", "Branch", branch.id, { actorUserId: req.user?.id, after: { tenantId: scope.tenantId, ...branchData }, ip: req.ip });
     return reply.code(201).send(branch);
   });
 

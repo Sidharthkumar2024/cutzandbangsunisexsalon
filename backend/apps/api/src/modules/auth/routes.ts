@@ -29,6 +29,16 @@ function twoFactorCredential(input: { code?: string; recoveryCode?: string }) {
   return input.code?.trim() || input.recoveryCode?.trim();
 }
 
+async function resolveActiveTenantId(user: { activeTenantId: string | null; branchId: string | null }) {
+  if (user.activeTenantId) return user.activeTenantId;
+  if (!user.branchId) return "default";
+  const branch = await prisma.branch.findFirst({
+    where: { id: user.branchId, deletedAt: null },
+    select: { tenantId: true },
+  });
+  return branch?.tenantId ?? "default";
+}
+
 export default async function authRoutes(app: FastifyInstance) {
   app.post("/auth/login", { config: { rateLimit: { max: 10, timeWindow: "15 minutes" } } }, async (req, reply) => {
     const { email: rawEmail, password, code, recoveryCode } = z
@@ -77,10 +87,12 @@ export default async function authRoutes(app: FastifyInstance) {
     if (existingToken) {
       await prisma.session.deleteMany({ where: { tokenHash: hashToken(existingToken) } });
     }
+    const activeTenantId = await resolveActiveTenantId(user);
     const { token, tokenHash } = issueToken();
     await prisma.session.create({
       data: {
         userId: user.id,
+        activeTenantId,
         tokenHash,
         expiresAt: new Date(Date.now() + SESSION_TTL_MS),
         ip: req.ip,
@@ -93,6 +105,7 @@ export default async function authRoutes(app: FastifyInstance) {
         id: user.id,
         email: user.email,
         role: user.role,
+        activeTenantId,
         branchId: user.branchId,
         permissionKeys: user.permissionKeys,
         twoFactorEnabled: Boolean(user.twoFaEnabledAt),
@@ -115,7 +128,7 @@ export default async function authRoutes(app: FastifyInstance) {
 
     const exists = await prisma.user.findUnique({ where: { email } });
     if (exists) return reply.code(409).send({ error: "email_taken" });
-    const branch = await prisma.branch.findFirst({ where: { id: branchId, deletedAt: null }, select: { id: true } });
+    const branch = await prisma.branch.findFirst({ where: { id: branchId, deletedAt: null }, select: { id: true, tenantId: true } });
     if (!branch) return reply.code(400).send({ error: "branch_not_found" });
 
     const passwordHash = await hashPassword(password);
@@ -125,6 +138,7 @@ export default async function authRoutes(app: FastifyInstance) {
           email,
           phone,
           role: "CUSTOMER",
+          activeTenantId: branch.tenantId,
           branchId,
           passwordHash,
           customer: { create: { name, email, phone, branchId, emailConsent: true } },
@@ -145,9 +159,9 @@ export default async function authRoutes(app: FastifyInstance) {
     });
     const { token, tokenHash } = issueToken();
     await prisma.session.create({
-      data: { userId: user.id, tokenHash, expiresAt: new Date(Date.now() + SESSION_TTL_MS) },
+      data: { userId: user.id, activeTenantId: branch.tenantId, tokenHash, expiresAt: new Date(Date.now() + SESSION_TTL_MS) },
     });
-    return reply.code(201).send({ token, user: { id: user.id, email, role: user.role } });
+    return reply.code(201).send({ token, user: { id: user.id, email, role: user.role, activeTenantId: branch.tenantId, branchId } });
   });
 
   app.post("/auth/password/forgot", { config: { rateLimit: { max: 5, timeWindow: "1 hour" } } }, async (req, reply) => {
@@ -238,7 +252,7 @@ export default async function authRoutes(app: FastifyInstance) {
   app.post("/auth/staff-invite/accept", { config: { rateLimit: { max: 8, timeWindow: "1 hour" } } }, async (req, reply) => {
     const { token, password } = z.object({ token: z.string().min(32).max(200), password: z.string().min(10).max(128) }).parse(req.body);
     const tokenHash = hashToken(token);
-    const invite = await prisma.staffInvite.findUnique({ where: { tokenHash }, include: { staff: true } });
+    const invite = await prisma.staffInvite.findUnique({ where: { tokenHash }, include: { staff: { include: { branch: { select: { tenantId: true } } } } } });
     if (!invite || invite.acceptedAt || invite.expiresAt <= new Date()) return reply.code(400).send({ error: "invalid_or_expired_invitation" });
     const passwordHash = await hashPassword(password);
     try {
@@ -252,8 +266,13 @@ export default async function authRoutes(app: FastifyInstance) {
           ? await tx.user.findUnique({ where: { id: invite.staff.userId } })
           : await tx.user.findUnique({ where: { email: invite.email } });
         const account = existing
-          ? await tx.user.update({ where: { id: existing.id }, data: { email: invite.email, passwordHash, role: invite.role, permissionKeys: { set: invite.permissionKeys }, branchId: invite.staff.branchId, isActive: true } })
-          : await tx.user.create({ data: { email: invite.email, passwordHash, role: invite.role, permissionKeys: invite.permissionKeys, branchId: invite.staff.branchId, isActive: true } });
+          ? await tx.user.update({ where: { id: existing.id }, data: { email: invite.email, passwordHash, role: invite.role, permissionKeys: { set: invite.permissionKeys }, activeTenantId: invite.staff.branch.tenantId, branchId: invite.staff.branchId, isActive: true } })
+          : await tx.user.create({ data: { email: invite.email, passwordHash, role: invite.role, permissionKeys: invite.permissionKeys, activeTenantId: invite.staff.branch.tenantId, branchId: invite.staff.branchId, isActive: true } });
+        await tx.tenantMembership.upsert({
+          where: { tenantId_userId: { tenantId: invite.staff.branch.tenantId, userId: account.id } },
+          create: { tenantId: invite.staff.branch.tenantId, userId: account.id, role: invite.role, branchId: invite.staff.branchId, permissionKeys: invite.permissionKeys, isActive: true },
+          update: { role: invite.role, branchId: invite.staff.branchId, permissionKeys: { set: invite.permissionKeys }, isActive: true },
+        });
         await tx.staff.update({ where: { id: invite.staffId }, data: { userId: account.id } });
         await tx.session.deleteMany({ where: { userId: account.id } });
         await tx.staffInvite.updateMany({ where: { staffId: invite.staffId, id: { not: invite.id }, acceptedAt: null }, data: { acceptedAt: new Date() } });
@@ -278,7 +297,7 @@ export default async function authRoutes(app: FastifyInstance) {
     if (!req.user) return reply.code(401).send({ error: "unauthenticated" });
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
-      select: { id: true, email: true, phone: true, role: true, branchId: true, permissionKeys: true, twoFaEnabledAt: true },
+      select: { id: true, email: true, phone: true, role: true, activeTenantId: true, branchId: true, permissionKeys: true, twoFaEnabledAt: true },
     });
     if (!user) return reply.code(401).send({ error: "unauthenticated" });
     return {
@@ -286,6 +305,7 @@ export default async function authRoutes(app: FastifyInstance) {
       email: user.email,
       phone: user.phone,
       role: user.role,
+      activeTenantId: req.user.activeTenantId ?? user.activeTenantId,
       branchId: user.branchId,
       permissionKeys: user.permissionKeys,
       twoFactorEnabled: Boolean(user.twoFaEnabledAt),

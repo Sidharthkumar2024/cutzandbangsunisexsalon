@@ -11,7 +11,7 @@ import { prisma } from "@cutz/db";
 
 declare module "fastify" {
   interface FastifyRequest {
-    user?: { id: string; role: RoleName; branchId: string | null; permissionKeys: string[] };
+    user?: { id: string; role: RoleName; activeTenantId: string | null; branchId: string | null; permissionKeys: string[] };
   }
 }
 
@@ -62,6 +62,7 @@ export default fp(async function authPlugin(app: FastifyInstance) {
     req.user = {
       id: session.user.id,
       role: session.user.role,
+      activeTenantId: session.activeTenantId ?? session.user.activeTenantId,
       branchId: session.user.branchId,
       permissionKeys: session.user.permissionKeys,
     };

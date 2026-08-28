@@ -4,6 +4,7 @@ export type BackendUser = {
   id: string;
   email: string;
   role: string;
+  activeTenantId?: string | null;
   branchId: string;
   permissionKeys?: string[];
   twoFactorEnabled?: boolean;

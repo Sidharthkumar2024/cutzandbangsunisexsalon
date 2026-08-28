@@ -232,10 +232,49 @@ function staffForService(service: { id: string; categoryId: string; name: string
 }
 
 async function main() {
+  const plan = await prisma.plan.upsert({
+    where: { slug: "starter" },
+    create: {
+      id: "starter",
+      slug: "starter",
+      name: "Starter",
+      description: "Single-branch starter plan for early salon tenants.",
+      maxBranches: 1,
+      maxStaff: 8,
+      features: ["pos", "customers", "staff", "reports", "email", "whatsapp"],
+    },
+    update: {
+      name: "Starter",
+      description: "Single-branch starter plan for early salon tenants.",
+      maxBranches: 1,
+      maxStaff: 8,
+      features: ["pos", "customers", "staff", "reports", "email", "whatsapp"],
+      isActive: true,
+    },
+  });
+  const tenant = await prisma.tenant.upsert({
+    where: { slug: "cutz-bangs" },
+    create: {
+      id: "default",
+      slug: "cutz-bangs",
+      name: "Cutz & Bangs",
+      status: "ACTIVE",
+      timezone: "Asia/Kolkata",
+      currency: "INR",
+      planId: plan.id,
+    },
+    update: {
+      name: "Cutz & Bangs",
+      status: "ACTIVE",
+      timezone: "Asia/Kolkata",
+      currency: "INR",
+      planId: plan.id,
+    },
+  });
   await prisma.branch.upsert({
     where: { id: "main" },
-    create: { id: "main", name: "Cutz & Bangs — Sector 15 Dwarka", timezone: "Asia/Kolkata", currency: "INR", latitude: 28.6166967, longitude: 77.0283703, address: "First Floor, Plot No. 118, Main Kakrola Road, Patel Garden, Sector 15 Dwarka, New Delhi, Delhi 110059" },
-    update: { name: "Cutz & Bangs — Sector 15 Dwarka", latitude: 28.6166967, longitude: 77.0283703, address: "First Floor, Plot No. 118, Main Kakrola Road, Patel Garden, Sector 15 Dwarka, New Delhi, Delhi 110059" },
+    create: { id: "main", tenantId: tenant.id, name: "Cutz & Bangs — Sector 15 Dwarka", timezone: "Asia/Kolkata", currency: "INR", latitude: 28.6166967, longitude: 77.0283703, address: "First Floor, Plot No. 118, Main Kakrola Road, Patel Garden, Sector 15 Dwarka, New Delhi, Delhi 110059" },
+    update: { tenantId: tenant.id, name: "Cutz & Bangs — Sector 15 Dwarka", latitude: 28.6166967, longitude: 77.0283703, address: "First Floor, Plot No. 118, Main Kakrola Road, Patel Garden, Sector 15 Dwarka, New Delhi, Delhi 110059" },
   });
 
   const ownerEmail = process.env.SEED_OWNER_EMAIL?.trim().toLowerCase();
@@ -244,10 +283,16 @@ async function main() {
   if (ownerEmail && ownerPassword) {
     if (ownerEmail.endsWith("@cutzbangs.local")) throw new Error("SEED_OWNER_EMAIL must be a real non-@cutzbangs.local address");
     if (ownerPassword.length < 12) throw new Error("SEED_OWNER_PASSWORD must be at least 12 characters");
-    await prisma.user.upsert({
+    const owner = await prisma.user.upsert({
       where: { email: ownerEmail },
-      create: { email: ownerEmail, role: "OWNER", branchId: "main", passwordHash: await argon2.hash(ownerPassword, { type: argon2.argon2id }) },
-      update: { role: "OWNER", branchId: "main", isActive: true, passwordHash: await argon2.hash(ownerPassword, { type: argon2.argon2id }) },
+      create: { email: ownerEmail, role: "OWNER", activeTenantId: tenant.id, branchId: "main", passwordHash: await argon2.hash(ownerPassword, { type: argon2.argon2id }) },
+      update: { role: "OWNER", activeTenantId: tenant.id, branchId: "main", isActive: true, passwordHash: await argon2.hash(ownerPassword, { type: argon2.argon2id }) },
+    });
+    await prisma.tenant.update({ where: { id: tenant.id }, data: { ownerUserId: owner.id } });
+    await prisma.tenantMembership.upsert({
+      where: { tenantId_userId: { tenantId: tenant.id, userId: owner.id } },
+      create: { tenantId: tenant.id, userId: owner.id, role: "OWNER", branchId: "main", isActive: true },
+      update: { role: "OWNER", branchId: "main", isActive: true },
     });
   }
 
