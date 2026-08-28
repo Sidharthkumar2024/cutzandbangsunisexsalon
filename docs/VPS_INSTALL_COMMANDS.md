@@ -173,8 +173,8 @@ Then open admin Settings and scan the WAHA QR from the salon WhatsApp phone.
 These are configured inside Admin → Settings:
 
 - SMTP host, port, username, password, from address
-- Official WhatsApp Meta token, phone number ID, app secret, webhook verify token
-- Cloudinary or S3/R2 credentials for permanent invoice/media archive
+- Official WhatsApp Meta token, phone number ID, WABA ID, app secret, webhook verify token
+- Cloudinary cloud name, API key, API secret, folder or S3/R2 credentials for permanent invoice/media archive
 
 Official WhatsApp needs public HTTPS invoice media. Unofficial WAHA can send the local PDF inline.
 

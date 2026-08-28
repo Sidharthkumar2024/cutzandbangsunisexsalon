@@ -9,6 +9,7 @@ to put it in `.env`. Nothing here can be automated from the codebase.
 ## 1. Official WhatsApp Business Platform (Meta Cloud API)
 1. Create a Meta app at developers.facebook.com → add the **WhatsApp** product.
 2. Add/verify your business phone number → note the **Phone number ID**.
+   Also note the **WhatsApp Business Account ID** → `WA_OFFICIAL_WABA_ID`.
 3. Create a **permanent System User token** with `whatsapp_business_messaging` +
    `whatsapp_business_management` → `WA_OFFICIAL_TOKEN`.
 4. App Settings → Basic → **App secret** → `WA_APP_SECRET`.
@@ -23,7 +24,8 @@ to put it in `.env`. Nothing here can be automated from the codebase.
 6. **Template approval:** WhatsApp → Message Templates → submit your
    confirmation/reminder templates → wait for Meta approval (hours–days). Use the
    approved template *names* in the campaign/reminder config.
-   → Fill `WA_OFFICIAL_TOKEN`, `WA_OFFICIAL_PHONE_ID`, `WA_APP_SECRET`, `WA_WEBHOOK_VERIFY_TOKEN`.
+   → Fill `WA_OFFICIAL_TOKEN`, `WA_OFFICIAL_PHONE_ID`, `WA_OFFICIAL_WABA_ID`,
+   `WA_APP_SECRET`, `WA_WEBHOOK_VERIFY_TOKEN`.
 
 ## 2. Unofficial WhatsApp connector (optional — account-ban risk)
 - Set `WA_UNOFFICIAL_ENABLED=true` only if you accept that this can get the number
@@ -44,11 +46,16 @@ to put it in `.env`. Nothing here can be automated from the codebase.
   `SMS_AUTH_TOKEN`, `SMS_FROM`.
 
 ## 5. Object storage (invoices, attendance selfies, vendor bills)
-- Create an S3 or Cloudflare R2 bucket + access keys.
+- Cloudinary option: create/read API credentials from Cloudinary Console →
+  Programmable Media → API keys.
+  → `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`,
+  `CLOUDINARY_FOLDER=cutz-bangs`.
+- S3/R2 option: create an S3 or Cloudflare R2 bucket + access keys.
 - → `STORAGE_ENDPOINT` (blank for AWS S3), `STORAGE_REGION`, `STORAGE_BUCKET`,
   `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY`.
-- If you leave `STORAGE_ACCESS_KEY` blank, files are stored on the local disk at
-  `STORAGE_DIR` (fine to start; move to object storage before scaling).
+- If Cloudinary and S3/R2 are both blank, files are stored on the local disk at
+  `STORAGE_DIR` (fine to start; move to object storage before scaling or before
+  sending official WhatsApp invoice PDFs).
 
 ## 6. AI (campaign copy, inbox FAQ, vendor-bill OCR)
 - Anthropic API key → `ANTHROPIC_API_KEY`. Without it, AI features degrade
@@ -70,8 +77,8 @@ to put it in `.env`. Nothing here can be automated from the codebase.
 | Booking / POS / CRM / membership / package / inventory / campaigns | ✅ done | — |
 | Returns/refunds, discount approval, expiry/renewal automation, consolidated reports | ✅ done | — |
 | PDF invoices + email delivery | ✅ done | SMTP keys to actually send |
-| Object storage | ✅ done (local + S3) | S3 bucket+keys for cloud |
-| Official WhatsApp | ✅ code + webhook + signature | token, webhook registration, template approval |
+| Object storage | ✅ done (local + Cloudinary + S3/R2) | Cloudinary or S3/R2 credentials for cloud |
+| Official WhatsApp | ✅ code + webhook + signature | token, phone ID, WABA ID, webhook registration, template approval |
 | Unofficial WhatsApp | ✅ isolated connector | scan QR with real phone |
 | SMS reminders | adapter-ready | SMS provider keys |
 | Production deploy | ✅ compose + runbook | your VPS + domain |
