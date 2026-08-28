@@ -107,6 +107,14 @@ docker compose --env-file backend/.env.production -f docker-compose.vps.yml exec
 docker compose --env-file backend/.env.production -f docker-compose.vps.yml exec api pnpm --filter @cutz/db exec tsx prisma/seed-codex.ts
 ```
 
+If this is a fresh production launch and you want to remove all demo/customer
+history while keeping services, staff, branches, admin users, settings,
+products, inventory, and cash/expense setup:
+
+```bash
+docker compose --env-file backend/.env.production -f docker-compose.vps.yml exec -e CONFIRM_CLEAR_CUSTOMER_DATA=yes api pnpm --filter @cutz/db exec tsx prisma/clear-customer-data.ts
+```
+
 Verify:
 
 ```bash
