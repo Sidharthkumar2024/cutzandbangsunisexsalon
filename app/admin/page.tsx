@@ -19,9 +19,13 @@ import {
   type BackendCategory,
   type BackendInvoiceArchive,
   type BackendInvoiceArchiveItem,
+  type BackendPlan,
   type BackendProviderConfig,
   type BackendRangeReport,
   type BackendSnapshot,
+  type BackendSubscription,
+  type BackendTenant,
+  type BackendTenantDomain,
   type BackendWhatsAppTemplate,
   type BackendWhatsAppStatus,
 } from "../../lib/backend-api";
@@ -44,6 +48,7 @@ type View =
   | "staff"
   | "attendance"
   | "payroll"
+  | "saas"
   | "system"
   | "settings";
 type CartItem = {
@@ -266,6 +271,10 @@ const navGroups: Array<{
       { id: "system", label: "System & audit", icon: "SY" },
     ],
   },
+  {
+    label: "Platform",
+    items: [{ id: "saas", label: "SaaS platform", icon: "SA" }],
+  },
 ];
 
 const viewPermission: Partial<Record<View, string>> = {
@@ -313,6 +322,10 @@ const viewTitles: Record<View, [string, string]> = {
     "Payroll foundation",
     "Attendance hours, service revenue and estimated commission.",
   ],
+  saas: [
+    "SaaS platform",
+    "Create salons, assign plans, connect domains and prepare multi-branch rollout.",
+  ],
   system: [
     "System health & audit",
     "Service checks, security posture and an immutable change history.",
@@ -333,7 +346,6 @@ export default function AdminPage() {
   const backend = useBackendIntegration();
   const unreadNotifications = backend.data.notifications.filter((item) => !item.readAt);
   const unreadConversations = backend.data.conversations.filter((item) => item.unread).length;
-  const [title, subtitle] = viewTitles[view];
   const liveServices = backend.data.categories
     .flatMap((category) => category.services)
     .map((service) => ({
@@ -365,7 +377,7 @@ export default function AdminPage() {
         )
         .slice(0, 8)
     : [];
-  const adminRoles = new Set(["OWNER", "ADMIN", "MANAGER", "RECEPTION"]);
+  const adminRoles = new Set(["SUPERADMIN", "OWNER", "ADMIN", "MANAGER", "RECEPTION"]);
   if (backend.status !== "connected" || !backend.data.user) {
     return <AdminAccessGate status={backend.status} error={backend.error} />;
   }
@@ -373,7 +385,9 @@ export default function AdminPage() {
     return <AdminAccessGate status="forbidden" error="This account does not have admin workspace access." onLogout={backend.logout} />;
   }
   const allowedViews = new Set<View>(
-    role === "RECEPTION"
+    role === "SUPERADMIN"
+      ? ["saas", "settings"]
+      : role === "RECEPTION"
       ? ["dashboard", "calendar", "pos", "customers", "memberships", "inbox", "cash", "invoices"]
       : role === "MANAGER"
         ? ["dashboard", "calendar", "pos", "customers", "memberships", "services", "inventory", "cash", "invoices", "inbox", "coupons", "campaigns", "reports", "staff", "attendance", "payroll", "settings"]
@@ -388,6 +402,8 @@ export default function AdminPage() {
       if (permission && !granularPermissions.includes(permission)) allowedViews.delete(allowedView);
     }
   }
+  const activeView = allowedViews.has(view) ? view : ([...allowedViews][0] ?? "dashboard");
+  const [title, subtitle] = viewTitles[activeView];
 
   const selectView = (next: View) => {
     setView(next);
@@ -462,7 +478,7 @@ export default function AdminPage() {
               {group.items.filter((item) => !role || allowedViews.has(item.id)).map((item) => (
                 <button
                   key={item.id}
-                  className={view === item.id ? "active" : ""}
+                  className={activeView === item.id ? "active" : ""}
                   onClick={() => selectView(item.id)}
                 >
                   <span>{item.icon}</span>
@@ -474,7 +490,7 @@ export default function AdminPage() {
           ))}
         </nav>
         {allowedViews.has("settings") && <button
-          className={`sidebar-settings ${view === "settings" ? "active" : ""}`}
+          className={`sidebar-settings ${activeView === "settings" ? "active" : ""}`}
           onClick={() => selectView("settings")}
         >
           <span>SE</span>Settings
@@ -614,25 +630,25 @@ export default function AdminPage() {
             </div>
             {allowedViews.has("pos") && <button
               className="button admin-primary"
-              onClick={() => selectView(view === "pos" ? "calendar" : "pos")}
+              onClick={() => selectView(activeView === "pos" ? "calendar" : "pos")}
             >
-              {view === "pos" ? "+ New booking" : "+ New sale"}
+              {activeView === "pos" ? "+ New booking" : "+ New sale"}
             </button>}
           </div>
         </header>
         <div className="admin-page">
           <BackendConnection backend={backend} />
-          {view === "dashboard" && (
+          {activeView === "dashboard" && (
             <Dashboard token={backend.token} onView={selectView} data={backend.data} />
           )}
-          {view === "calendar" && (
+          {activeView === "calendar" && (
             <Calendar
               token={backend.token}
               data={backend.data}
               onRefresh={() => void backend.refresh()}
             />
           )}
-          {view === "pos" && (
+          {activeView === "pos" && (
             <POS
               cart={cart}
               services={pointOfSaleServices}
@@ -664,7 +680,7 @@ export default function AdminPage() {
               onOpenCashbook={() => selectView("cash")}
             />
           )}
-          {view === "customers" && (
+          {activeView === "customers" && (
             <Customers
               token={backend.token}
               data={backend.data}
@@ -673,78 +689,79 @@ export default function AdminPage() {
               onRefresh={() => void backend.refresh()}
             />
           )}
-          {view === "memberships" && (
+          {activeView === "memberships" && (
             <Memberships
               token={backend.token}
               data={backend.data}
               onRefresh={() => void backend.refresh()}
             />
           )}
-          {view === "services" && (
+          {activeView === "services" && (
             <Services
               token={backend.token}
               data={backend.data}
               onRefresh={() => void backend.refresh()}
             />
           )}
-          {view === "inventory" && (
+          {activeView === "inventory" && (
             <Inventory
               token={backend.token}
               data={backend.data}
               onRefresh={() => void backend.refresh()}
             />
           )}
-          {view === "cash" && (
+          {activeView === "cash" && (
             <Cashbook token={backend.token} data={backend.data} onRefresh={() => void backend.refresh()} />
           )}
-          {view === "invoices" && (
+          {activeView === "invoices" && (
             <Invoices token={backend.token} data={backend.data} onRefresh={() => void backend.refresh()} />
           )}
-          {view === "inbox" && (
+          {activeView === "inbox" && (
             <Inbox
               token={backend.token}
               data={backend.data}
               onRefresh={() => void backend.refresh()}
             />
           )}
-          {view === "content" && <WebsiteContent token={backend.token} />}
-          {view === "coupons" && (
+          {activeView === "content" && <WebsiteContent token={backend.token} />}
+          {activeView === "coupons" && (
             <Coupons
               token={backend.token}
               data={backend.data}
               onRefresh={() => void backend.refresh()}
             />
           )}
-          {view === "campaigns" && (
+          {activeView === "campaigns" && (
             <Campaigns
               token={backend.token}
               data={backend.data}
               onRefresh={() => void backend.refresh()}
             />
           )}
-          {view === "reports" && <Reports token={backend.token} data={backend.data} />}
-          {view === "staff" && (
+          {activeView === "reports" && <Reports token={backend.token} data={backend.data} />}
+          {activeView === "staff" && (
             <Staff
               token={backend.token}
               data={backend.data}
               onRefresh={() => void backend.refresh()}
             />
           )}
-          {view === "attendance" && (
+          {activeView === "attendance" && (
             <Attendance
               token={backend.token}
               data={backend.data}
               onRefresh={() => void backend.refresh()}
             />
           )}
-          {view === "payroll" && <Payroll data={backend.data} />}
-          {view === "system" && (
+          {activeView === "payroll" && <Payroll data={backend.data} />}
+          {activeView === "saas" && <SaasPlatform token={backend.token} />}
+          {activeView === "system" && (
             <SystemAndAudit
               token={backend.token}
               data={backend.data}
             />
           )}
-          {view === "settings" && (
+          {activeView === "settings" && (
             <Settings
               token={backend.token}
               data={backend.data}
@@ -754,6 +771,310 @@ export default function AdminPage() {
         </div>
       </section>
     </main>
+  );
+}
+
+type SaasTenantDraft = {
+  name: string;
+  slug: string;
+  ownerEmail: string;
+  branchName: string;
+  planSlug: string;
+  primaryDomain: string;
+};
+
+function SaasPlatform({ token }: { token: string }) {
+  const [plans, setPlans] = useState<BackendPlan[]>([]);
+  const [tenants, setTenants] = useState<BackendTenant[]>([]);
+  const [selectedTenantId, setSelectedTenantId] = useState("");
+  const [subscription, setSubscription] = useState<BackendSubscription | null>(null);
+  const [domains, setDomains] = useState<BackendTenantDomain[]>([]);
+  const [draft, setDraft] = useState<SaasTenantDraft>({
+    name: "",
+    slug: "",
+    ownerEmail: "",
+    branchName: "Main branch",
+    planSlug: "starter",
+    primaryDomain: "",
+  });
+  const [domainHost, setDomainHost] = useState("");
+  const [subscriptionPlanId, setSubscriptionPlanId] = useState("");
+  const [subscriptionStatus, setSubscriptionStatus] = useState("ACTIVE");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const selectedTenant = tenants.find((tenant) => tenant.id === selectedTenantId) ?? tenants[0];
+
+  const loadPlatform = async () => {
+    if (!token) return;
+    const [nextPlans, nextTenants] = await Promise.all([
+      backendApi.plans(),
+      backendApi.tenants(token),
+    ]);
+    setPlans(nextPlans);
+    setTenants(nextTenants);
+    if (!selectedTenantId && nextTenants[0]) setSelectedTenantId(nextTenants[0].id);
+    if (!draft.planSlug && nextPlans[0]) setDraft((current) => ({ ...current, planSlug: nextPlans[0].slug }));
+  };
+
+  useEffect(() => {
+    let active = true;
+    setMessage("");
+    Promise.all([backendApi.plans(), backendApi.tenants(token)])
+      .then(([nextPlans, nextTenants]) => {
+        if (!active) return;
+        setPlans(nextPlans);
+        setTenants(nextTenants);
+        setSelectedTenantId((current) => current || nextTenants[0]?.id || "");
+        setDraft((current) => ({ ...current, planSlug: current.planSlug || nextPlans[0]?.slug || "starter" }));
+      })
+      .catch((error) => {
+        if (active) setMessage(error instanceof Error ? error.message : "SaaS platform could not be loaded.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [token]);
+
+  useEffect(() => {
+    if (!token || !selectedTenantId) {
+      setSubscription(null);
+      setDomains([]);
+      return;
+    }
+    let active = true;
+    Promise.all([
+      backendApi.tenantSubscription(token, selectedTenantId),
+      backendApi.tenantDomains(token, selectedTenantId),
+    ])
+      .then(([nextSubscription, nextDomains]) => {
+        if (!active) return;
+        setSubscription(nextSubscription);
+        setDomains(nextDomains);
+        setSubscriptionPlanId(nextSubscription?.planId ?? plans[0]?.id ?? "");
+        setSubscriptionStatus(nextSubscription?.status ?? "ACTIVE");
+      })
+      .catch((error) => {
+        if (active) setMessage(error instanceof Error ? error.message : "Tenant details could not be loaded.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [plans, selectedTenantId, token]);
+
+  const createTenant = async () => {
+    if (!draft.name.trim()) {
+      setMessage("Salon name is required.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const tenant = await backendApi.createTenant(token, {
+        name: draft.name.trim(),
+        slug: draft.slug.trim() || undefined,
+        ownerEmail: draft.ownerEmail.trim() || undefined,
+        planSlug: draft.planSlug,
+        branchName: draft.branchName.trim() || "Main branch",
+        primaryDomain: draft.primaryDomain.trim() || undefined,
+      });
+      setSelectedTenantId(tenant.id);
+      setDraft({ name: "", slug: "", ownerEmail: "", branchName: "Main branch", planSlug: draft.planSlug, primaryDomain: "" });
+      await loadPlatform();
+      setMessage(`${tenant.name} created. Owner can now be invited from staff/team access.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Tenant could not be created.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updateTenantStatus = async (tenant: BackendTenant, status: string) => {
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.updateTenant(token, tenant.id, { status });
+      await loadPlatform();
+      setMessage(`${tenant.name} marked ${prettyStatus(status)}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Tenant status could not be updated.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveSubscription = async () => {
+    if (!selectedTenant || !subscriptionPlanId) {
+      setMessage("Select a salon and plan first.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const next = await backendApi.setTenantSubscription(token, selectedTenant.id, {
+        planId: subscriptionPlanId,
+        status: subscriptionStatus,
+        interval: subscription?.interval ?? "MONTHLY",
+      });
+      setSubscription(next);
+      await loadPlatform();
+      setMessage(`Subscription updated for ${selectedTenant.name}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Subscription could not be updated.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addDomain = async () => {
+    if (!selectedTenant || !domainHost.trim()) {
+      setMessage("Enter a domain for the selected salon.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.createTenantDomain(token, selectedTenant.id, domainHost.trim());
+      setDomainHost("");
+      setDomains(await backendApi.tenantDomains(token, selectedTenant.id));
+      await loadPlatform();
+      setMessage(`Domain added for ${selectedTenant.name}. Point DNS A/CNAME to the app server, then verify.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Domain could not be added.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const stats = [
+    ["Salons", tenants.length],
+    ["Active", tenants.filter((tenant) => tenant.status === "ACTIVE").length],
+    ["Plans", plans.filter((plan) => plan.isActive).length],
+    ["Domains", tenants.reduce((sum, tenant) => sum + (tenant.primaryDomain ? 1 : 0), 0) + domains.length],
+  ];
+
+  return (
+    <div className="saas-platform-view">
+      {message && <div className="backend-banner"><span>●</span><div><strong>Platform update</strong><small>{message}</small></div><button onClick={() => setMessage("")}>Dismiss</button></div>}
+      <section className="saas-kpis">
+        {stats.map(([label, value]) => (
+          <article className="admin-card" key={label}>
+            <small>{label}</small>
+            <strong>{value}</strong>
+          </article>
+        ))}
+      </section>
+
+      <section className="admin-card phase-one-form saas-create-form">
+        <div>
+          <p className="eyebrow">New salon tenant</p>
+          <h2>Create a salon workspace</h2>
+          <p>Every salon gets isolated data, its own branches, plan and custom domain mapping.</p>
+        </div>
+        <label>
+          Salon name
+          <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="Example: Glow Studio" />
+        </label>
+        <label>
+          Slug
+          <input value={draft.slug} onChange={(event) => setDraft({ ...draft, slug: event.target.value })} placeholder="glow-studio" />
+        </label>
+        <label>
+          Owner email
+          <input value={draft.ownerEmail} onChange={(event) => setDraft({ ...draft, ownerEmail: event.target.value })} placeholder="owner@example.com" type="email" />
+        </label>
+        <label>
+          Branch name
+          <input value={draft.branchName} onChange={(event) => setDraft({ ...draft, branchName: event.target.value })} placeholder="Main branch" />
+        </label>
+        <label>
+          Primary domain
+          <input value={draft.primaryDomain} onChange={(event) => setDraft({ ...draft, primaryDomain: event.target.value })} placeholder="salon.example.com" />
+        </label>
+        <label>
+          Plan
+          <select value={draft.planSlug} onChange={(event) => setDraft({ ...draft, planSlug: event.target.value })}>
+            {plans.map((plan) => <option value={plan.slug} key={plan.id}>{plan.name} · {money(plan.monthlyPriceMinor)}/mo</option>)}
+          </select>
+        </label>
+        <button className="button admin-primary" disabled={busy} onClick={() => void createTenant()}>
+          {busy ? "Working…" : "Create salon"}
+        </button>
+      </section>
+
+      <div className="saas-management-grid">
+        <section className="admin-card saas-tenant-list">
+          <div className="card-head"><div><h2>Salon tenants</h2><p>Select a salon to manage subscription and domains.</p></div><button onClick={() => void loadPlatform()}>Refresh</button></div>
+          {tenants.map((tenant) => (
+            <button
+              key={tenant.id}
+              className={selectedTenant?.id === tenant.id ? "active" : ""}
+              onClick={() => setSelectedTenantId(tenant.id)}
+            >
+              <span><strong>{tenant.name}</strong><small>{tenant.slug} · {tenant.branches?.length ?? 0} branches · {tenant.plan?.name ?? "No plan"}</small></span>
+              <b className={`tenant-status ${tenant.status.toLowerCase()}`}>{prettyStatus(tenant.status)}</b>
+            </button>
+          ))}
+          {!tenants.length && <p className="empty-cart">No salon tenants created yet.</p>}
+        </section>
+
+        <section className="admin-card saas-tenant-detail">
+          <div className="card-head">
+            <div>
+              <h2>{selectedTenant?.name ?? "Select salon"}</h2>
+              <p>{selectedTenant ? `${selectedTenant.slug} · ${selectedTenant.timezone} · ${selectedTenant.currency}` : "Choose a tenant from the list."}</p>
+            </div>
+            {selectedTenant && (
+              <div className="customer-360-actions">
+                <button disabled={busy || selectedTenant.status === "ACTIVE"} onClick={() => void updateTenantStatus(selectedTenant, "ACTIVE")}>Activate</button>
+                <button disabled={busy || selectedTenant.status === "SUSPENDED"} onClick={() => void updateTenantStatus(selectedTenant, "SUSPENDED")}>Suspend</button>
+              </div>
+            )}
+          </div>
+
+          {selectedTenant && (
+            <>
+              <div className="saas-detail-panels">
+                <label>
+                  Subscription plan
+                  <select value={subscriptionPlanId} onChange={(event) => setSubscriptionPlanId(event.target.value)}>
+                    {plans.map((plan) => <option value={plan.id} key={plan.id}>{plan.name}</option>)}
+                  </select>
+                </label>
+                <label>
+                  Status
+                  <select value={subscriptionStatus} onChange={(event) => setSubscriptionStatus(event.target.value)}>
+                    <option value="TRIALING">Trialing</option>
+                    <option value="ACTIVE">Active</option>
+                    <option value="PAST_DUE">Past due</option>
+                    <option value="CANCELLED">Cancelled</option>
+                  </select>
+                </label>
+                <button disabled={busy} onClick={() => void saveSubscription()}>Save subscription</button>
+              </div>
+
+              <div className="saas-domain-panel">
+                <label>
+                  Add custom domain
+                  <input value={domainHost} onChange={(event) => setDomainHost(event.target.value)} placeholder="salon.example.com" />
+                </label>
+                <button disabled={busy} onClick={() => void addDomain()}>Add domain</button>
+              </div>
+
+              <div className="saas-domain-list">
+                {(domains.length ? domains : selectedTenant.primaryDomain ? [{ id: selectedTenant.primaryDomain, hostname: selectedTenant.primaryDomain, status: "PENDING", tenantId: selectedTenant.id }] : []).map((domain) => (
+                  <span key={domain.id}>
+                    <strong>{domain.hostname}</strong>
+                    <small>{prettyStatus(domain.status)}</small>
+                  </span>
+                ))}
+                {!domains.length && !selectedTenant.primaryDomain && <p>No domains connected yet.</p>}
+              </div>
+            </>
+          )}
+        </section>
+      </div>
+    </div>
   );
 }
 

@@ -62,6 +62,7 @@ export default async function platformRoutes(app: FastifyInstance) {
       timezone: z.string().default("Asia/Kolkata"),
       currency: z.string().length(3).default("INR"),
       branchName: z.string().min(2).optional(),
+      primaryDomain: z.string().min(3).optional(),
     }).parse(req.body);
     const plan = await prisma.plan.findUnique({ where: { slug: body.planSlug } });
     if (!plan) return reply.code(400).send({ error: "plan_not_found" });
@@ -69,7 +70,7 @@ export default async function platformRoutes(app: FastifyInstance) {
     if (!slug) return reply.code(400).send({ error: "invalid_slug" });
     const tenant = await prisma.$transaction(async (tx) => {
       const created = await tx.tenant.create({
-        data: { name: body.name, slug, status: "TRIAL", planId: plan.id, timezone: body.timezone, currency: body.currency },
+        data: { name: body.name, slug, status: "TRIAL", planId: plan.id, timezone: body.timezone, currency: body.currency, primaryDomain: body.primaryDomain },
       });
       const branch = await tx.branch.create({
         data: { tenantId: created.id, name: body.branchName ?? `${body.name} — Main`, timezone: body.timezone, currency: body.currency },

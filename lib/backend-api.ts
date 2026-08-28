@@ -979,7 +979,7 @@ export const backendApi = {
   createPlan: (token: string, payload: Partial<BackendPlan> & { name: string }) =>
     request<BackendPlan>("/plans", { method: "POST", body: JSON.stringify(payload) }, token),
   tenants: (token: string) => request<BackendTenant[]>("/tenants", {}, token),
-  createTenant: (token: string, payload: { name: string; slug?: string; ownerEmail?: string; planSlug?: string; timezone?: string; currency?: string; branchName?: string }) =>
+  createTenant: (token: string, payload: { name: string; slug?: string; ownerEmail?: string; planSlug?: string; timezone?: string; currency?: string; branchName?: string; primaryDomain?: string }) =>
     request<BackendTenant>("/tenants", { method: "POST", body: JSON.stringify(payload) }, token),
   updateTenant: (token: string, tenantId: string, payload: Partial<Pick<BackendTenant, "name" | "status" | "primaryDomain" | "timezone" | "currency">> & { planId?: string | null; trialEndsAt?: string | null }) =>
     request<BackendTenant>(`/tenants/${encodeURIComponent(tenantId)}`, { method: "PATCH", body: JSON.stringify(payload) }, token),
