@@ -8,7 +8,11 @@ COPY packages ./packages
 COPY apps/worker ./apps/worker
 RUN pnpm install --frozen-lockfile=false
 RUN pnpm --filter @cutz/db exec prisma generate
-RUN pnpm --filter @cutz/db build && pnpm --filter @cutz/types build && pnpm --filter @cutz/worker build
+RUN pnpm --filter @cutz/db build \
+  && pnpm --filter @cutz/types build \
+  && pnpm --filter @cutz/queue build \
+  && pnpm --filter @cutz/providers build \
+  && pnpm --filter @cutz/worker build
 
 FROM base AS run
 ENV NODE_ENV=production
