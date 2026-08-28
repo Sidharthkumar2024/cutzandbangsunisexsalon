@@ -41,11 +41,20 @@ function sameSiteOrigins(request: Request, incoming: URL) {
       if (trimmed && trimmed !== '*') origins.add(trimmed);
     }
   }
-  if (isProduction) {
-    origins.add('https://cutzandbangs.com');
-    origins.add('https://www.cutzandbangs.com');
-  }
+  origins.add('https://cutzandbangs.com');
+  origins.add('https://www.cutzandbangs.com');
   return origins;
+}
+
+function isAllowedSameSiteOrigin(origin: string, allowedOrigins: Set<string>) {
+  const normalized = origin.replace(/\/+$/, '');
+  if (allowedOrigins.has(normalized)) return true;
+  try {
+    const host = new URL(normalized).host.toLowerCase();
+    return host === 'cutzandbangs.com' || host === 'www.cutzandbangs.com';
+  } catch {
+    return false;
+  }
 }
 
 async function forward(request: Request, context: { params: Promise<{ path: string[] }> }) {
@@ -65,7 +74,7 @@ async function forward(request: Request, context: { params: Promise<{ path: stri
   }
   const isMutation = !['GET', 'HEAD', 'OPTIONS'].includes(request.method);
   const origin = request.headers.get('origin');
-  if (isMutation && origin && !sameSiteOrigins(request, incoming).has(origin.replace(/\/+$/, ''))) {
+  if (isMutation && origin && !isAllowedSameSiteOrigin(origin, sameSiteOrigins(request, incoming))) {
     return Response.json({ error: 'cross_site_request_rejected' }, { status: 403 });
   }
 
