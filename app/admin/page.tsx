@@ -6089,16 +6089,7 @@ function Campaigns({
     try {
       if (audienceMode === "MANUAL" && manualStats.valid < 1) throw new Error("Paste numbers or import a CSV before creating a manual campaign.");
       if (audienceMode === "MANUAL" && channel.startsWith("WHATSAPP") && !manualConsentConfirmed) throw new Error("Confirm WhatsApp consent before sending to pasted/CSV numbers.");
-      if (audienceMode === "MANUAL") {
-        const contacts = manualStats.uniquePhones.map((phone) => ({
-          name: `Customer ${phone.slice(-4)}`,
-          phone,
-          waConsent: channel.startsWith("WHATSAPP") && manualConsentConfirmed,
-          emailConsent: false,
-          consentSource: "Manual campaign audience",
-        }));
-        await backendApi.importCampaignContacts(token, { branchId: "main", rows: contacts });
-      }
+      if (audienceMode === "MANUAL" && channel === "EMAIL") throw new Error("Email campaigns need CRM customers with email consent. Use a CRM segment for email.");
       const result = await backendApi.createCampaign(token, {
         name,
         channel,
@@ -6115,7 +6106,7 @@ function Campaigns({
       setMediaKey(""); setMediaType(""); setMediaName("");
       if (audienceMode === "MANUAL") setManualNumbers("");
       setLastImportSummary("");
-      setMessage(`Campaign created for ${result._count.recipients} eligible contacts. Approve it to send now with safe pacing.`);
+      setMessage(`Campaign created for ${result._count.recipients} eligible contacts. Pasted/CSV numbers were kept campaign-only, not added to Customers.`);
       onRefresh();
     } catch (cause) {
       setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Campaign could not be created.");
@@ -6177,12 +6168,10 @@ function Campaigns({
       setVerification(null);
       setLastImportSummary(`${stats.total} numbers found · ${stats.valid} valid · ${stats.duplicates} duplicate · ${stats.invalid} invalid`);
       if (channel.startsWith("WHATSAPP") && !manualConsentConfirmed) {
-        setMessage(`CSV read: ${stats.valid} valid numbers. Tick consent confirmation before importing or sending WhatsApp campaign.`);
+        setMessage(`CSV loaded: ${stats.valid} valid campaign-only numbers. Tick consent confirmation before sending WhatsApp campaign.`);
         return;
       }
-      const result = await backendApi.importCampaignContacts(token, { branchId: "main", rows: contacts });
-      setMessage(`CSV imported: ${result.created} added, ${result.updated} updated, ${result.consented} WhatsApp opt-ins, ${result.duplicates} duplicates, ${result.invalid} invalid.`);
-      onRefresh();
+      setMessage(`CSV loaded: ${stats.valid} valid campaign-only numbers. Nothing was added to Customers/CRM.`);
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : "CSV import failed.");
     } finally {
@@ -6204,8 +6193,8 @@ function Campaigns({
       </div>
       <section className="campaign-safety-grid">
         <article className="admin-card csv-import-card">
-          <div><p className="eyebrow">Marketing audience</p><h2>CSV or pasted numbers</h2><p>CSV can contain only phone numbers; name is optional. You can also paste one number per line, comma or space.</p></div>
-          <label className="csv-picker"><span>{busy ? "Importing…" : "Choose CSV file"}</span><input type="file" accept=".csv,text/csv" disabled={busy || !token} onChange={(event) => void importContacts(event.target.files?.[0])} /></label>
+          <div><p className="eyebrow">Marketing audience</p><h2>CSV or pasted numbers</h2><p>CSV can contain only phone numbers; name is optional. These numbers are campaign-only and are not saved to Customers/CRM.</p></div>
+          <label className="csv-picker"><span>{busy ? "Reading…" : "Choose CSV file"}</span><input type="file" accept=".csv,text/csv" disabled={busy || !token} onChange={(event) => void importContacts(event.target.files?.[0])} /></label>
           <label className="campaign-consent"><input type="checkbox" checked={manualConsentConfirmed} onChange={(event) => setManualConsentConfirmed(event.target.checked)} /> I have permission to send WhatsApp marketing to pasted/CSV numbers.</label>
           <textarea value={manualNumbers} onChange={(event) => { setManualNumbers(event.target.value); setAudienceMode("MANUAL"); setVerification(null); }} rows={5} placeholder="Paste mobile numbers here…" />
           <div className="campaign-audience-stats">
@@ -6235,7 +6224,7 @@ function Campaigns({
         <article><small>Replies / failed</small><strong>{campaignTotals.replied}/{campaignTotals.failed}</strong><span>Follow-up and cleanup list</span></article>
       </section>
       <section className="admin-card campaign-builder phase-one-form">
-        <div><p className="eyebrow">Send now after approval</p><h2>Create campaign</h2><small>Choose CRM segment or pasted/CSV numbers. Unofficial WhatsApp appends “Reply STOP to opt out” and uses pacing to reduce ban risk.</small></div>
+        <div><p className="eyebrow">Send now after approval</p><h2>Create campaign</h2><small>Choose a CRM segment for saved customers, or use pasted/CSV numbers as campaign-only recipients. Unofficial WhatsApp appends “Reply STOP to opt out” and uses pacing to reduce ban risk.</small></div>
         <label>Name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="August comeback offer" /></label>
         <label>Audience mode<select value={audienceMode} onChange={(event) => setAudienceMode(event.target.value as "SEGMENT" | "MANUAL")}><option value="SEGMENT">CRM segment</option><option value="MANUAL">CSV / pasted numbers</option></select></label>
         <label>CRM audience<select value={segment} onChange={(event) => setSegment(event.target.value)} disabled={audienceMode === "MANUAL"}><option value="NEW">New</option><option value="REPEAT">Repeat</option><option value="VIP">VIP</option><option value="AT_RISK">At-risk</option><option value="LAPSED">Lapsed</option><option value="MEMBER">Members</option><option value="HIGH_SPEND">High spend</option></select></label>
@@ -6248,7 +6237,7 @@ function Campaigns({
       <div className="campaign-steps">
         {[
           ["1", "Audience", audienceMode === "MANUAL" ? `${manualStats.valid} pasted/CSV numbers` : `At-risk / lapsed · ${attention}`],
-          ["2", "Safety", "Consent, duplicates and STOP opt-out"],
+          ["2", "Safety", "Campaign-only import, consent and STOP opt-out"],
           ["3", "Channel", "Official or unofficial WhatsApp"],
           ["4", "Reports", "Sent, delivered, read, replied, failed"],
         ].map(([num, label, detail], i) => (

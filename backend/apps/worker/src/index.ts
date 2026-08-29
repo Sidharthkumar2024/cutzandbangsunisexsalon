@@ -119,35 +119,41 @@ new Worker<CampaignJob>(
 
     const recipient = await prisma.campaignRecipient.findUnique({ where: { id: recipientId } });
     if (!recipient || recipient.campaignId !== campaignId || recipient.status !== "queued") return;
-    const customer = await prisma.customer.findUnique({ where: { id: recipient.customerId } });
-    if (!customer) {
+    const customer = recipient.customerId
+      ? await prisma.customer.findUnique({ where: { id: recipient.customerId } })
+      : null;
+    const recipientName = customer?.name ?? recipient.externalName ?? (recipient.externalPhone ? `Guest ${recipient.externalPhone.slice(-4)}` : "there");
+    const recipientPhone = customer?.phone ?? recipient.externalPhone;
+    const recipientEmail = customer?.email ?? recipient.externalEmail;
+    if (recipient.customerId && !customer && !recipientPhone && !recipientEmail) {
       await mark(recipient.id, "failed", "customer_not_found");
       await finishCampaignIfComplete(campaignId);
       return;
     }
     try {
+      const daysSinceVisit = customer?.lastVisitAt
+        ? Math.max(0, Math.floor((Date.now() - customer.lastVisitAt.getTime()) / 86_400_000))
+        : 0;
       const content = campaign.content.replace(/\{\{([a-zA-Z][a-zA-Z0-9_]*)\}\}/gu, (_match, key: string) => {
         const values: Record<string, string | number> = {
-          name: customer.name,
-          days: customer.lastVisitAt
-            ? Math.max(0, Math.floor((Date.now() - customer.lastVisitAt.getTime()) / 86_400_000))
-            : 0,
+          name: recipientName,
+          days: daysSinceVisit,
         };
         return String(values[key] ?? "");
       });
       const mediaUrl = campaign.mediaKey ? await providers.storage().signedUrl(campaign.mediaKey, 3_600) : undefined;
       let externalId: string | undefined;
-      if (campaign.channel === "EMAIL" && customer.email && customer.emailConsent) {
+      if (campaign.channel === "EMAIL" && recipientEmail && (!customer || customer.emailConsent)) {
         const image = mediaUrl && campaign.mediaType === "image" ? `<p><img src="${mediaUrl}" alt="" style="max-width:100%;height:auto" /></p>` : "";
-        const result = await emailProvider.send({ to: customer.email, subject: campaign.name, html: `${image}<p>${content}</p>` });
+        const result = await emailProvider.send({ to: recipientEmail, subject: campaign.name, html: `${image}<p>${content}</p>` });
         if (result.status === "failed") throw new Error(result.error ?? "email_send_failed");
         externalId = result.externalId || undefined;
-      } else if (["WHATSAPP_OFFICIAL", "WHATSAPP_UNOFFICIAL"].includes(campaign.channel) && customer.phone && customer.waConsent) {
+      } else if (["WHATSAPP_OFFICIAL", "WHATSAPP_UNOFFICIAL"].includes(campaign.channel) && recipientPhone && (!customer || customer.waConsent)) {
         const body = campaign.channel === "WHATSAPP_UNOFFICIAL" && !/reply\s+stop|बंद/i.test(content)
           ? `${content}\n\nReply STOP to opt out.`
           : content;
         const result = await (campaign.channel === "WHATSAPP_UNOFFICIAL" ? unofficialMessaging : officialMessaging).send({
-          to: customer.phone,
+          to: recipientPhone,
           body,
           mediaUrl,
           mediaType: campaign.mediaType as "image" | "document" | "video" | undefined,

@@ -450,16 +450,17 @@ model Customer {
   updatedAt     DateTime  @updatedAt
   deletedAt     DateTime?
 
-  appointments      Appointment[]
-  invoices          Invoice[]
-  memberships       Membership[]
-  servicePackages   CustomerServicePackage[]
-  walletLedger      WalletLedger[]
-  loyaltyLedger     LoyaltyLedger[]
-  couponRedemptions CouponRedemption[]
-  conversations     Conversation[]
-  historyEntries    CustomerHistoryEntry[]
-  companions        CustomerCompanion[]
+  appointments       Appointment[]
+  invoices           Invoice[]
+  memberships        Membership[]
+  servicePackages    CustomerServicePackage[]
+  walletLedger       WalletLedger[]
+  loyaltyLedger      LoyaltyLedger[]
+  couponRedemptions  CouponRedemption[]
+  conversations      Conversation[]
+  historyEntries     CustomerHistoryEntry[]
+  companions         CustomerCompanion[]
+  campaignRecipients CampaignRecipient[]
 
   @@unique([branchId, phone])
   @@index([branchId, lastVisitAt])
@@ -1317,21 +1318,26 @@ model Campaign {
 }
 
 model CampaignRecipient {
-  id           String    @id @default(cuid())
-  campaignId   String
-  campaign     Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  customerId   String
-  status       String    @default("queued") // queued, sent, delivered, failed
-  scheduledFor DateTime?
-  sentAt       DateTime?
-  deliveredAt  DateTime?
-  readAt       DateTime?
-  repliedAt    DateTime?
-  externalId   String?   @unique
-  error        String?
-  bookedAt     DateTime? // attribution
+  id            String    @id @default(cuid())
+  campaignId    String
+  campaign      Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  customerId    String?
+  customer      Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  externalName  String?
+  externalPhone String?
+  externalEmail String?
+  status        String    @default("queued") // queued, sent, delivered, failed
+  scheduledFor  DateTime?
+  sentAt        DateTime?
+  deliveredAt   DateTime?
+  readAt        DateTime?
+  repliedAt     DateTime?
+  externalId    String?   @unique
+  error         String?
+  bookedAt      DateTime? // attribution
 
   @@unique([campaignId, customerId])
+  @@index([campaignId, externalPhone])
   @@index([scheduledFor, status])
 }
 

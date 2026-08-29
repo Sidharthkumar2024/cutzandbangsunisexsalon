@@ -16,6 +16,10 @@ const phoneDigits = (value: string) => {
   return digits;
 };
 
+const uniqueValidPhones = (values: string[]) => [
+  ...new Set(values.map(phoneDigits).filter((phone) => phone.length >= 8 && phone.length <= 15)),
+];
+
 function localParts(date: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone,
@@ -99,8 +103,6 @@ export default async function campaignRoutes(app: FastifyInstance) {
     const branch = await prisma.branch.findUnique({ where: { id: body.branchId }, select: { id: true } });
     if (!branch) return reply.code(404).send({ error: "branch_not_found" });
 
-    let created = 0;
-    let updated = 0;
     let invalid = 0;
     let duplicates = 0;
     let valid = 0;
@@ -112,36 +114,23 @@ export default async function campaignRoutes(app: FastifyInstance) {
       if (seen.has(phone)) { duplicates += 1; continue; }
       seen.add(phone);
       valid += 1;
-      const existing = await prisma.customer.findUnique({ where: { branchId_phone: { branchId: body.branchId, phone } } });
-      const source = row.consentSource || "Admin CSV marketing import";
-      const safeName = row.name?.trim() || `Customer ${phone.slice(-4)}`;
-      if (existing) {
-        if (existing.deletedAt) { invalid += 1; continue; }
-        await prisma.customer.update({
-          where: { id: existing.id },
-          data: {
-            name: row.name?.trim() || existing.name,
-            email: row.email ?? existing.email,
-            waConsent: existing.waConsent || row.waConsent,
-            emailConsent: existing.emailConsent || row.emailConsent,
-            source,
-          },
-        });
-        updated += 1;
-      } else {
-        await prisma.customer.create({
-          data: { branchId: body.branchId, name: safeName, phone, email: row.email, waConsent: row.waConsent, emailConsent: row.emailConsent, source },
-        });
-        created += 1;
-      }
-      if (row.waConsent) consented += 1;
+      if (row.waConsent || row.emailConsent) consented += 1;
     }
-    await audit("campaign.contacts.import", "Customer", body.branchId, {
+    await audit("campaign.contacts.import", "Campaign", body.branchId, {
       actorUserId: req.user?.id,
-      after: { rows: body.rows.length, valid, created, updated, invalid, duplicates, consented },
+      after: {
+        rows: body.rows.length,
+        valid,
+        created: 0,
+        updated: 0,
+        invalid,
+        duplicates,
+        consented,
+        mode: "campaign_audience_only",
+      },
       ip: req.ip,
     });
-    return reply.code(201).send({ rows: body.rows.length, valid, created, updated, invalid, duplicates, consented });
+    return reply.code(200).send({ rows: body.rows.length, valid, created: 0, updated: 0, invalid, duplicates, consented });
   });
 
   app.post("/campaigns/contacts/verify", {
@@ -227,49 +216,41 @@ export default async function campaignRoutes(app: FastifyInstance) {
         if (value.recipientPhones?.length && value.channel.startsWith("WHATSAPP") && !value.manualConsentConfirmed) {
           ctx.addIssue({ code: z.ZodIssueCode.custom, message: "whatsapp_manual_consent_required", path: ["manualConsentConfirmed"] });
         }
+        if (value.recipientPhones?.length && value.channel === "EMAIL") {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: "manual_phone_campaign_is_whatsapp_only", path: ["channel"] });
+        }
       })
       .parse(req.body);
     if (req.user?.role === "MANAGER" && req.user.branchId !== body.branchId) return reply.code(403).send({ error: "forbidden" });
 
     // Materialize recipients from the segment now (audience snapshot).
     const now = new Date();
-    const manualPhones = [...new Set((body.recipientPhones ?? []).map(phoneDigits).filter((phone) => phone.length >= 8 && phone.length <= 15))];
-    if (manualPhones.length) {
-      for (const phone of manualPhones) {
-        const existing = await prisma.customer.findUnique({ where: { branchId_phone: { branchId: body.branchId, phone } } });
-        if (existing || !body.channel.startsWith("WHATSAPP")) continue;
-        await prisma.customer.create({
-          data: {
-            branchId: body.branchId,
-            name: `Customer ${phone.slice(-4)}`,
-            phone,
-            waConsent: true,
-            emailConsent: false,
-            source: "Manual WhatsApp campaign audience",
-          },
-        });
-      }
-    }
+    const manualPhones = uniqueValidPhones(body.recipientPhones ?? []);
     const ids = manualPhones.length
-      ? (await prisma.customer.findMany({
-          where: { branchId: body.branchId, phone: { in: manualPhones }, deletedAt: null },
-          select: { id: true },
-        })).map((c) => c.id)
+      ? []
       : body.segment
         ? await customersInSegment(prisma, body.branchId, body.segment, DEFAULT_SEGMENT_CONFIG, now)
         : (await prisma.customer.findMany({ where: { branchId: body.branchId, deletedAt: null }, select: { id: true } })).map((c) => c.id);
 
-    const eligible = await prisma.customer.findMany({
-      where: {
-        id: { in: ids },
-        ...(body.channel === "EMAIL"
-          ? { email: { not: null }, emailConsent: true }
-          : body.channel.startsWith("WHATSAPP")
-            ? { phone: { not: null }, waConsent: true }
-            : {}),
-      },
-      select: { id: true },
-    });
+    const eligible = manualPhones.length
+      ? []
+      : await prisma.customer.findMany({
+          where: {
+            id: { in: ids },
+            ...(body.channel === "EMAIL"
+              ? { email: { not: null }, emailConsent: true }
+              : body.channel.startsWith("WHATSAPP")
+                ? { phone: { not: null }, waConsent: true }
+                : {}),
+          },
+          select: { id: true },
+        });
+    const recipientCreates = manualPhones.length
+      ? manualPhones.map((phone) => ({
+          externalName: `Guest ${phone.slice(-4)}`,
+          externalPhone: phone,
+        }))
+      : eligible.map(({ id: customerId }) => ({ customerId }));
 
     const campaign = await prisma.campaign.create({
       data: {
@@ -283,18 +264,18 @@ export default async function campaignRoutes(app: FastifyInstance) {
         couponCode: body.couponCode,
         scheduledAt: body.scheduledAt,
         status: "PENDING_APPROVAL",
-        recipients: { create: eligible.map(({ id: customerId }) => ({ customerId })) },
+        recipients: { create: recipientCreates },
       },
       include: { _count: { select: { recipients: true } } },
     });
     await audit("campaign.create", "Campaign", campaign.id, {
       actorUserId: req.user?.id,
-      after: { branchId: body.branchId, name: body.name, channel: body.channel, segment: manualPhones.length ? "MANUAL" : body.segment, manualPhones: manualPhones.length, recipientCount: eligible.length, hasMedia: Boolean(body.mediaKey) },
+      after: { branchId: body.branchId, name: body.name, channel: body.channel, segment: manualPhones.length ? "MANUAL_EXTERNAL" : body.segment, manualPhones: manualPhones.length, recipientCount: recipientCreates.length, hasMedia: Boolean(body.mediaKey) },
       ip: req.ip,
     });
     const pacing = await publicProviderSettings(body.branchId);
     const risk = body.channel === "WHATSAPP_UNOFFICIAL"
-      ? unofficialRisk(pacing.whatsappUnofficial.intervalSeconds, pacing.whatsappUnofficial.dailyCap, eligible.length)
+      ? unofficialRisk(pacing.whatsappUnofficial.intervalSeconds, pacing.whatsappUnofficial.dailyCap, recipientCreates.length)
       : undefined;
     return reply.code(201).send({ ...campaign, deliveryRisk: risk });
   });
