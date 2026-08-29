@@ -22,6 +22,7 @@ import {
   type BackendPlan,
   type BackendProviderConfig,
   type BackendRangeReport,
+  type BackendService,
   type BackendSnapshot,
   type BackendSubscription,
   type BackendTenant,
@@ -209,6 +210,56 @@ const parseCsv = (text: string) => {
   if (row.some(Boolean)) rows.push(row);
   return rows;
 };
+const normalizeCampaignPhone = (value: string) => {
+  const digits = value.replace(/\D/g, "");
+  if (digits.length === 11 && digits.startsWith("0")) return digits.slice(1);
+  return digits;
+};
+const extractCampaignPhones = (text: string) =>
+  Array.from(text.matchAll(/[+]?\d[\d\s().-]{6,}\d/g))
+    .map((match) => normalizeCampaignPhone(match[0]))
+    .filter(Boolean);
+const campaignAudienceStats = (phones: string[]) => {
+  const seen = new Set<string>();
+  let invalid = 0;
+  let duplicates = 0;
+  for (const phone of phones) {
+    if (phone.length < 8 || phone.length > 15) {
+      invalid += 1;
+      continue;
+    }
+    if (seen.has(phone)) {
+      duplicates += 1;
+      continue;
+    }
+    seen.add(phone);
+  }
+  return { total: phones.length, valid: seen.size, invalid, duplicates, uniquePhones: [...seen] };
+};
+const csvContactsForCampaign = (rows: string[][], whatsappConsent = false) => {
+  if (rows.length < 2) throw new Error("CSV needs a header and at least one contact");
+  const headers = rows[0].map((header) => header.toLowerCase().replace(/[^a-z]/g, ""));
+  const column = (...names: string[]) => headers.findIndex((header) => names.includes(header));
+  const nameAt = column("name", "fullname", "customername");
+  const phoneAt = column("phone", "mobile", "whatsapp", "whatsappnumber", "number", "mobilenumber");
+  const emailAt = column("email", "emailaddress");
+  const waConsentAt = column("waconsent", "whatsappconsent", "optin", "whatsappoptin");
+  const emailConsentAt = column("emailconsent", "emailoptin");
+  const consentSourceAt = column("consentsource", "optinsource");
+  const yes = (value = "") => /^(1|true|yes|y|opted\s*in|consented)$/i.test(value.trim());
+  return rows.slice(1).flatMap((values) => {
+    const rawPhone = phoneAt >= 0 ? (values[phoneAt] ?? "") : values.join(" ");
+    const phones = phoneAt >= 0 ? [normalizeCampaignPhone(rawPhone)] : extractCampaignPhones(rawPhone);
+    return phones.map((phone, index) => ({
+      name: nameAt >= 0 && values[nameAt] ? values[nameAt] : `Customer ${phone.slice(-4)}`,
+      phone,
+      ...(emailAt >= 0 && values[emailAt] ? { email: values[emailAt] } : {}),
+      waConsent: whatsappConsent || (waConsentAt >= 0 && yes(values[waConsentAt])),
+      emailConsent: emailConsentAt >= 0 && yes(values[emailConsentAt]),
+      consentSource: consentSourceAt >= 0 && values[consentSourceAt] ? values[consentSourceAt] : index ? "CSV extra phone column" : "Campaign audience import",
+    }));
+  }).filter((row) => row.phone);
+};
 const appointmentRow = (item: BackendAppointment, index = 0) => ({
   time: new Date(item.startAt).toLocaleTimeString("en-IN", {
     hour: "2-digit",
@@ -356,8 +407,8 @@ export default function AdminPage() {
     }));
   const pointOfSaleServices = liveServices;
   const subtotal = cart.reduce((sum, item) => sum + item.price, 0);
-  // Membership credit is an auditable payment tender, not a discount. Invoice
-  // totals remain unchanged; redemption is posted to the ledger.
+  // Membership credit is an auditable payment tender, not a discount. Cutz & Bangs
+  // POS bills are tax-free, so payable total is the service/product subtotal.
   const credit = 0;
   const tax = 0;
   const total = subtotal;
@@ -463,14 +514,13 @@ export default function AdminPage() {
             ×
           </button>
         </div>
-        <div className="branch-chip">
-          <span>C&B</span>
-          <div>
-            <strong>{activeBranch?.name ?? "Sector 15 Dwarka"}</strong>
-            <small>New Delhi · Open</small>
-          </div>
-          <i>⌄</i>
-        </div>
+        <TenantBranchSwitcher
+          token={backend.token}
+          activeTenantId={backend.data.user.activeTenantId}
+          activeBranchId={activeBranch?.id ?? backend.data.user.branchId}
+          fallbackBranchName={activeBranch?.name ?? "Sector 15 Dwarka"}
+          onRefresh={() => void backend.refresh()}
+        />
         <nav aria-label="Admin navigation">
           {navGroups.map((group) => (
             <div className="admin-nav-group" key={group.label}>
@@ -771,6 +821,107 @@ export default function AdminPage() {
         </div>
       </section>
     </main>
+  );
+}
+
+function TenantBranchSwitcher({
+  token,
+  activeTenantId,
+  activeBranchId,
+  fallbackBranchName,
+  onRefresh,
+}: {
+  token: string;
+  activeTenantId?: string | null;
+  activeBranchId?: string | null;
+  fallbackBranchName: string;
+  onRefresh: () => void;
+}) {
+  const [tenants, setTenants] = useState<BackendTenant[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    if (!token) return undefined;
+    setLoading(true);
+    backendApi.tenants(token)
+      .then((nextTenants) => {
+        if (active) setTenants(nextTenants);
+      })
+      .catch((error) => {
+        if (active) setMessage(error instanceof Error ? error.message : "Salons could not be loaded.");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [token]);
+
+  const options = tenants.flatMap((tenant) =>
+    (tenant.branches?.length ? tenant.branches : [{ id: tenant.membershipBranchId ?? "", name: tenant.name, timezone: tenant.timezone, currency: tenant.currency }])
+      .filter((branch) => Boolean(branch.id))
+      .map((branch) => ({
+        value: `${tenant.id}:${branch.id}`,
+        tenantId: tenant.id,
+        branchId: branch.id,
+        label: tenants.length > 1 ? `${tenant.name} — ${branch.name}` : branch.name,
+        status: tenant.status,
+      })),
+  );
+  const selectedValue = options.find((option) => option.tenantId === activeTenantId && option.branchId === activeBranchId)?.value ?? options[0]?.value ?? "";
+
+  const switchBranch = async (value: string) => {
+    const option = options.find((item) => item.value === value);
+    if (!option) return;
+    setLoading(true);
+    setMessage("");
+    try {
+      await backendApi.switchTenant(token, { tenantId: option.tenantId, branchId: option.branchId });
+      onRefresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Branch could not be switched.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (options.length <= 1) {
+    return (
+      <div className="branch-chip">
+        <span>C&B</span>
+        <div>
+          <strong>{options[0]?.label ?? fallbackBranchName}</strong>
+          <small>{loading ? "Loading…" : message || "Active workspace"}</small>
+        </div>
+        <i>⌄</i>
+      </div>
+    );
+  }
+
+  return (
+    <label className="branch-chip branch-switcher">
+      <span>C&B</span>
+      <div>
+        <strong>Workspace</strong>
+        <select
+          value={selectedValue}
+          disabled={loading}
+          onChange={(event) => void switchBranch(event.target.value)}
+          aria-label="Switch salon branch"
+        >
+          {options.map((option) => (
+            <option value={option.value} key={option.value}>
+              {option.label} · {prettyStatus(option.status)}
+            </option>
+          ))}
+        </select>
+        {message && <small>{message}</small>}
+      </div>
+      <i>⌄</i>
+    </label>
   );
 }
 
@@ -4839,8 +4990,25 @@ function Services({
   const [duration, setDuration] = useState(60);
   const [price, setPrice] = useState(799);
   const [staffIds, setStaffIds] = useState<string[]>([]);
+  const [editingServiceId, setEditingServiceId] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const resetServiceForm = () => {
+    setEditingServiceId("");
+    setName("");
+    setDuration(60);
+    setPrice(799);
+    setStaffIds([]);
+  };
+  const startEditService = (service: BackendService, nextCategoryId: string) => {
+    setEditingServiceId(service.id);
+    setCategoryId(nextCategoryId);
+    setName(service.name);
+    setDuration(service.durationMin);
+    setPrice(Math.round(service.priceMinor / 100));
+    setStaffIds(service.serviceStaff.map((entry) => entry.staff.id));
+    setMessage("Editing service. Save changes or cancel to create a new service.");
+  };
   const createCategory = async () => {
     if (!token || !categoryName.trim()) return;
     setBusy(true);
@@ -4863,32 +5031,54 @@ function Services({
       setBusy(false);
     }
   };
-  const create = async () => {
+  const saveService = async () => {
     if (!token || !categoryId || !name || !staffIds.length) return;
     setBusy(true);
     setMessage("");
     try {
-      await backendApi.createService(token, {
+      const payload = {
         categoryId,
         name,
         durationMin: duration,
         bufferMin: 5,
         priceMinor: price * 100,
-        taxRateBps: 1800,
+        taxRateBps: 0,
         staffIds,
-      });
-      setName("");
-      setStaffIds([]);
+      };
+      if (editingServiceId) {
+        await backendApi.updateService(token, editingServiceId, payload);
+      } else {
+        await backendApi.createService(token, payload);
+      }
+      resetServiceForm();
       setMessage(
-        "Service created and immediately available to eligible artists.",
+        editingServiceId
+          ? "Service updated and POS now uses the new details."
+          : "Service created and immediately available to eligible artists.",
       );
       onRefresh();
     } catch (cause) {
       setMessage(
         cause instanceof Error
           ? prettyStatus(cause.message)
-          : "Service could not be created.",
+          : "Service could not be saved.",
       );
+    } finally {
+      setBusy(false);
+    }
+  };
+  const deleteService = async (service: BackendService) => {
+    if (!token) return;
+    if (!window.confirm(`Delete "${service.name}" from POS and booking? Existing invoices will stay safe.`)) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.deleteService(token, service.id);
+      if (editingServiceId === service.id) resetServiceForm();
+      setMessage("Service deleted from active catalogue. Old bills remain unchanged.");
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Service could not be deleted.");
     } finally {
       setBusy(false);
     }
@@ -4915,9 +5105,9 @@ function Services({
       <section className="admin-card phase-one-form service-create">
         <div>
           <p className="eyebrow">Bookable catalogue</p>
-          <h2>Create service</h2>
+          <h2>{editingServiceId ? "Edit service" : "Create service"}</h2>
           <small>
-            Duration, tax and eligible artists feed both public booking and
+            Duration, price and eligible artists feed both public booking and
             reception.
           </small>
         </div>
@@ -4983,10 +5173,11 @@ function Services({
         <button
           className="button admin-primary"
           disabled={busy || !token || !categoryId || !name || !staffIds.length}
-          onClick={() => void create()}
+          onClick={() => void saveService()}
         >
-          {busy ? "Creating…" : "Create service"}
+          {busy ? "Saving…" : editingServiceId ? "Save service" : "Create service"}
         </button>
+        {editingServiceId && <button className="button" disabled={busy} onClick={resetServiceForm}>Cancel edit</button>}
       </section>
       <div className="service-admin-grid">
         {[...categoryTree, ...orphanCategories.map((category) => ({ parent: category, children: [], directServices: category.services }))].map(({ parent, children, directServices }) => (
@@ -5007,6 +5198,10 @@ function Services({
                   </small>
                 </span>
                 <b>{money(service.priceMinor)}</b>
+                <div className="service-row-actions">
+                  <button disabled={busy} onClick={() => startEditService(service, parent.id)}>Edit</button>
+                  <button className="danger" disabled={busy} onClick={() => void deleteService(service)}>Delete</button>
+                </div>
               </div>
             ))}
             {children.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)).map((category) => (
@@ -5024,6 +5219,10 @@ function Services({
                       </small>
                     </span>
                     <b>{money(service.priceMinor)}</b>
+                    <div className="service-row-actions">
+                      <button disabled={busy} onClick={() => startEditService(service, category.id)}>Edit</button>
+                      <button className="danger" disabled={busy} onClick={() => void deleteService(service)}>Delete</button>
+                    </div>
                   </div>
                 ))}
                 {!category.services.length && <p className="empty-cart">No services in this subcategory yet.</p>}
@@ -5809,10 +6008,14 @@ function Campaigns({
   const [segment, setSegment] = useState("LAPSED");
   const [channel, setChannel] = useState<
     "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL" | "EMAIL"
-  >("WHATSAPP_OFFICIAL");
+  >("WHATSAPP_UNOFFICIAL");
+  const [audienceMode, setAudienceMode] = useState<"SEGMENT" | "MANUAL">("SEGMENT");
+  const [manualNumbers, setManualNumbers] = useState("");
+  const [manualConsentConfirmed, setManualConsentConfirmed] = useState(false);
+  const [lastImportSummary, setLastImportSummary] = useState("");
+  const [verification, setVerification] = useState<Awaited<ReturnType<typeof backendApi.verifyCampaignPhones>> | null>(null);
   const [content, setContent] = useState("");
   const [offer, setOffer] = useState("");
-  const [scheduledAt, setScheduledAt] = useState("");
   const [mediaKey, setMediaKey] = useState("");
   const [mediaType, setMediaType] = useState<"image" | "document" | "video" | "">("");
   const [mediaName, setMediaName] = useState("");
@@ -5828,18 +6031,39 @@ function Campaigns({
     ? data.range.customers.lapsed +
       data.customers.filter((item) => item.segments.includes("AT_RISK")).length
     : 0;
-  const rows = data.campaigns.map((item) => [
+  const manualStats = campaignAudienceStats(extractCampaignPhones(manualNumbers));
+  const manualPhoneSet = new Set(manualStats.uniquePhones);
+  const knownWhatsAppReady = data.customers.filter((customer) => customer.phone && manualPhoneSet.has(normalizeCampaignPhone(customer.phone)) && customer.waConsent).length;
+  const campaignTotals = data.campaigns.reduce(
+    (sum, campaign) => {
+      const engagement = campaign.engagement;
+      sum.total += engagement?.total ?? campaign._count.recipients;
+      sum.sent += engagement?.sent ?? 0;
+      sum.delivered += engagement?.delivered ?? 0;
+      sum.read += engagement?.read ?? 0;
+      sum.replied += engagement?.replied ?? 0;
+      sum.failed += engagement?.failed ?? 0;
+      return sum;
+    },
+    { total: 0, sent: 0, delivered: 0, read: 0, replied: 0, failed: 0 },
+  );
+  const campaignRows = data.campaigns.map((item) => ({
+    campaign: item,
+    cells: [
         item.name,
         item.segment ? prettyStatus(item.segment) : "All customers",
         prettyStatus(item.channel),
         prettyStatus(item.status),
         `${item.engagement?.sent ?? 0}/${item.engagement?.total ?? item._count.recipients}`,
+        String(item.engagement?.delivered ?? 0),
         String(item.engagement?.read ?? 0),
         String(item.engagement?.replied ?? 0),
-      ]);
+        String(item.engagement?.failed ?? 0),
+      ],
+  }));
   const visibleRows = statusFilter === "ALL"
-    ? rows
-    : rows.filter((row) => row[3].toUpperCase().replaceAll(" ", "_") === statusFilter);
+    ? campaignRows
+    : campaignRows.filter(({ campaign, cells }) => campaign.status === statusFilter || cells[3].toUpperCase().replaceAll(" ", "_") === statusFilter);
   const draft = async () => {
     if (!token) return;
     setBusy(true);
@@ -5863,21 +6087,35 @@ function Campaigns({
     setBusy(true);
     setMessage("");
     try {
-      await backendApi.createCampaign(token, {
+      if (audienceMode === "MANUAL" && manualStats.valid < 1) throw new Error("Paste numbers or import a CSV before creating a manual campaign.");
+      if (audienceMode === "MANUAL" && channel.startsWith("WHATSAPP") && !manualConsentConfirmed) throw new Error("Confirm WhatsApp consent before sending to pasted/CSV numbers.");
+      if (audienceMode === "MANUAL") {
+        const contacts = manualStats.uniquePhones.map((phone) => ({
+          name: `Customer ${phone.slice(-4)}`,
+          phone,
+          waConsent: channel.startsWith("WHATSAPP") && manualConsentConfirmed,
+          emailConsent: false,
+          consentSource: "Manual campaign audience",
+        }));
+        await backendApi.importCampaignContacts(token, { branchId: "main", rows: contacts });
+      }
+      const result = await backendApi.createCampaign(token, {
         name,
         channel,
-        segment,
+        segment: audienceMode === "SEGMENT" ? segment : undefined,
         content,
         branchId: "main",
-        scheduledAt: scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
+        recipientPhones: audienceMode === "MANUAL" ? manualStats.uniquePhones : undefined,
+        manualConsentConfirmed: audienceMode === "MANUAL" ? manualConsentConfirmed : undefined,
         mediaKey: mediaKey || undefined,
         mediaType: mediaType || undefined,
       });
       setName("");
       setContent("");
-      setScheduledAt("");
       setMediaKey(""); setMediaType(""); setMediaName("");
-      setMessage("Campaign created for consented customers and waiting for approval.");
+      if (audienceMode === "MANUAL") setManualNumbers("");
+      setLastImportSummary("");
+      setMessage(`Campaign created for ${result._count.recipients} eligible contacts. Approve it to send now with safe pacing.`);
       onRefresh();
     } catch (cause) {
       setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Campaign could not be created.");
@@ -5902,10 +6140,26 @@ function Campaigns({
     setMessage("");
     try {
       const result = await backendApi.approveCampaign(token, campaignId);
-      setMessage(result.status === "SCHEDULED" ? "Campaign approved and scheduled." : "Campaign approved and queued for delivery.");
+      setMessage(result.status === "SCHEDULED" ? "Campaign approved. Safe pacing placed some messages in the next delivery window." : "Campaign approved and queued for immediate delivery.");
       onRefresh();
     } catch (cause) {
       setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Approval failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const verifyManualNumbers = async () => {
+    if (!token || !manualStats.valid) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await backendApi.verifyCampaignPhones(token, { branchId: "main", phones: manualStats.uniquePhones });
+      setVerification(result);
+      setMessage(result.providerConnected
+        ? `Verification complete: ${result.registered} matched in WAHA contacts, ${result.unknown} unknown.`
+        : `WAHA verification unavailable: ${result.valid} valid numbers, ${result.unknown} unknown.`);
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "WhatsApp number verification failed.");
     } finally {
       setBusy(false);
     }
@@ -5915,28 +6169,19 @@ function Campaigns({
     setBusy(true);
     setMessage("");
     try {
-      const rows = parseCsv(await file.text());
-      if (rows.length < 2) throw new Error("CSV needs a header and at least one contact");
-      const headers = rows[0].map((header) => header.toLowerCase().replace(/[^a-z]/g, ""));
-      const column = (...names: string[]) => headers.findIndex((header) => names.includes(header));
-      const nameAt = column("name", "fullname", "customername");
-      const phoneAt = column("phone", "mobile", "whatsapp", "whatsappnumber");
-      const emailAt = column("email", "emailaddress");
-      const waConsentAt = column("waconsent", "whatsappconsent", "optin", "whatsappoptin");
-      const emailConsentAt = column("emailconsent", "emailoptin");
-      const consentSourceAt = column("consentsource", "optinsource");
-      if (nameAt < 0 || phoneAt < 0) throw new Error("CSV must contain name and phone columns");
-      const yes = (value = "") => /^(1|true|yes|y|opted\s*in|consented)$/i.test(value.trim());
-      const contacts = rows.slice(1).map((values) => ({
-        name: values[nameAt] ?? "",
-        phone: values[phoneAt] ?? "",
-        ...(emailAt >= 0 && values[emailAt] ? { email: values[emailAt] } : {}),
-        waConsent: waConsentAt >= 0 && yes(values[waConsentAt]),
-        emailConsent: emailConsentAt >= 0 && yes(values[emailConsentAt]),
-        ...(consentSourceAt >= 0 && values[consentSourceAt] ? { consentSource: values[consentSourceAt] } : {}),
-      })).filter((row) => row.name && row.phone);
+      const contacts = csvContactsForCampaign(parseCsv(await file.text()), manualConsentConfirmed);
+      const stats = campaignAudienceStats(contacts.map((contact) => contact.phone));
+      if (!stats.valid) throw new Error("CSV did not contain any valid phone numbers.");
+      setAudienceMode("MANUAL");
+      setManualNumbers(stats.uniquePhones.join("\n"));
+      setVerification(null);
+      setLastImportSummary(`${stats.total} numbers found · ${stats.valid} valid · ${stats.duplicates} duplicate · ${stats.invalid} invalid`);
+      if (channel.startsWith("WHATSAPP") && !manualConsentConfirmed) {
+        setMessage(`CSV read: ${stats.valid} valid numbers. Tick consent confirmation before importing or sending WhatsApp campaign.`);
+        return;
+      }
       const result = await backendApi.importCampaignContacts(token, { branchId: "main", rows: contacts });
-      setMessage(`CSV imported: ${result.created} added, ${result.updated} updated, ${result.consented} WhatsApp opt-ins recorded, ${result.invalid} skipped.`);
+      setMessage(`CSV imported: ${result.created} added, ${result.updated} updated, ${result.consented} WhatsApp opt-ins, ${result.duplicates} duplicates, ${result.invalid} invalid.`);
       onRefresh();
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : "CSV import failed.");
@@ -5951,7 +6196,7 @@ function Campaigns({
         <div>
           <p className="eyebrow">Smart follow-up</p>
           <h2>{attention} customers may need a reason to return.</h2>
-          <p>Campaign sending remains approval-first in the backend.</p>
+          <p>Campaigns send now after approval, with backend pacing and opt-out safety.</p>
         </div>
         <button className="button button-light" onClick={() => void draft()} disabled={!token || busy}>
           {busy ? "Working…" : "Draft reactivation campaign"}
@@ -5959,9 +6204,21 @@ function Campaigns({
       </div>
       <section className="campaign-safety-grid">
         <article className="admin-card csv-import-card">
-          <div><p className="eyebrow">Marketing audience</p><h2>Import contact CSV</h2><p>Use columns <code>name</code>, <code>phone</code>, optional <code>email</code>, <code>waConsent</code>, <code>emailConsent</code> and <code>consentSource</code>.</p></div>
+          <div><p className="eyebrow">Marketing audience</p><h2>CSV or pasted numbers</h2><p>CSV can contain only phone numbers; name is optional. You can also paste one number per line, comma or space.</p></div>
           <label className="csv-picker"><span>{busy ? "Importing…" : "Choose CSV file"}</span><input type="file" accept=".csv,text/csv" disabled={busy || !token} onChange={(event) => void importContacts(event.target.files?.[0])} /></label>
-          <small>Only rows with explicit WhatsApp consent enter WhatsApp campaigns. A contact list by itself is not consent.</small>
+          <label className="campaign-consent"><input type="checkbox" checked={manualConsentConfirmed} onChange={(event) => setManualConsentConfirmed(event.target.checked)} /> I have permission to send WhatsApp marketing to pasted/CSV numbers.</label>
+          <textarea value={manualNumbers} onChange={(event) => { setManualNumbers(event.target.value); setAudienceMode("MANUAL"); setVerification(null); }} rows={5} placeholder="Paste mobile numbers here…" />
+          <div className="campaign-audience-stats">
+            <span><strong>{manualStats.total}</strong><small>Numbers found</small></span>
+            <span><strong>{manualStats.valid}</strong><small>Valid format</small></span>
+            <span><strong>{verification?.registered ?? knownWhatsAppReady}</strong><small>{verification ? "WAHA matched" : "Known opted-in CRM"}</small></span>
+            <span><strong>{manualStats.duplicates}</strong><small>Duplicates</small></span>
+          </div>
+          <button className="button campaign-verify-button" disabled={!token || busy || !manualStats.valid} onClick={() => void verifyManualNumbers()}>
+            {busy ? "Checking…" : "Verify WhatsApp numbers"}
+          </button>
+          {lastImportSummary && <small>{lastImportSummary}</small>}
+          <small>{verification ? verification.detail : "WAHA verification checks known WhatsApp contacts when connected; delivery report still remains the final truth."}</small>
         </article>
         <article className={`admin-card campaign-risk-card risk-${waRisk?.label ?? "high"}`}>
           <p className="eyebrow">Unofficial WhatsApp risk</p>
@@ -5971,23 +6228,29 @@ function Campaigns({
           <small>This is a conservative heuristic, not a ban probability or guarantee. Unofficial access always retains meaningful account risk.</small>
         </article>
       </section>
+      <section className="campaign-report-grid">
+        <article><small>Total audience</small><strong>{campaignTotals.total}</strong><span>All campaign recipients</span></article>
+        <article><small>Sent</small><strong>{campaignTotals.sent}</strong><span>Queued/sent through channels</span></article>
+        <article><small>Delivered / read</small><strong>{campaignTotals.delivered}/{campaignTotals.read}</strong><span>Provider engagement</span></article>
+        <article><small>Replies / failed</small><strong>{campaignTotals.replied}/{campaignTotals.failed}</strong><span>Follow-up and cleanup list</span></article>
+      </section>
       <section className="admin-card campaign-builder phase-one-form">
-        <div><p className="eyebrow">Approval-first delivery</p><h2>Create campaign</h2><small>Only customers who consented to the selected channel enter the audience snapshot. Unofficial campaigns automatically append “Reply STOP to opt out.”</small></div>
+        <div><p className="eyebrow">Send now after approval</p><h2>Create campaign</h2><small>Choose CRM segment or pasted/CSV numbers. Unofficial WhatsApp appends “Reply STOP to opt out” and uses pacing to reduce ban risk.</small></div>
         <label>Name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="August comeback offer" /></label>
-        <label>Audience<select value={segment} onChange={(event) => setSegment(event.target.value)}><option value="NEW">New</option><option value="REPEAT">Repeat</option><option value="VIP">VIP</option><option value="AT_RISK">At-risk</option><option value="LAPSED">Lapsed</option><option value="MEMBER">Members</option><option value="HIGH_SPEND">High spend</option></select></label>
+        <label>Audience mode<select value={audienceMode} onChange={(event) => setAudienceMode(event.target.value as "SEGMENT" | "MANUAL")}><option value="SEGMENT">CRM segment</option><option value="MANUAL">CSV / pasted numbers</option></select></label>
+        <label>CRM audience<select value={segment} onChange={(event) => setSegment(event.target.value)} disabled={audienceMode === "MANUAL"}><option value="NEW">New</option><option value="REPEAT">Repeat</option><option value="VIP">VIP</option><option value="AT_RISK">At-risk</option><option value="LAPSED">Lapsed</option><option value="MEMBER">Members</option><option value="HIGH_SPEND">High spend</option></select></label>
         <label>Channel<select value={channel} onChange={(event) => setChannel(event.target.value as typeof channel)}><option value="WHATSAPP_OFFICIAL">WhatsApp Official</option><option value="WHATSAPP_UNOFFICIAL">WhatsApp Unofficial</option><option value="EMAIL">Email</option></select></label>
         <label>Offer<input value={offer} onChange={(event) => setOffer(event.target.value)} placeholder="20% off on weekday services" /></label>
-        <label>Schedule (optional)<input type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} /></label>
         <label>Image / PDF creative<span className="campaign-file-picker">{mediaName || "Choose creative"}<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={(event) => void uploadCreative(event.target.files?.[0])} /></span></label>
         <label className="campaign-copy">Message<textarea value={content} onChange={(event) => setContent(event.target.value)} rows={5} /></label>
-        <div className="form-actions"><button disabled={!token || busy} onClick={() => void draft()}>AI draft</button><button className="button admin-primary" disabled={!token || busy || !name || !content} onClick={() => void create()}>Create for approval</button></div>
+        <div className="form-actions"><button disabled={!token || busy} onClick={() => void draft()}>AI draft</button><button className="button admin-primary" disabled={!token || busy || !name || !content || (audienceMode === "MANUAL" && !manualStats.valid)} onClick={() => void create()}>Create for approval</button></div>
       </section>
       <div className="campaign-steps">
         {[
-          ["1", "Audience", `At-risk / lapsed · ${attention}`],
-          ["2", "Channel", "WhatsApp, email or SMS"],
-          ["3", "Content", "AI draft with human approval"],
-          ["4", "Delivery", "Sent, read and reply tracked"],
+          ["1", "Audience", audienceMode === "MANUAL" ? `${manualStats.valid} pasted/CSV numbers` : `At-risk / lapsed · ${attention}`],
+          ["2", "Safety", "Consent, duplicates and STOP opt-out"],
+          ["3", "Channel", "Official or unofficial WhatsApp"],
+          ["4", "Reports", "Sent, delivered, read, replied, failed"],
         ].map(([num, label, detail], i) => (
           <article key={label} className={i < 3 ? "complete" : ""}>
             <span>{i < 3 ? "✓" : num}</span>
@@ -6015,22 +6278,22 @@ function Campaigns({
             <option value="PENDING_APPROVAL">Pending approval</option>
             <option value="SCHEDULED">Scheduled</option>
             <option value="SENDING">Sending</option>
-            <option value="COMPLETED">Completed</option>
+            <option value="SENT">Sent</option>
             <option value="FAILED">Failed</option>
           </select>
         </div>
-        <div className="campaign-table-labels"><span>Campaign</span><span>Audience</span><span>Channel</span><span>Status</span><span>Sent / total</span><span>Read</span><span>Replied</span></div>
-        {visibleRows.map((row) => (
-          <div className="campaign-row" key={row[0]}>
-            {row.map((cell, index) =>
+        <div className="campaign-table-labels"><span>Campaign</span><span>Audience</span><span>Channel</span><span>Status</span><span>Sent / total</span><span>Delivered</span><span>Read</span><span>Replied</span><span>Failed</span></div>
+        {visibleRows.map(({ campaign, cells }) => (
+          <div className="campaign-row" key={campaign.id}>
+            {cells.map((cell, index) =>
               index === 0 ? (
                 <strong key={cell}>{cell}</strong>
               ) : (
                 <span key={`${cell}${index}`}>{cell}</span>
               ),
             )}
-            {data.campaigns.find((item) => item.name === row[0])?.status === "PENDING_APPROVAL" && (
-              <button disabled={busy} onClick={() => void approve(data.campaigns.find((item) => item.name === row[0])!.id)}>Approve</button>
+            {campaign.status === "PENDING_APPROVAL" && (
+              <button disabled={busy} onClick={() => void approve(campaign.id)}>Approve</button>
             )}
           </div>
         ))}

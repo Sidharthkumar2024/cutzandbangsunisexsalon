@@ -1479,3 +1479,164 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .pos-receipt-delivery{margin-inline:12px;padding:12px}
   .pos-receipt-whatsapp button{min-height:44px;font-size:10px}
 }
+
+/* Services CRUD + safer campaign audience/reporting polish. */
+.service-row,.subcategory-block>div.service-row{
+  grid-template-columns:minmax(0,1fr) auto auto!important;
+}
+.service-row-actions{
+  display:flex;
+  justify-content:flex-end;
+  gap:6px;
+  flex-wrap:wrap;
+}
+.service-row-actions button{
+  min-height:34px;
+  padding:0 10px;
+  border:1px solid #d5c8c0;
+  border-radius:8px;
+  background:#fff;
+  color:var(--wine);
+  font-size:11px!important;
+  font-weight:900;
+}
+.service-row-actions button.danger{
+  border-color:#d9aaa3;
+  background:#fff3f1;
+  color:#9e3f37;
+}
+.service-create>.button:not(.admin-primary){
+  min-height:42px;
+  border:1px solid #d8cbc3;
+  border-radius:10px;
+  background:#fff;
+  color:var(--wine);
+  font-weight:900;
+}
+.campaign-report-grid{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:10px;
+  margin:14px 0;
+}
+.campaign-report-grid article{
+  display:grid;
+  gap:5px;
+  padding:15px;
+  border:1px solid #ded4cc;
+  border-radius:12px;
+  background:#fff;
+}
+.campaign-report-grid small{
+  color:#847a73!important;
+  font-size:10px!important;
+  font-weight:900;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+}
+.campaign-report-grid strong{
+  color:var(--wine);
+  font:26px Georgia,serif;
+}
+.campaign-report-grid span{
+  color:#776e67;
+  font-size:11px;
+}
+.csv-import-card textarea{
+  grid-column:1/-1;
+  width:100%;
+  min-height:112px;
+  padding:11px;
+  border:1px solid #cfc2ba;
+  border-radius:10px;
+  background:#fff;
+  color:#332d29;
+  font:inherit;
+  resize:vertical;
+}
+.campaign-consent{
+  grid-column:1/-1;
+  display:flex!important;
+  align-items:flex-start;
+  gap:8px!important;
+  padding:10px 12px;
+  border:1px solid #dfd3cc;
+  border-radius:10px;
+  background:#fffaf6;
+  color:#5a504a!important;
+  font-size:12px!important;
+  font-weight:800;
+}
+.campaign-consent input{
+  width:18px;
+  height:18px;
+  margin-top:1px;
+  accent-color:var(--wine);
+}
+.campaign-audience-stats{
+  grid-column:1/-1;
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:8px;
+}
+.campaign-audience-stats span{
+  display:grid;
+  gap:3px;
+  padding:10px;
+  border:1px solid #eadfd8;
+  border-radius:10px;
+  background:#fff;
+}
+.campaign-audience-stats strong{
+  color:var(--wine);
+  font-size:18px;
+}
+.campaign-verify-button{
+  grid-column:1/-1;
+  justify-self:start;
+  min-height:42px;
+  border:1px solid #d2c4bc;
+  border-radius:10px;
+  background:#fff;
+  color:var(--wine);
+  font-weight:900;
+}
+.campaign-table-labels,.campaign-row{
+  grid-template-columns:1.3fr .8fr .75fr .7fr .55fr .55fr .45fr .55fr .45fr auto!important;
+}
+.campaign-row>button{
+  min-height:34px;
+  white-space:nowrap;
+}
+.pos-category-row{
+  max-width:100%;
+  flex-wrap:nowrap;
+  overflow-x:auto;
+  overscroll-behavior-inline:contain;
+  -webkit-overflow-scrolling:touch;
+  scrollbar-width:thin;
+}
+.pos-category-row button{
+  flex:0 0 auto;
+  touch-action:manipulation;
+}
+
+@media(max-width:900px){
+  .campaign-report-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .campaign-audience-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .service-row,.subcategory-block>div.service-row{grid-template-columns:minmax(0,1fr) auto!important}
+  .service-row-actions{grid-column:1/-1;justify-content:flex-start}
+}
+@media(max-width:620px){
+  .campaign-report-grid,.campaign-audience-stats{grid-template-columns:1fr}
+  .service-row,.subcategory-block>div.service-row{grid-template-columns:1fr!important}
+  .service-row b{justify-self:start}
+  .service-row-actions{display:grid;grid-template-columns:1fr 1fr;width:100%}
+  .service-row-actions button{min-height:42px}
+  .campaign-verify-button{width:100%}
+  .campaign-table{overflow-x:auto}
+  .campaign-row{min-width:980px}
+  .pos-search input,.pos-customer-search input{font-size:16px!important}
+  .pos-category-row{gap:7px;padding:2px 2px 8px}
+  .pos-category-row button{min-height:44px!important;padding-inline:14px!important}
+}

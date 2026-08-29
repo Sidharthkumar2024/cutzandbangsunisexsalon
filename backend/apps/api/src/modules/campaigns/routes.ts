@@ -9,7 +9,12 @@ import { audit } from "../../lib/audit.js";
 import { applyProviderSettings, publicProviderSettings } from "../provider-config/config.js";
 
 const ADMIN = ["OWNER", "ADMIN", "MANAGER"] as const;
-const phoneDigits = (value: string) => value.replace(/\D/g, "");
+const phoneDigits = (value: string) => {
+  const digits = value.replace(/\D/g, "");
+  if (digits.length === 12 && digits.startsWith("91") && /^[6-9]\d{9}$/.test(digits.slice(2))) return digits.slice(2);
+  if (digits.length === 11 && digits.startsWith("0") && /^[6-9]\d{9}$/.test(digits.slice(1))) return digits.slice(1);
+  return digits;
+};
 
 function localParts(date: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -82,7 +87,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
     const body = z.object({
       branchId: z.string(),
       rows: z.array(z.object({
-        name: z.string().trim().min(1).max(150),
+        name: z.string().trim().max(150).optional(),
         phone: z.string().min(8).max(30),
         email: z.string().email().optional(),
         waConsent: z.boolean().default(false),
@@ -97,20 +102,25 @@ export default async function campaignRoutes(app: FastifyInstance) {
     let created = 0;
     let updated = 0;
     let invalid = 0;
+    let duplicates = 0;
+    let valid = 0;
     let consented = 0;
     const seen = new Set<string>();
     for (const row of body.rows) {
       const phone = phoneDigits(row.phone);
-      if (phone.length < 8 || phone.length > 15 || seen.has(phone)) { invalid += 1; continue; }
+      if (phone.length < 8 || phone.length > 15) { invalid += 1; continue; }
+      if (seen.has(phone)) { duplicates += 1; continue; }
       seen.add(phone);
+      valid += 1;
       const existing = await prisma.customer.findUnique({ where: { branchId_phone: { branchId: body.branchId, phone } } });
       const source = row.consentSource || "Admin CSV marketing import";
+      const safeName = row.name?.trim() || `Customer ${phone.slice(-4)}`;
       if (existing) {
         if (existing.deletedAt) { invalid += 1; continue; }
         await prisma.customer.update({
           where: { id: existing.id },
           data: {
-            name: row.name,
+            name: row.name?.trim() || existing.name,
             email: row.email ?? existing.email,
             waConsent: existing.waConsent || row.waConsent,
             emailConsent: existing.emailConsent || row.emailConsent,
@@ -120,7 +130,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
         updated += 1;
       } else {
         await prisma.customer.create({
-          data: { branchId: body.branchId, name: row.name, phone, email: row.email, waConsent: row.waConsent, emailConsent: row.emailConsent, source },
+          data: { branchId: body.branchId, name: safeName, phone, email: row.email, waConsent: row.waConsent, emailConsent: row.emailConsent, source },
         });
         created += 1;
       }
@@ -128,10 +138,73 @@ export default async function campaignRoutes(app: FastifyInstance) {
     }
     await audit("campaign.contacts.import", "Customer", body.branchId, {
       actorUserId: req.user?.id,
-      after: { rows: body.rows.length, created, updated, invalid, consented },
+      after: { rows: body.rows.length, valid, created, updated, invalid, duplicates, consented },
       ip: req.ip,
     });
-    return reply.code(201).send({ rows: body.rows.length, created, updated, invalid, consented });
+    return reply.code(201).send({ rows: body.rows.length, valid, created, updated, invalid, duplicates, consented });
+  });
+
+  app.post("/campaigns/contacts/verify", {
+    preHandler: authorize(...ADMIN),
+    config: { rateLimit: { max: 10, timeWindow: "5 minutes" } },
+  }, async (req, reply) => {
+    const body = z.object({
+      branchId: z.string(),
+      phones: z.array(z.string().min(8).max(30)).min(1).max(5_000),
+    }).parse(req.body);
+    if (req.user?.role === "MANAGER" && req.user.branchId !== body.branchId) return reply.code(403).send({ error: "forbidden" });
+
+    const seen = new Set<string>();
+    let invalid = 0;
+    let duplicates = 0;
+    for (const raw of body.phones) {
+      const phone = phoneDigits(raw);
+      if (phone.length < 8 || phone.length > 15) {
+        invalid += 1;
+        continue;
+      }
+      if (seen.has(phone)) {
+        duplicates += 1;
+        continue;
+      }
+      seen.add(phone);
+    }
+    const phones = [...seen];
+    const providerContext = await applyProviderSettings(body.branchId);
+    const unofficialMessaging = providerContext.whatsapp("WHATSAPP_UNOFFICIAL");
+    const state = await unofficialMessaging.health?.();
+    if (!state?.connected || !unofficialMessaging.listContacts) {
+      return {
+        total: body.phones.length,
+        valid: phones.length,
+        invalid,
+        duplicates,
+        registered: 0,
+        unknown: phones.length,
+        providerConnected: false,
+        detail: state?.detail ?? "WAHA contact verification is not connected.",
+      };
+    }
+    const contacts = await unofficialMessaging.listContacts(10_000);
+    const contactKeys = new Set<string>();
+    for (const contact of contacts) {
+      const phone = phoneDigits(contact.number);
+      if (!phone) continue;
+      contactKeys.add(phone);
+      if (phone.length === 12 && phone.startsWith("91")) contactKeys.add(phone.slice(2));
+      if (phone.length >= 10) contactKeys.add(phone.slice(-10));
+    }
+    const registered = phones.filter((phone) => contactKeys.has(phone) || contactKeys.has(phone.slice(-10))).length;
+    return {
+      total: body.phones.length,
+      valid: phones.length,
+      invalid,
+      duplicates,
+      registered,
+      unknown: Math.max(0, phones.length - registered),
+      providerConnected: true,
+      detail: "Matched against WAHA contact list for this session.",
+    };
   });
 
   app.post("/campaigns", { preHandler: authorize(...ADMIN) }, async (req, reply) => {
@@ -146,18 +219,45 @@ export default async function campaignRoutes(app: FastifyInstance) {
         couponCode: z.string().optional(),
         branchId: z.string(),
         scheduledAt: z.coerce.date().optional(),
+        recipientPhones: z.array(z.string().min(8).max(30)).max(5_000).optional(),
+        manualConsentConfirmed: z.boolean().default(false),
       })
       .superRefine((value, ctx) => {
         if (Boolean(value.mediaKey) !== Boolean(value.mediaType)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "media_key_and_type_required_together", path: ["mediaKey"] });
+        if (value.recipientPhones?.length && value.channel.startsWith("WHATSAPP") && !value.manualConsentConfirmed) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: "whatsapp_manual_consent_required", path: ["manualConsentConfirmed"] });
+        }
       })
       .parse(req.body);
     if (req.user?.role === "MANAGER" && req.user.branchId !== body.branchId) return reply.code(403).send({ error: "forbidden" });
 
     // Materialize recipients from the segment now (audience snapshot).
     const now = new Date();
-    const ids = body.segment
-      ? await customersInSegment(prisma, body.branchId, body.segment, DEFAULT_SEGMENT_CONFIG, now)
-      : (await prisma.customer.findMany({ where: { branchId: body.branchId, deletedAt: null }, select: { id: true } })).map((c) => c.id);
+    const manualPhones = [...new Set((body.recipientPhones ?? []).map(phoneDigits).filter((phone) => phone.length >= 8 && phone.length <= 15))];
+    if (manualPhones.length) {
+      for (const phone of manualPhones) {
+        const existing = await prisma.customer.findUnique({ where: { branchId_phone: { branchId: body.branchId, phone } } });
+        if (existing || !body.channel.startsWith("WHATSAPP")) continue;
+        await prisma.customer.create({
+          data: {
+            branchId: body.branchId,
+            name: `Customer ${phone.slice(-4)}`,
+            phone,
+            waConsent: true,
+            emailConsent: false,
+            source: "Manual WhatsApp campaign audience",
+          },
+        });
+      }
+    }
+    const ids = manualPhones.length
+      ? (await prisma.customer.findMany({
+          where: { branchId: body.branchId, phone: { in: manualPhones }, deletedAt: null },
+          select: { id: true },
+        })).map((c) => c.id)
+      : body.segment
+        ? await customersInSegment(prisma, body.branchId, body.segment, DEFAULT_SEGMENT_CONFIG, now)
+        : (await prisma.customer.findMany({ where: { branchId: body.branchId, deletedAt: null }, select: { id: true } })).map((c) => c.id);
 
     const eligible = await prisma.customer.findMany({
       where: {
@@ -176,7 +276,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
         branchId: body.branchId,
         name: body.name,
         channel: body.channel,
-        segment: body.segment,
+        segment: manualPhones.length ? null : body.segment,
         content: body.content,
         mediaKey: body.mediaKey,
         mediaType: body.mediaType,
@@ -189,7 +289,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
     });
     await audit("campaign.create", "Campaign", campaign.id, {
       actorUserId: req.user?.id,
-      after: { branchId: body.branchId, name: body.name, channel: body.channel, segment: body.segment, recipientCount: eligible.length, hasMedia: Boolean(body.mediaKey) },
+      after: { branchId: body.branchId, name: body.name, channel: body.channel, segment: manualPhones.length ? "MANUAL" : body.segment, manualPhones: manualPhones.length, recipientCount: eligible.length, hasMedia: Boolean(body.mediaKey) },
       ip: req.ip,
     });
     const pacing = await publicProviderSettings(body.branchId);

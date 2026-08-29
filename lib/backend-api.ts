@@ -1165,6 +1165,31 @@ export const backendApi = {
       { method: "POST", body: JSON.stringify(payload) },
       token,
     ),
+  updateService: (
+    token: string,
+    serviceId: string,
+    payload: Partial<{
+      categoryId: string;
+      name: string;
+      durationMin: number;
+      bufferMin: number;
+      priceMinor: number;
+      taxRateBps: number;
+      isActive: boolean;
+      staffIds: string[];
+    }>,
+  ) =>
+    request<BackendService>(
+      `/services/${encodeURIComponent(serviceId)}`,
+      { method: "PATCH", body: JSON.stringify(payload) },
+      token,
+    ),
+  deleteService: (token: string, serviceId: string) =>
+    request<BackendService>(
+      `/services/${encodeURIComponent(serviceId)}`,
+      { method: "DELETE" },
+      token,
+    ),
   createServiceCategory: (
     token: string,
     payload: { name: string; gender?: "Male" | "Female" | "Unisex" | "Kids - Unisex" | "Boys" | "Girls" | "Baby Boy" | "Baby Girl" | null; parentId?: string | null; sortOrder?: number },
@@ -1477,6 +1502,8 @@ export const backendApi = {
       couponCode?: string;
       branchId: string;
       scheduledAt?: string;
+      recipientPhones?: string[];
+      manualConsentConfirmed?: boolean;
     },
   ) =>
     request<BackendCampaign>(
@@ -1585,10 +1612,18 @@ export const backendApi = {
     token: string,
     payload: {
       branchId: string;
-      rows: Array<{ name: string; phone: string; email?: string; waConsent: boolean; emailConsent: boolean; consentSource?: string }>;
+      rows: Array<{ name?: string; phone: string; email?: string; waConsent: boolean; emailConsent: boolean; consentSource?: string }>;
     },
-  ) => request<{ rows: number; created: number; updated: number; invalid: number; consented: number }>(
+  ) => request<{ rows: number; valid: number; created: number; updated: number; invalid: number; duplicates: number; consented: number }>(
     "/campaigns/contacts/import",
+    { method: "POST", body: JSON.stringify(payload) },
+    token,
+  ),
+  verifyCampaignPhones: (
+    token: string,
+    payload: { branchId: string; phones: string[] },
+  ) => request<{ total: number; valid: number; invalid: number; duplicates: number; registered: number; unknown: number; providerConnected: boolean; detail: string }>(
+    "/campaigns/contacts/verify",
     { method: "POST", body: JSON.stringify(payload) },
     token,
   ),
