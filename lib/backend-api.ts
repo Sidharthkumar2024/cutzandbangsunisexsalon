@@ -1606,7 +1606,7 @@ export const backendApi = {
     token,
   ),
   syncWahaContacts: (token: string, branchId = "main") =>
-    request<{ fetched: number; created: number; updated: number; skipped: number; consentImported: boolean }>(
+    request<{ fetched: number; valid?: number; created: number; updated: number; skipped: number; consentImported: boolean; mode?: string }>(
       "/integrations/whatsapp/unofficial/contacts/sync",
       { method: "POST", body: JSON.stringify({ branchId, limit: 5_000 }) },
       token,

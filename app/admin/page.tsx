@@ -7673,7 +7673,7 @@ function Settings({
     setMessage("");
     try {
       const result = await backendApi.syncWahaContacts(token);
-      setMessage(`${result.fetched} WAHA contacts read: ${result.created} added, ${result.updated} updated. Synced contacts stay non-consented until you record permission.`);
+      setMessage(`${result.fetched} WAHA contacts read, ${result.valid ?? Math.max(0, result.fetched - result.skipped)} usable numbers found. Nothing was added to Customers/CRM.`);
       onRefresh();
     } catch (cause) {
       setMessage(cause instanceof Error ? prettyStatus(cause.message) : "WAHA contact sync failed.");
@@ -7947,7 +7947,7 @@ function Settings({
                   {key === "official" && <button disabled={busy || !token} onClick={() => void syncTemplates()}>Sync templates</button>}
                   {key === "unofficial" && !item?.connected && !sessionNeedsCreate && <button disabled={busy || !token || !providerConfig.whatsappUnofficial.enabled} onClick={() => void refreshWahaStatus()}>Show / refresh QR</button>}
                   {key === "unofficial" && !item?.connected && sessionNeedsCreate && <button disabled={busy || !token || !providerConfig.whatsappUnofficial.enabled} onClick={() => void controlWaha(technicalStatus === "STOPPED" ? "start" : "create")}>{technicalStatus === "STOPPED" ? "Start session" : "Create session"}</button>}
-                  {key === "unofficial" && item?.connected && <button disabled={busy || !token} onClick={() => void syncWahaContacts()}>Sync contacts</button>}
+                  {key === "unofficial" && item?.connected && <button disabled={busy || !token} onClick={() => void syncWahaContacts()}>Preview contacts</button>}
                   {key === "unofficial" && item?.configured && technicalStatus !== "SCAN_QR_CODE" && <button disabled={busy || !token} onClick={() => void controlWaha("restart")}>Restart</button>}
                   {key === "unofficial" && item?.connected && <button disabled={busy || !token} onClick={() => void controlWaha("logout")}>Disconnect</button>}
                   <button disabled={busy || !token || !testTo || !testMessage} onClick={() => void testProvider(type)}>Send test</button>

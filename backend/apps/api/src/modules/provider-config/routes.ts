@@ -124,35 +124,18 @@ export default async function providerConfigRoutes(app: FastifyInstance) {
     if (!adapter.listContacts) return reply.code(501).send({ error: "contact_sync_unavailable" });
     try {
       const contacts = await adapter.listContacts(body.limit);
-      let created = 0;
-      let updated = 0;
       let skipped = 0;
+      let valid = 0;
       for (const contact of contacts) {
         if (contact.number.length < 8 || contact.number.length > 15) { skipped += 1; continue; }
-        const existing = await prisma.customer.findUnique({
-          where: { branchId_phone: { branchId: body.branchId, phone: contact.number } },
-          select: { id: true, deletedAt: true },
-        });
-        if (existing) {
-          if (existing.deletedAt) { skipped += 1; continue; }
-          await prisma.customer.update({
-            where: { id: existing.id },
-            data: { name: contact.name, source: "WAHA contact sync" },
-          });
-          updated += 1;
-        } else {
-          await prisma.customer.create({
-            data: { branchId: body.branchId, phone: contact.number, name: contact.name, source: "WAHA contact sync", waConsent: false },
-          });
-          created += 1;
-        }
+        valid += 1;
       }
       await audit("waha.contacts.sync", "Customer", body.branchId, {
         actorUserId: req.user?.id,
-        after: { fetched: contacts.length, created, updated, skipped, consentImported: false },
+        after: { fetched: contacts.length, valid, created: 0, updated: 0, skipped, consentImported: false, mode: "preview_only" },
         ip: req.ip,
       });
-      return { fetched: contacts.length, created, updated, skipped, consentImported: false };
+      return { fetched: contacts.length, valid, created: 0, updated: 0, skipped, consentImported: false, mode: "preview_only" };
     } catch (error) {
       return reply.code(422).send({ error: error instanceof Error ? error.message : "waha_contact_sync_failed" });
     }
