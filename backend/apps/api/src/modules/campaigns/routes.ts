@@ -16,9 +16,28 @@ const phoneDigits = (value: string) => {
   return digits;
 };
 
+const validPhone = (phone: string) => phone.length >= 8 && phone.length <= 15;
 const uniqueValidPhones = (values: string[]) => [
-  ...new Set(values.map(phoneDigits).filter((phone) => phone.length >= 8 && phone.length <= 15)),
+  ...new Set(values.map(phoneDigits).filter(validPhone)),
 ];
+type ManualRecipientInput = {
+  name?: string;
+  phone: string;
+  email?: string;
+};
+function manualRecipientCreates(values: ManualRecipientInput[]) {
+  const unique = new Map<string, { externalName: string; externalPhone: string; externalEmail?: string }>();
+  for (const value of values) {
+    const phone = phoneDigits(value.phone);
+    if (!validPhone(phone) || unique.has(phone)) continue;
+    unique.set(phone, {
+      externalName: value.name?.trim() || `Guest ${phone.slice(-4)}`,
+      externalPhone: phone,
+      ...(value.email ? { externalEmail: value.email } : {}),
+    });
+  }
+  return [...unique.values()];
+}
 
 function localParts(date: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -55,20 +74,25 @@ export default async function campaignRoutes(app: FastifyInstance) {
       take: 100,
       include: {
         _count: { select: { recipients: true } },
-        recipients: { select: { status: true, deliveredAt: true, readAt: true, repliedAt: true } },
+        recipients: { select: { status: true, deliveredAt: true, readAt: true, repliedAt: true, customerId: true, externalPhone: true } },
       },
     });
-    return rows.map(({ recipients, ...campaign }) => ({
-      ...campaign,
-      engagement: {
+    return rows.map(({ recipients, ...campaign }) => {
+      const manualRecipientCount = recipients.filter((recipient) => recipient.externalPhone && !recipient.customerId).length;
+      return {
+        ...campaign,
+        audienceLabel: manualRecipientCount ? "Pasted / CSV audience" : campaign.segment ?? "All customers",
+        manualRecipientCount,
+        engagement: {
         total: recipients.length,
         sent: recipients.filter((item) => ["sent", "delivered", "read"].includes(item.status)).length,
         delivered: recipients.filter((item) => item.deliveredAt).length,
         read: recipients.filter((item) => item.readAt).length,
         replied: recipients.filter((item) => item.repliedAt).length,
         failed: recipients.filter((item) => item.status === "failed").length,
-      },
-    }));
+        },
+      };
+    });
   });
 
   // AI draft (admin approves before sending).
@@ -208,15 +232,21 @@ export default async function campaignRoutes(app: FastifyInstance) {
         couponCode: z.string().optional(),
         branchId: z.string(),
         scheduledAt: z.coerce.date().optional(),
+        recipientContacts: z.array(z.object({
+          name: z.string().trim().max(150).optional(),
+          phone: z.string().min(8).max(30),
+          email: z.string().email().optional(),
+        })).max(5_000).optional(),
         recipientPhones: z.array(z.string().min(8).max(30)).max(5_000).optional(),
         manualConsentConfirmed: z.boolean().default(false),
       })
       .superRefine((value, ctx) => {
+        const manualCount = (value.recipientContacts?.length ?? 0) + (value.recipientPhones?.length ?? 0);
         if (Boolean(value.mediaKey) !== Boolean(value.mediaType)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "media_key_and_type_required_together", path: ["mediaKey"] });
-        if (value.recipientPhones?.length && value.channel.startsWith("WHATSAPP") && !value.manualConsentConfirmed) {
+        if (manualCount && value.channel.startsWith("WHATSAPP") && !value.manualConsentConfirmed) {
           ctx.addIssue({ code: z.ZodIssueCode.custom, message: "whatsapp_manual_consent_required", path: ["manualConsentConfirmed"] });
         }
-        if (value.recipientPhones?.length && value.channel === "EMAIL") {
+        if (manualCount && value.channel === "EMAIL") {
           ctx.addIssue({ code: z.ZodIssueCode.custom, message: "manual_phone_campaign_is_whatsapp_only", path: ["channel"] });
         }
       })
@@ -225,14 +255,22 @@ export default async function campaignRoutes(app: FastifyInstance) {
 
     // Materialize recipients from the segment now (audience snapshot).
     const now = new Date();
-    const manualPhones = uniqueValidPhones(body.recipientPhones ?? []);
-    const ids = manualPhones.length
+    const manualInputs: ManualRecipientInput[] = [
+      ...(body.recipientContacts ?? []),
+      ...(body.recipientPhones ?? []).map((phone) => ({ phone })),
+    ];
+    const manualAudienceRequested = Boolean(body.recipientContacts?.length || body.recipientPhones?.length);
+    const manualCreates = manualRecipientCreates(manualInputs);
+    if (manualAudienceRequested && !manualCreates.length) {
+      return reply.code(400).send({ error: "campaign_has_no_valid_manual_recipients" });
+    }
+    const ids = manualAudienceRequested
       ? []
       : body.segment
         ? await customersInSegment(prisma, body.branchId, body.segment, DEFAULT_SEGMENT_CONFIG, now)
         : (await prisma.customer.findMany({ where: { branchId: body.branchId, deletedAt: null }, select: { id: true } })).map((c) => c.id);
 
-    const eligible = manualPhones.length
+    const eligible = manualAudienceRequested
       ? []
       : await prisma.customer.findMany({
           where: {
@@ -245,11 +283,8 @@ export default async function campaignRoutes(app: FastifyInstance) {
           },
           select: { id: true },
         });
-    const recipientCreates = manualPhones.length
-      ? manualPhones.map((phone) => ({
-          externalName: `Guest ${phone.slice(-4)}`,
-          externalPhone: phone,
-        }))
+    const recipientCreates = manualAudienceRequested
+      ? manualCreates
       : eligible.map(({ id: customerId }) => ({ customerId }));
 
     const campaign = await prisma.campaign.create({
@@ -257,7 +292,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
         branchId: body.branchId,
         name: body.name,
         channel: body.channel,
-        segment: manualPhones.length ? null : body.segment,
+        segment: manualAudienceRequested ? null : body.segment,
         content: body.content,
         mediaKey: body.mediaKey,
         mediaType: body.mediaType,
@@ -270,7 +305,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
     });
     await audit("campaign.create", "Campaign", campaign.id, {
       actorUserId: req.user?.id,
-      after: { branchId: body.branchId, name: body.name, channel: body.channel, segment: manualPhones.length ? "MANUAL_EXTERNAL" : body.segment, manualPhones: manualPhones.length, recipientCount: recipientCreates.length, hasMedia: Boolean(body.mediaKey) },
+      after: { branchId: body.branchId, name: body.name, channel: body.channel, segment: manualAudienceRequested ? "MANUAL_EXTERNAL" : body.segment, manualPhones: manualCreates.length, recipientCount: recipientCreates.length, hasMedia: Boolean(body.mediaKey) },
       ip: req.ip,
     });
     const pacing = await publicProviderSettings(body.branchId);

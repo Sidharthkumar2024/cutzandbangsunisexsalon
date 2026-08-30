@@ -210,8 +210,17 @@ const parseCsv = (text: string) => {
   if (row.some(Boolean)) rows.push(row);
   return rows;
 };
+type CampaignManualContact = {
+  name: string;
+  phone: string;
+  email?: string;
+  waConsent: boolean;
+  emailConsent: boolean;
+  consentSource: string;
+};
 const normalizeCampaignPhone = (value: string) => {
   const digits = value.replace(/\D/g, "");
+  if (digits.length === 12 && digits.startsWith("91") && /^[6-9]\d{9}$/.test(digits.slice(2))) return digits.slice(2);
   if (digits.length === 11 && digits.startsWith("0")) return digits.slice(1);
   return digits;
 };
@@ -236,8 +245,17 @@ const campaignAudienceStats = (phones: string[]) => {
   }
   return { total: phones.length, valid: seen.size, invalid, duplicates, uniquePhones: [...seen] };
 };
-const csvContactsForCampaign = (rows: string[][], whatsappConsent = false) => {
-  if (rows.length < 2) throw new Error("CSV needs a header and at least one contact");
+const dedupeCampaignContacts = (contacts: CampaignManualContact[]) => {
+  const unique = new Map<string, CampaignManualContact>();
+  for (const contact of contacts) {
+    const phone = normalizeCampaignPhone(contact.phone);
+    if (phone.length < 8 || phone.length > 15 || unique.has(phone)) continue;
+    unique.set(phone, { ...contact, phone });
+  }
+  return [...unique.values()];
+};
+const csvContactsForCampaign = (rows: string[][], whatsappConsent = false): CampaignManualContact[] => {
+  if (!rows.length) throw new Error("CSV did not contain any rows.");
   const headers = rows[0].map((header) => header.toLowerCase().replace(/[^a-z]/g, ""));
   const column = (...names: string[]) => headers.findIndex((header) => names.includes(header));
   const nameAt = column("name", "fullname", "customername");
@@ -246,12 +264,22 @@ const csvContactsForCampaign = (rows: string[][], whatsappConsent = false) => {
   const waConsentAt = column("waconsent", "whatsappconsent", "optin", "whatsappoptin");
   const emailConsentAt = column("emailconsent", "emailoptin");
   const consentSourceAt = column("consentsource", "optinsource");
+  const hasHeader = [nameAt, phoneAt, emailAt, waConsentAt, emailConsentAt, consentSourceAt].some((index) => index >= 0);
   const yes = (value = "") => /^(1|true|yes|y|opted\s*in|consented)$/i.test(value.trim());
-  return rows.slice(1).flatMap((values) => {
+  const dataRows = hasHeader ? rows.slice(1) : rows;
+  return dataRows.flatMap((values) => {
     const rawPhone = phoneAt >= 0 ? (values[phoneAt] ?? "") : values.join(" ");
-    const phones = phoneAt >= 0 ? [normalizeCampaignPhone(rawPhone)] : extractCampaignPhones(rawPhone);
+    const phones = extractCampaignPhones(rawPhone);
+    const inferredName = values.find((value, index) =>
+      index !== phoneAt &&
+      index !== emailAt &&
+      value &&
+      !extractCampaignPhones(value).length &&
+      !value.includes("@") &&
+      /[A-Za-z]/.test(value),
+    );
     return phones.map((phone, index) => ({
-      name: nameAt >= 0 && values[nameAt] ? values[nameAt] : `Customer ${phone.slice(-4)}`,
+      name: nameAt >= 0 && values[nameAt] ? values[nameAt] : inferredName || `Guest ${phone.slice(-4)}`,
       phone,
       ...(emailAt >= 0 && values[emailAt] ? { email: values[emailAt] } : {}),
       waConsent: whatsappConsent || (waConsentAt >= 0 && yes(values[waConsentAt])),
@@ -259,6 +287,17 @@ const csvContactsForCampaign = (rows: string[][], whatsappConsent = false) => {
       consentSource: consentSourceAt >= 0 && values[consentSourceAt] ? values[consentSourceAt] : index ? "CSV extra phone column" : "Campaign audience import",
     }));
   }).filter((row) => row.phone);
+};
+const campaignContactsFromText = (text: string, whatsappConsent = false) => {
+  const rows = parseCsv(text);
+  if (rows.length) return csvContactsForCampaign(rows, whatsappConsent);
+  return extractCampaignPhones(text).map((phone) => ({
+    name: `Guest ${phone.slice(-4)}`,
+    phone,
+    waConsent: whatsappConsent,
+    emailConsent: false,
+    consentSource: "Pasted campaign audience",
+  }));
 };
 const appointmentRow = (item: BackendAppointment, index = 0) => ({
   time: new Date(item.startAt).toLocaleTimeString("en-IN", {
@@ -6031,7 +6070,9 @@ function Campaigns({
     ? data.range.customers.lapsed +
       data.customers.filter((item) => item.segments.includes("AT_RISK")).length
     : 0;
-  const manualStats = campaignAudienceStats(extractCampaignPhones(manualNumbers));
+  const manualContacts = campaignContactsFromText(manualNumbers, manualConsentConfirmed);
+  const manualStats = campaignAudienceStats(manualContacts.map((contact) => contact.phone));
+  const manualRecipients = dedupeCampaignContacts(manualContacts);
   const manualPhoneSet = new Set(manualStats.uniquePhones);
   const knownWhatsAppReady = data.customers.filter((customer) => customer.phone && manualPhoneSet.has(normalizeCampaignPhone(customer.phone)) && customer.waConsent).length;
   const campaignTotals = data.campaigns.reduce(
@@ -6051,7 +6092,7 @@ function Campaigns({
     campaign: item,
     cells: [
         item.name,
-        item.segment ? prettyStatus(item.segment) : "All customers",
+        item.audienceLabel ?? (item.segment ? prettyStatus(item.segment) : "All customers"),
         prettyStatus(item.channel),
         prettyStatus(item.status),
         `${item.engagement?.sent ?? 0}/${item.engagement?.total ?? item._count.recipients}`,
@@ -6096,6 +6137,7 @@ function Campaigns({
         segment: audienceMode === "SEGMENT" ? segment : undefined,
         content,
         branchId: "main",
+        recipientContacts: audienceMode === "MANUAL" ? manualRecipients : undefined,
         recipientPhones: audienceMode === "MANUAL" ? manualStats.uniquePhones : undefined,
         manualConsentConfirmed: audienceMode === "MANUAL" ? manualConsentConfirmed : undefined,
         mediaKey: mediaKey || undefined,
@@ -6163,8 +6205,9 @@ function Campaigns({
       const contacts = csvContactsForCampaign(parseCsv(await file.text()), manualConsentConfirmed);
       const stats = campaignAudienceStats(contacts.map((contact) => contact.phone));
       if (!stats.valid) throw new Error("CSV did not contain any valid phone numbers.");
+      const uniqueContacts = dedupeCampaignContacts(contacts);
       setAudienceMode("MANUAL");
-      setManualNumbers(stats.uniquePhones.join("\n"));
+      setManualNumbers(uniqueContacts.map((contact) => `${contact.name}, ${contact.phone}`).join("\n"));
       setVerification(null);
       setLastImportSummary(`${stats.total} numbers found · ${stats.valid} valid · ${stats.duplicates} duplicate · ${stats.invalid} invalid`);
       if (channel.startsWith("WHATSAPP") && !manualConsentConfirmed) {
@@ -6196,7 +6239,7 @@ function Campaigns({
           <div><p className="eyebrow">Marketing audience</p><h2>CSV or pasted numbers</h2><p>CSV can contain only phone numbers; name is optional. These numbers are campaign-only and are not saved to Customers/CRM.</p></div>
           <label className="csv-picker"><span>{busy ? "Reading…" : "Choose CSV file"}</span><input type="file" accept=".csv,text/csv" disabled={busy || !token} onChange={(event) => void importContacts(event.target.files?.[0])} /></label>
           <label className="campaign-consent"><input type="checkbox" checked={manualConsentConfirmed} onChange={(event) => setManualConsentConfirmed(event.target.checked)} /> I have permission to send WhatsApp marketing to pasted/CSV numbers.</label>
-          <textarea value={manualNumbers} onChange={(event) => { setManualNumbers(event.target.value); setAudienceMode("MANUAL"); setVerification(null); }} rows={5} placeholder="Paste mobile numbers here…" />
+          <textarea value={manualNumbers} onChange={(event) => { setManualNumbers(event.target.value); setAudienceMode("MANUAL"); setVerification(null); }} rows={5} placeholder={"Paste mobile numbers here…\n9876543210\nRiya Sharma, 9123456789"} />
           <div className="campaign-audience-stats">
             <span><strong>{manualStats.total}</strong><small>Numbers found</small></span>
             <span><strong>{manualStats.valid}</strong><small>Valid format</small></span>
@@ -6232,6 +6275,23 @@ function Campaigns({
         <label>Offer<input value={offer} onChange={(event) => setOffer(event.target.value)} placeholder="20% off on weekday services" /></label>
         <label>Image / PDF creative<span className="campaign-file-picker">{mediaName || "Choose creative"}<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={(event) => void uploadCreative(event.target.files?.[0])} /></span></label>
         <label className="campaign-copy">Message<textarea value={content} onChange={(event) => setContent(event.target.value)} rows={5} /></label>
+        {audienceMode === "MANUAL" && (
+          <div className="campaign-manual-review">
+            <p className="eyebrow">Selected recipients</p>
+            <h3>{manualStats.valid} campaign-only number{manualStats.valid === 1 ? "" : "s"} ready</h3>
+            <small>
+              These exact pasted/CSV recipients will go into Create Campaign. They will not be added to Customers.
+              {manualStats.duplicates ? ` ${manualStats.duplicates} duplicate removed.` : ""}
+              {manualStats.invalid ? ` ${manualStats.invalid} invalid ignored.` : ""}
+            </small>
+            <div>
+              {manualRecipients.slice(0, 8).map((contact) => (
+                <span key={contact.phone}>{contact.name} · {contact.phone}</span>
+              ))}
+              {manualRecipients.length > 8 && <span>+{manualRecipients.length - 8} more</span>}
+            </div>
+          </div>
+        )}
         <div className="form-actions"><button disabled={!token || busy} onClick={() => void draft()}>AI draft</button><button className="button admin-primary" disabled={!token || busy || !name || !content || (audienceMode === "MANUAL" && !manualStats.valid)} onClick={() => void create()}>Create for approval</button></div>
       </section>
       <div className="campaign-steps">

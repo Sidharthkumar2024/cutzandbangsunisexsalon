@@ -341,6 +341,8 @@ export type BackendCampaign = {
   deliveryRisk?: { score: number; label: string };
   mediaKey?: string | null;
   mediaType?: string | null;
+  audienceLabel?: string;
+  manualRecipientCount?: number;
   engagement?: { total: number; sent: number; delivered: number; read: number; replied: number; failed: number };
   createdAt: string;
   _count: { recipients: number };
@@ -1502,6 +1504,7 @@ export const backendApi = {
       couponCode?: string;
       branchId: string;
       scheduledAt?: string;
+      recipientContacts?: Array<{ name?: string; phone: string; email?: string; waConsent?: boolean; emailConsent?: boolean; consentSource?: string }>;
       recipientPhones?: string[];
       manualConsentConfirmed?: boolean;
     },
