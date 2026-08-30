@@ -181,15 +181,17 @@ async function mark(id: string, status: string, error?: string, externalId?: str
       data: { status, sentAt: status === "skipped" ? undefined : new Date(), error: error?.slice(0, 500), externalId },
     });
   } catch (cause) {
+    const prismaCode = typeof cause === "object" && cause && "code" in cause ? cause.code : undefined;
+    const prismaTarget = typeof cause === "object" && cause && "meta" in cause
+      ? (cause.meta as { target?: unknown }).target
+      : undefined;
+    const externalIdConflict = externalId && (
+      prismaCode === "P2002"
+      || (Array.isArray(prismaTarget) && prismaTarget.some((target) => String(target).toLowerCase().includes("externalid")))
+      || (cause instanceof Error && /externalid/iu.test(cause.message))
+    );
     if (
-      externalId
-      && typeof cause === "object"
-      && cause
-      && "code" in cause
-      && cause.code === "P2002"
-      && "meta" in cause
-      && Array.isArray((cause.meta as { target?: unknown }).target)
-      && (cause.meta as { target: unknown[] }).target.includes("externalId")
+      externalIdConflict
     ) {
       return prisma.campaignRecipient.update({
         where: { id },
@@ -197,7 +199,7 @@ async function mark(id: string, status: string, error?: string, externalId?: str
           status,
           sentAt: status === "skipped" ? undefined : new Date(),
           error: error?.slice(0, 500),
-          externalId: undefined,
+          externalId: null,
         },
       });
     }
