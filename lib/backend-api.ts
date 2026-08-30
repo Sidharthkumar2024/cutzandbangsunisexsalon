@@ -949,6 +949,22 @@ async function request<T>(
   return data as T;
 }
 
+const CUSTOMER_SNAPSHOT_PAGE_SIZE = 500;
+
+async function requestAllCustomers(token: string, branchId = "main") {
+  const customers: BackendCustomer[] = [];
+  for (let skip = 0; skip < 10000; skip += CUSTOMER_SNAPSHOT_PAGE_SIZE) {
+    const page = await request<BackendCustomer[]>(
+      `/customers?branchId=${encodeURIComponent(branchId)}&take=${CUSTOMER_SNAPSHOT_PAGE_SIZE}&skip=${skip}`,
+      {},
+      token,
+    );
+    customers.push(...page);
+    if (page.length < CUSTOMER_SNAPSHOT_PAGE_SIZE) break;
+  }
+  return customers;
+}
+
 export const backendApi = {
   health: () => request<{ status: string }>("/health"),
   publicCatalog: () => request<PublicCatalog>("/services?branchId=main"),
@@ -1018,7 +1034,6 @@ export const backendApi = {
       ["/reports/today?branchId=main", "today"],
       ["/appointments?branchId=main", "appointments"],
       ["/waitlist?branchId=main&status=WAITING", "waitlist"],
-      ["/customers?branchId=main&take=200", "customers"],
       ["/membership-plans", "membershipPlans"],
       ["/service-packages", "servicePackages"],
       ["/products", "products"],
@@ -1057,13 +1072,14 @@ export const backendApi = {
       ["/leaves?branchId=main", "leaves"],
       ["/biometric/devices?branchId=main", "biometricDevices"],
     ] as const;
-    const [user, ...results] = await Promise.all([
+    const [user, customers, ...results] = await Promise.all([
       request<BackendUser>("/auth/me", {}, token),
+      requestAllCustomers(token, "main"),
       ...paths.map(([path]) =>
         request<unknown>(path, {}, token).catch(() => null),
       ),
     ]);
-    const snapshot = { ...emptySnapshot, user };
+    const snapshot = { ...emptySnapshot, user, customers };
     results.forEach((value, index) => {
       if (value !== null)
         (snapshot as Record<string, unknown>)[paths[index][1]] = value;

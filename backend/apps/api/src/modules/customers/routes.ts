@@ -38,7 +38,7 @@ export default async function customerRoutes(app: FastifyInstance) {
         { email: { contains: q, mode: "insensitive" } },
       ];
 
-    const takeN = Math.min(200, Number(take) || 50);
+    const takeN = Math.min(500, Number(take) || 50);
     const skipN = Number(skip) || 0;
     // When filtering by segment we must classify BEFORE paginating, otherwise
     // matches outside the fetched page are silently dropped. Bound the scan.
