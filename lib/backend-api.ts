@@ -119,6 +119,14 @@ export type BackendCustomer = {
   lastVisitAt?: string | null;
   segments: string[];
 };
+export type BackendCustomerDirectory = {
+  customers: BackendCustomer[];
+  total: number;
+  skip: number;
+  take: number;
+  hasMore: boolean;
+  counts: Record<"ALL" | "NEW" | "REPEAT" | "AT_RISK" | "LAPSED", number>;
+};
 export type BackendMembershipPlan = {
   id: string;
   name: string;
@@ -949,20 +957,14 @@ async function request<T>(
   return data as T;
 }
 
-const CUSTOMER_SNAPSHOT_PAGE_SIZE = 500;
+const CUSTOMER_SNAPSHOT_PAGE_SIZE = 100;
 
-async function requestAllCustomers(token: string, branchId = "main") {
-  const customers: BackendCustomer[] = [];
-  for (let skip = 0; skip < 10000; skip += CUSTOMER_SNAPSHOT_PAGE_SIZE) {
-    const page = await request<BackendCustomer[]>(
-      `/customers?branchId=${encodeURIComponent(branchId)}&take=${CUSTOMER_SNAPSHOT_PAGE_SIZE}&skip=${skip}`,
-      {},
-      token,
-    );
-    customers.push(...page);
-    if (page.length < CUSTOMER_SNAPSHOT_PAGE_SIZE) break;
-  }
-  return customers;
+async function requestInitialCustomers(token: string, branchId = "main") {
+  return request<BackendCustomer[]>(
+    `/customers?branchId=${encodeURIComponent(branchId)}&take=${CUSTOMER_SNAPSHOT_PAGE_SIZE}`,
+    {},
+    token,
+  );
 }
 
 export const backendApi = {
@@ -1021,6 +1023,25 @@ export const backendApi = {
       body: JSON.stringify(payload),
     }),
   me: (token: string) => request<BackendUser>("/auth/me", {}, token),
+  customerDirectory: (
+    token: string,
+    payload: {
+      branchId?: string;
+      q?: string;
+      segment?: "ALL" | "NEW" | "REPEAT" | "AT_RISK" | "LAPSED";
+      take?: number;
+      skip?: number;
+    } = {},
+  ) => {
+    const params = new URLSearchParams({
+      branchId: payload.branchId ?? "main",
+      take: String(payload.take ?? CUSTOMER_SNAPSHOT_PAGE_SIZE),
+      skip: String(payload.skip ?? 0),
+    });
+    if (payload.q?.trim()) params.set("q", payload.q.trim());
+    if (payload.segment && payload.segment !== "ALL") params.set("segment", payload.segment);
+    return request<BackendCustomerDirectory>(`/customers/directory?${params.toString()}`, {}, token);
+  },
   twoFactorStatus: (token: string) => request<BackendTwoFactorStatus>("/auth/2fa/status", {}, token),
   setupTwoFactor: (token: string) => request<{ qrDataUrl: string; manualKey: string; otpAuthUri: string }>("/auth/2fa/setup", { method: "POST", body: "{}" }, token),
   enableTwoFactor: (token: string, code: string) => request<{ enabled: true; enabledAt: string; recoveryCodes: string[] }>("/auth/2fa/enable", { method: "POST", body: JSON.stringify({ code }) }, token),
@@ -1074,7 +1095,7 @@ export const backendApi = {
     ] as const;
     const [user, customers, ...results] = await Promise.all([
       request<BackendUser>("/auth/me", {}, token),
-      requestAllCustomers(token, "main"),
+      requestInitialCustomers(token, "main"),
       ...paths.map(([path]) =>
         request<unknown>(path, {}, token).catch(() => null),
       ),

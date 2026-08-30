@@ -15,6 +15,7 @@ import {
   backendApi,
   type CashBreakdown,
   type BackendAppointment,
+  type BackendCustomer,
   type BackendCustomerDetail,
   type BackendCategory,
   type BackendInvoiceArchive,
@@ -73,9 +74,12 @@ type SaleService = {
   duration: string;
   price: number;
 };
+type CustomerDirectorySegment = "ALL" | "NEW" | "REPEAT" | "AT_RISK" | "LAPSED";
 
 const money = (minor: number) =>
   `₹${Math.round(minor / 100).toLocaleString("en-IN")}`;
+
+const CUSTOMER_DIRECTORY_PAGE_SIZE = 100;
 
 const initialsFor = (name?: string | null) =>
   (name ?? "WA")
@@ -428,6 +432,7 @@ export default function AdminPage() {
   const [customerSearchQuery, setCustomerSearchQuery] = useState("");
   const [posCustomerId, setPosCustomerId] = useState("");
   const [headerCustomerSearchOpen, setHeaderCustomerSearchOpen] = useState(false);
+  const [headerCustomerMatches, setHeaderCustomerMatches] = useState<BackendCustomer[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [memberCredit, setMemberCredit] = useState(false);
   const [paid, setPaid] = useState(false);
@@ -454,19 +459,27 @@ export default function AdminPage() {
   const activeBranch = backend.data.branches.find((branch) => branch.id === (backend.data.user?.branchId ?? "main")) ?? backend.data.branches[0];
   const role = backend.data.user?.role;
   const headerCustomerQuery = customerSearchQuery.trim();
-  const headerCustomerDigits = headerCustomerQuery.replace(/\D/gu, "");
-  const headerCustomerNameQuery = headerCustomerQuery.toLocaleLowerCase();
-  const headerCustomerMatches = view === "pos" && headerCustomerQuery
-    ? backend.data.customers
-        .filter((customer) =>
-          customer.name.toLocaleLowerCase().includes(headerCustomerNameQuery) ||
-          Boolean(
-            headerCustomerDigits &&
-              (customer.phone ?? "").replace(/\D/gu, "").includes(headerCustomerDigits),
-          ),
-        )
-        .slice(0, 8)
-    : [];
+  useEffect(() => {
+    if (view !== "pos" || !backend.token || !headerCustomerQuery) {
+      setHeaderCustomerMatches([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      backendApi
+        .customerDirectory(backend.token, { q: headerCustomerQuery, take: 8 })
+        .then((result) => {
+          if (!cancelled) setHeaderCustomerMatches(result.customers);
+        })
+        .catch(() => {
+          if (!cancelled) setHeaderCustomerMatches([]);
+        });
+    }, 180);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [backend.token, headerCustomerQuery, view]);
   const adminRoles = new Set(["SUPERADMIN", "OWNER", "ADMIN", "MANAGER", "RECEPTION"]);
   if (backend.status !== "connected" || !backend.data.user) {
     return <AdminAccessGate status={backend.status} error={backend.error} />;
@@ -2992,6 +3005,8 @@ function POS({
   const [catalogQuery, setCatalogQuery] = useState("");
   const [catalogFilter, setCatalogFilter] = useState("All");
   const [customerSearchOpen, setCustomerSearchOpen] = useState(false);
+  const [posCustomerResults, setPosCustomerResults] = useState<BackendCustomer[]>([]);
+  const [posCustomerSearching, setPosCustomerSearching] = useState(false);
   const [customerDetail, setCustomerDetail] =
     useState<BackendCustomerDetail | null>(null);
   const [showQuickCustomer, setShowQuickCustomer] = useState(false);
@@ -3064,29 +3079,7 @@ function POS({
   );
   const posCustomerQuery = headerCustomerSearch.trim();
   const posCustomerDigits = posCustomerQuery.replace(/\D/gu, "");
-  const posCustomerNameQuery = posCustomerQuery.toLocaleLowerCase();
-  const matchingCustomers = data.customers
-    .filter((item) => {
-      if (!posCustomerQuery) return false;
-      const nameMatches = item.name.toLocaleLowerCase().includes(posCustomerNameQuery);
-      const phoneMatches = Boolean(
-        posCustomerDigits &&
-          (item.phone ?? "").replace(/\D/gu, "").includes(posCustomerDigits),
-      );
-      return nameMatches || phoneMatches;
-    })
-    .sort((left, right) => {
-      const leftPhone = (left.phone ?? "").replace(/\D/gu, "");
-      const rightPhone = (right.phone ?? "").replace(/\D/gu, "");
-      const exactPhoneRank =
-        Number(rightPhone === posCustomerDigits) - Number(leftPhone === posCustomerDigits);
-      if (exactPhoneRank) return exactPhoneRank;
-      const nameStartRank =
-        Number(right.name.toLocaleLowerCase().startsWith(posCustomerNameQuery)) -
-        Number(left.name.toLocaleLowerCase().startsWith(posCustomerNameQuery));
-      return nameStartRank || left.name.localeCompare(right.name);
-    })
-    .slice(0, 8);
+  const matchingCustomers = posCustomerResults;
   const membership = customerDetail?.memberships.find(
     (item) => item.id === membershipId && item.isActive,
   );
@@ -3269,6 +3262,33 @@ function POS({
       cancelled = true;
     };
   }, [customerId, setMemberCredit, token]);
+
+  useEffect(() => {
+    if (!token || !posCustomerQuery) {
+      setPosCustomerResults([]);
+      setPosCustomerSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setPosCustomerSearching(true);
+    const timer = window.setTimeout(() => {
+      backendApi
+        .customerDirectory(token, { q: posCustomerQuery, take: 8 })
+        .then((result) => {
+          if (!cancelled) setPosCustomerResults(result.customers);
+        })
+        .catch(() => {
+          if (!cancelled) setPosCustomerResults([]);
+        })
+        .finally(() => {
+          if (!cancelled) setPosCustomerSearching(false);
+        });
+    }, 180);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [posCustomerQuery, token]);
 
   const manualPayments = (amountMinor: number) => {
     if (amountMinor <= 0) return [];
@@ -3728,6 +3748,11 @@ function POS({
                 role="listbox"
                 aria-label="Matching customers"
               >
+                {posCustomerSearching && (
+                  <div className="pos-customer-no-results" role="status">
+                    Searching live customer database…
+                  </div>
+                )}
                 {matchingCustomers.map((item) => (
                   <button
                     type="button"
@@ -3745,7 +3770,7 @@ function POS({
                     <small>{item.visitCount} visits</small>
                   </button>
                 ))}
-                {!matchingCustomers.length && (
+                {!posCustomerSearching && !matchingCustomers.length && (
                   <div className="pos-customer-no-results" role="status">
                     <span>
                       <strong>No matching customer</strong>
@@ -4118,7 +4143,7 @@ function Customers({
   setCustomerSearchQuery: (value: string) => void;
   onRefresh: () => void;
 }) {
-  const [segment, setSegment] = useState("ALL");
+  const [segment, setSegment] = useState<CustomerDirectorySegment>("ALL");
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -4147,12 +4172,19 @@ function Customers({
   const [loyaltyReason, setLoyaltyReason] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [directoryRows, setDirectoryRows] = useState<BackendCustomer[]>([]);
+  const [directoryCounts, setDirectoryCounts] = useState<Record<CustomerDirectorySegment, number> | null>(null);
+  const [directoryTotal, setDirectoryTotal] = useState(0);
+  const [directoryHasMore, setDirectoryHasMore] = useState(false);
+  const [directoryLoading, setDirectoryLoading] = useState(false);
+  const [directoryLoadingMore, setDirectoryLoadingMore] = useState(false);
+  const [directoryRefreshKey, setDirectoryRefreshKey] = useState(0);
   const canDeleteCustomer = ["OWNER", "ADMIN", "MANAGER"].includes(
     data.user?.role ?? "",
   );
   const customerQuery = customerSearchQuery.trim();
   const customerQueryDigits = customerQuery.replace(/\D/gu, "");
-  const liveRows = data.customers
+  const fallbackRows = data.customers
     .filter((customer) => {
       const matchesQuery = !customerQuery
         ? true
@@ -4167,15 +4199,82 @@ function Customers({
       const rightPhone = (right.phone ?? "").replace(/\D/gu, "");
       return Number(rightPhone === customerQueryDigits) - Number(leftPhone === customerQueryDigits);
     });
-  const counts = Object.fromEntries(
-    ["ALL", "NEW", "REPEAT", "AT_RISK", "LAPSED"].map((key) => [
+  const fallbackCounts = Object.fromEntries(
+    (["ALL", "NEW", "REPEAT", "AT_RISK", "LAPSED"] as CustomerDirectorySegment[]).map((key) => [
       key,
       key === "ALL"
         ? data.customers.length
         : data.customers.filter((customer) => customer.segments.includes(key))
             .length,
     ]),
-  );
+  ) as Record<CustomerDirectorySegment, number>;
+  const liveRows = directoryCounts ? directoryRows : fallbackRows;
+  const counts = directoryCounts ?? fallbackCounts;
+  const visibleTotal = directoryCounts ? directoryTotal : fallbackRows.length;
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    setDirectoryLoading(true);
+    const timer = window.setTimeout(() => {
+      backendApi
+        .customerDirectory(token, {
+          q: customerQuery,
+          segment,
+          take: CUSTOMER_DIRECTORY_PAGE_SIZE,
+          skip: 0,
+        })
+        .then((result) => {
+          if (cancelled) return;
+          setDirectoryRows(result.customers);
+          setDirectoryCounts(result.counts);
+          setDirectoryTotal(result.total);
+          setDirectoryHasMore(result.hasMore);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setDirectoryRows([]);
+          setDirectoryCounts(null);
+          setDirectoryTotal(0);
+          setDirectoryHasMore(false);
+        })
+        .finally(() => {
+          if (!cancelled) setDirectoryLoading(false);
+        });
+    }, customerQuery ? 180 : 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [customerQuery, directoryRefreshKey, segment, token]);
+
+  const loadMoreCustomers = async () => {
+    if (!token || directoryLoadingMore || !directoryHasMore) return;
+    setDirectoryLoadingMore(true);
+    setMessage("");
+    try {
+      const result = await backendApi.customerDirectory(token, {
+        q: customerQuery,
+        segment,
+        take: CUSTOMER_DIRECTORY_PAGE_SIZE,
+        skip: directoryRows.length,
+      });
+      setDirectoryRows((current) => {
+        const seen = new Set(current.map((customer) => customer.id));
+        return [
+          ...current,
+          ...result.customers.filter((customer) => !seen.has(customer.id)),
+        ];
+      });
+      setDirectoryCounts(result.counts);
+      setDirectoryTotal(result.total);
+      setDirectoryHasMore(result.hasMore);
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "More customers could not be loaded.");
+    } finally {
+      setDirectoryLoadingMore(false);
+    }
+  };
 
   useEffect(() => {
     if (!token || phone.replace(/\D/g, "").length < 8) return;
@@ -4222,6 +4321,7 @@ function Customers({
       const loyalty = data.settings.loyalty as Record<string, unknown> | undefined;
       const welcomePoints = Number(loyalty?.welcomePoints ?? 50);
       setMessage(`Customer created with ${welcomePoints} welcome loyalty points.`);
+      setDirectoryRefreshKey((current) => current + 1);
       onRefresh();
     } catch (cause) {
       setMessage(
@@ -4305,6 +4405,7 @@ function Customers({
       setMessage(
         "Customer deleted from the active list. Historical invoices and sales remain preserved.",
       );
+      setDirectoryRefreshKey((current) => current + 1);
       onRefresh();
     } catch (cause) {
       setMessage(
@@ -4354,6 +4455,11 @@ function Customers({
           + Add customer
         </button>
       </div>
+      <p className="customer-directory-status">
+        {directoryLoading
+          ? "Loading live customers…"
+          : `Showing ${liveRows.length.toLocaleString("en-IN")} of ${visibleTotal.toLocaleString("en-IN")} customers`}
+      </p>
       {showCreate && (
         <section className="admin-card phase-one-form">
           <div>
@@ -4483,7 +4589,21 @@ function Customers({
               </div>
             ))}
         {!liveRows.length && (
-          <p className="empty-cart">No customers match this phone, name or segment.</p>
+          <p className="empty-cart">
+            {directoryLoading
+              ? "Loading live customers…"
+              : "No customers match this phone, name or segment."}
+          </p>
+        )}
+        {directoryHasMore && (
+          <button
+            type="button"
+            className="button customer-load-more"
+            disabled={directoryLoadingMore}
+            onClick={() => void loadMoreCustomers()}
+          >
+            {directoryLoadingMore ? "Loading…" : "Load more customers"}
+          </button>
         )}
       </article>
       {detail && (

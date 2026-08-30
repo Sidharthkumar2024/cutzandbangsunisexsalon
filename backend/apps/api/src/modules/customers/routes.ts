@@ -8,6 +8,7 @@ import { audit } from "../../lib/audit.js";
 import { getLoyaltyRules, postLoyaltyEntry } from "../loyalty/ledger.js";
 
 const STAFF_ROLES = ["OWNER", "ADMIN", "MANAGER", "RECEPTION", "STAFF"] as const;
+const CUSTOMER_PAGE_SIZE_LIMIT = 500;
 const companionSchema = z.object({
   name: z.string().trim().min(1).max(120),
   relation: z.string().trim().max(80).optional(),
@@ -38,7 +39,7 @@ export default async function customerRoutes(app: FastifyInstance) {
         { email: { contains: q, mode: "insensitive" } },
       ];
 
-    const takeN = Math.min(500, Number(take) || 50);
+    const takeN = Math.min(CUSTOMER_PAGE_SIZE_LIMIT, Number(take) || 50);
     const skipN = Number(skip) || 0;
     // When filtering by segment we must classify BEFORE paginating, otherwise
     // matches outside the fetched page are silently dropped. Bound the scan.
@@ -65,6 +66,77 @@ export default async function customerRoutes(app: FastifyInstance) {
     }));
     if (!segment) return enriched;
     return enriched.filter((c) => c.segments.includes(segment)).slice(skipN, skipN + takeN);
+  });
+
+  app.get("/customers/directory", { preHandler: authorize(...STAFF_ROLES) }, async (req, reply) => {
+    const { q, branchId, segment = "ALL", take = "100", skip = "0" } = req.query as Record<string, string>;
+    const elevated = ["OWNER", "ADMIN"].includes(req.user!.role);
+    if (!elevated && !req.user!.branchId) return reply.code(403).send({ error: "branch_required" });
+    const scopedBranch = elevated ? branchId : req.user!.branchId;
+    const search = q?.trim();
+    const baseWhere: Record<string, unknown> = { deletedAt: null };
+    if (scopedBranch) baseWhere.branchId = scopedBranch;
+    if (search)
+      baseWhere.OR = [
+        { name: { contains: search, mode: "insensitive" } },
+        { phone: { contains: search.replace(/\D/g, "") || search } },
+        { email: { contains: search, mode: "insensitive" } },
+      ];
+
+    const now = new Date();
+    const lapsedCutoff = new Date(now.getTime() - DEFAULT_SEGMENT_CONFIG.lapsedDays * 86_400_000);
+    const atRiskCutoff = new Date(now.getTime() - DEFAULT_SEGMENT_CONFIG.atRiskDays * 86_400_000);
+    const segmentWhere =
+      segment === "NEW"
+        ? { visitCount: { lte: 1 } }
+        : segment === "REPEAT"
+          ? { visitCount: { gte: DEFAULT_SEGMENT_CONFIG.repeatMinVisits } }
+          : segment === "LAPSED"
+            ? { OR: [{ lastVisitAt: null }, { lastVisitAt: { lte: lapsedCutoff } }] }
+            : segment === "AT_RISK"
+              ? { lastVisitAt: { lte: atRiskCutoff, gt: lapsedCutoff } }
+              : {};
+    const andWhere = (nextSegmentWhere: Record<string, unknown>) =>
+      Object.keys(nextSegmentWhere).length ? { AND: [baseWhere, nextSegmentWhere] } : baseWhere;
+    const where = andWhere(segmentWhere);
+    const takeN = Math.min(CUSTOMER_PAGE_SIZE_LIMIT, Math.max(1, Number(take) || 100));
+    const skipN = Math.max(0, Number(skip) || 0);
+    const [customers, total, all, fresh, repeat, atRisk, lapsed] = await prisma.$transaction([
+      prisma.customer.findMany({
+        where,
+        take: takeN,
+        skip: skipN,
+        orderBy: [{ lastVisitAt: "desc" }, { createdAt: "desc" }, { name: "asc" }],
+        include: { memberships: { where: { isActive: true }, select: { id: true } } },
+      }),
+      prisma.customer.count({ where }),
+      prisma.customer.count({ where: baseWhere }),
+      prisma.customer.count({ where: andWhere({ visitCount: { lte: 1 } }) }),
+      prisma.customer.count({ where: andWhere({ visitCount: { gte: DEFAULT_SEGMENT_CONFIG.repeatMinVisits } }) }),
+      prisma.customer.count({ where: andWhere({ lastVisitAt: { lte: atRiskCutoff, gt: lapsedCutoff } }) }),
+      prisma.customer.count({ where: andWhere({ OR: [{ lastVisitAt: null }, { lastVisitAt: { lte: lapsedCutoff } }] }) }),
+    ]);
+    const enriched = customers.map((c) => ({
+      ...c,
+      segments: classify(
+        {
+          visitCount: c.visitCount,
+          totalSpent: c.totalSpent,
+          lastVisitAt: c.lastVisitAt,
+          hasActiveMembership: c.memberships.length > 0,
+        },
+        DEFAULT_SEGMENT_CONFIG,
+        now,
+      ),
+    }));
+    return {
+      customers: enriched,
+      total,
+      skip: skipN,
+      take: takeN,
+      hasMore: skipN + enriched.length < total,
+      counts: { ALL: all, NEW: fresh, REPEAT: repeat, AT_RISK: atRisk, LAPSED: lapsed },
+    };
   });
 
   // Exact, fast duplicate check used while an operator types a phone number.
