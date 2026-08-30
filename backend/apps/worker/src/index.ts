@@ -174,11 +174,35 @@ new Worker<CampaignJob>(
   { connection },
 );
 
-function mark(id: string, status: string, error?: string, externalId?: string) {
-  return prisma.campaignRecipient.update({
-    where: { id },
-    data: { status, sentAt: status === "skipped" ? undefined : new Date(), error: error?.slice(0, 500), externalId },
-  });
+async function mark(id: string, status: string, error?: string, externalId?: string) {
+  try {
+    return await prisma.campaignRecipient.update({
+      where: { id },
+      data: { status, sentAt: status === "skipped" ? undefined : new Date(), error: error?.slice(0, 500), externalId },
+    });
+  } catch (cause) {
+    if (
+      externalId
+      && typeof cause === "object"
+      && cause
+      && "code" in cause
+      && cause.code === "P2002"
+      && "meta" in cause
+      && Array.isArray((cause.meta as { target?: unknown }).target)
+      && (cause.meta as { target: unknown[] }).target.includes("externalId")
+    ) {
+      return prisma.campaignRecipient.update({
+        where: { id },
+        data: {
+          status,
+          sentAt: status === "skipped" ? undefined : new Date(),
+          error: error?.slice(0, 500),
+          externalId: undefined,
+        },
+      });
+    }
+    throw cause;
+  }
 }
 
 async function finishCampaignIfComplete(campaignId: string) {
