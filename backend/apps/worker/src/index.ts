@@ -207,26 +207,61 @@ type StoredProviders = {
     baseUrl?: string;
     callbackUrl?: string;
     session?: string;
+    intervalSeconds?: number;
+    dailyCap?: number;
+    windowStartHour?: number;
+    windowEndHour?: number;
     apiKeyEncrypted?: string;
     webhookSecretEncrypted?: string;
     secretEncrypted?: string;
   };
 };
 
+const envFlag = (value: string | undefined, fallback = false) => {
+  if (value == null || value === "") return fallback;
+  return /^(1|true|yes|on)$/iu.test(value.trim());
+};
+
+const nonEmpty = (value: string | undefined) => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+};
+
 async function applyStoredProviderSettings(branchId: string) {
   const row = await prisma.setting.findUnique({ where: { key: `branch:${branchId}:providers` } });
   const value = (row?.value ?? {}) as StoredProviders;
+  const smtpConfigured = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && (process.env.SMTP_PASS || process.env.EMAIL_FROM));
+  const officialConfigured = Boolean(process.env.WA_OFFICIAL_TOKEN && process.env.WA_OFFICIAL_PHONE_ID);
+  const unofficialConfigured = Boolean(process.env.WA_UNOFFICIAL_URL && process.env.WAHA_API_KEY && process.env.WAHA_SESSION);
+  const storedSmtp = value.smtp;
+  const storedOfficial = value.whatsappOfficial;
+  const storedUnofficial = value.whatsappUnofficial;
   return providers.scoped({
-    smtp: value.smtp ? { ...value.smtp, password: decryptSecret(value.smtp.passwordEncrypted) } : undefined,
-    whatsappOfficial: value.whatsappOfficial
-      ? { ...value.whatsappOfficial, token: decryptSecret(value.whatsappOfficial.tokenEncrypted), appSecret: decryptSecret(value.whatsappOfficial.appSecretEncrypted) }
-      : undefined,
-    whatsappUnofficial: value.whatsappUnofficial
+    smtp: {
+      enabled: envFlag(process.env.SMTP_ENABLED, smtpConfigured) || (storedSmtp?.enabled ?? false),
+      host: nonEmpty(storedSmtp?.host) ?? process.env.SMTP_HOST ?? "",
+      port: storedSmtp?.port ?? Number(process.env.SMTP_PORT ?? 587),
+      secure: storedSmtp?.secure ?? envFlag(process.env.SMTP_SECURE, Number(process.env.SMTP_PORT) === 465),
+      user: nonEmpty(storedSmtp?.user) ?? process.env.SMTP_USER ?? "",
+      from: nonEmpty(storedSmtp?.from) ?? process.env.EMAIL_FROM ?? "",
+      password: decryptSecret(storedSmtp?.passwordEncrypted) ?? process.env.SMTP_PASS,
+    },
+    whatsappOfficial: {
+      enabled: envFlag(process.env.WA_OFFICIAL_ENABLED, officialConfigured) || (storedOfficial?.enabled ?? false),
+      phoneId: nonEmpty(storedOfficial?.phoneId) ?? process.env.WA_OFFICIAL_PHONE_ID ?? "",
+      wabaId: nonEmpty(storedOfficial?.wabaId) ?? process.env.WA_OFFICIAL_WABA_ID ?? "",
+      graphVersion: nonEmpty(storedOfficial?.graphVersion) ?? process.env.WA_GRAPH_VERSION ?? "v23.0",
+      token: decryptSecret(storedOfficial?.tokenEncrypted) ?? process.env.WA_OFFICIAL_TOKEN,
+      appSecret: decryptSecret(storedOfficial?.appSecretEncrypted) ?? process.env.WA_APP_SECRET,
+    },
+    whatsappUnofficial: storedUnofficial || unofficialConfigured
       ? {
-          ...value.whatsappUnofficial,
-          apiKey: decryptSecret(value.whatsappUnofficial.apiKeyEncrypted ?? value.whatsappUnofficial.secretEncrypted),
-          webhookSecret: decryptSecret(value.whatsappUnofficial.webhookSecretEncrypted),
-          callbackUrl: value.whatsappUnofficial.callbackUrl || process.env.WA_UNOFFICIAL_CALLBACK_URL,
+          enabled: envFlag(process.env.WA_UNOFFICIAL_ENABLED, unofficialConfigured) || (storedUnofficial?.enabled ?? false),
+          baseUrl: nonEmpty(storedUnofficial?.baseUrl) ?? process.env.WA_UNOFFICIAL_URL ?? "",
+          callbackUrl: nonEmpty(storedUnofficial?.callbackUrl) ?? process.env.WA_UNOFFICIAL_CALLBACK_URL ?? "",
+          session: nonEmpty(storedUnofficial?.session) ?? process.env.WAHA_SESSION ?? "cutz-bangs-main",
+          apiKey: decryptSecret(storedUnofficial?.apiKeyEncrypted ?? storedUnofficial?.secretEncrypted) ?? process.env.WAHA_API_KEY,
+          webhookSecret: decryptSecret(storedUnofficial?.webhookSecretEncrypted) ?? process.env.WA_UNOFFICIAL_WEBHOOK_SECRET,
         }
       : undefined,
   });
