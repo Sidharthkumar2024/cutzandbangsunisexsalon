@@ -463,6 +463,8 @@ model Customer {
   campaignRecipients CampaignRecipient[]
 
   @@unique([branchId, phone])
+  @@index([branchId, deletedAt, createdAt])
+  @@index([branchId, deletedAt, visitCount])
   @@index([branchId, lastVisitAt])
 }
 
