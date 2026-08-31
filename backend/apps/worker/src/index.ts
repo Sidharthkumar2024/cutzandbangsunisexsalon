@@ -13,6 +13,42 @@ import { appointmentEmail, appointmentWhatsAppText, decryptSecret, providers } f
 
 const connection = makeConnection();
 
+type CampaignCtaButton = {
+  type: "CALL" | "WEBSITE" | "LOCATION";
+  label: string;
+  value: string;
+  secondary?: string | null;
+};
+
+function campaignCtaButtons(value: unknown): CampaignCtaButton[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const button = item as Partial<CampaignCtaButton>;
+    if (!["CALL", "WEBSITE", "LOCATION"].includes(String(button.type))) return [];
+    const label = String(button.label ?? "").trim();
+    const rawValue = String(button.value ?? "").trim();
+    if (label.length < 2 || rawValue.length < 3) return [];
+    return [{ type: button.type as CampaignCtaButton["type"], label, value: rawValue, secondary: button.secondary }];
+  }).slice(0, 3);
+}
+
+function campaignLocationUrl(value: string) {
+  if (/^https?:\/\//iu.test(value)) return value;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(value)}`;
+}
+
+function campaignCtaText(value: unknown) {
+  const buttons = campaignCtaButtons(value);
+  if (!buttons.length) return "";
+  const lines = buttons.map((button) => {
+    if (button.type === "CALL") return `☎ ${button.label}: ${button.value}`;
+    if (button.type === "LOCATION") return `📍 ${button.label}: ${campaignLocationUrl(button.value)}`;
+    return `↗ ${button.label}: ${button.value}`;
+  });
+  return `\n\nQuick actions:\n${lines.join("\n")}`;
+}
+
 // ---- Reminders ----
 new Worker<ReminderJob>(
   QUEUES.reminders,
@@ -134,13 +170,14 @@ new Worker<CampaignJob>(
       const daysSinceVisit = customer?.lastVisitAt
         ? Math.max(0, Math.floor((Date.now() - customer.lastVisitAt.getTime()) / 86_400_000))
         : 0;
-      const content = campaign.content.replace(/\{\{([a-zA-Z][a-zA-Z0-9_]*)\}\}/gu, (_match, key: string) => {
+      const personalizedContent = campaign.content.replace(/\{\{([a-zA-Z][a-zA-Z0-9_]*)\}\}/gu, (_match, key: string) => {
         const values: Record<string, string | number> = {
           name: recipientName,
           days: daysSinceVisit,
         };
         return String(values[key] ?? "");
       });
+      const content = `${personalizedContent}${campaignCtaText((campaign as { ctaJson?: unknown }).ctaJson)}`;
       const mediaUrl = campaign.mediaKey ? await providers.storage().signedUrl(campaign.mediaKey, 3_600) : undefined;
       let externalId: string | undefined;
       if (campaign.channel === "EMAIL" && recipientEmail && (!customer || customer.emailConsent)) {

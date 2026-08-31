@@ -9,6 +9,7 @@ import { audit } from "../../lib/audit.js";
 import { applyProviderSettings, publicProviderSettings } from "../provider-config/config.js";
 
 const ADMIN = ["OWNER", "ADMIN", "MANAGER"] as const;
+const CAMPAIGN_CTA_TYPES = ["CALL", "WEBSITE", "LOCATION"] as const;
 const phoneDigits = (value: string) => {
   const digits = value.replace(/\D/g, "");
   if (digits.length === 12 && digits.startsWith("91") && /^[6-9]\d{9}$/.test(digits.slice(2))) return digits.slice(2);
@@ -17,9 +18,32 @@ const phoneDigits = (value: string) => {
 };
 
 const validPhone = (phone: string) => phone.length >= 8 && phone.length <= 15;
+const validUrl = (value: string) => {
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol);
+  } catch {
+    return false;
+  }
+};
 const uniqueValidPhones = (values: string[]) => [
   ...new Set(values.map(phoneDigits).filter(validPhone)),
 ];
+const campaignCtaSchema = z
+  .object({
+    type: z.enum(CAMPAIGN_CTA_TYPES),
+    label: z.string().trim().min(2).max(32),
+    value: z.string().trim().min(3).max(300),
+    secondary: z.string().trim().max(300).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.type === "CALL" && !validPhone(phoneDigits(value.value))) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "cta_call_phone_invalid", path: ["value"] });
+    }
+    if (value.type === "WEBSITE" && !validUrl(value.value)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "cta_website_url_invalid", path: ["value"] });
+    }
+  });
 type ManualRecipientInput = {
   name?: string;
   phone: string;
@@ -229,6 +253,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
         content: z.string(),
         mediaKey: z.string().trim().max(512).optional(),
         mediaType: z.enum(["image", "document", "video"]).optional(),
+        ctaButtons: z.array(campaignCtaSchema).max(3).optional(),
         couponCode: z.string().optional(),
         branchId: z.string(),
         scheduledAt: z.coerce.date().optional(),
@@ -296,6 +321,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
         content: body.content,
         mediaKey: body.mediaKey,
         mediaType: body.mediaType,
+        ctaJson: body.ctaButtons?.length ? body.ctaButtons : undefined,
         couponCode: body.couponCode,
         scheduledAt: body.scheduledAt,
         status: "PENDING_APPROVAL",
@@ -305,7 +331,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
     });
     await audit("campaign.create", "Campaign", campaign.id, {
       actorUserId: req.user?.id,
-      after: { branchId: body.branchId, name: body.name, channel: body.channel, segment: manualAudienceRequested ? "MANUAL_EXTERNAL" : body.segment, manualPhones: manualCreates.length, recipientCount: recipientCreates.length, hasMedia: Boolean(body.mediaKey) },
+      after: { branchId: body.branchId, name: body.name, channel: body.channel, segment: manualAudienceRequested ? "MANUAL_EXTERNAL" : body.segment, manualPhones: manualCreates.length, recipientCount: recipientCreates.length, hasMedia: Boolean(body.mediaKey), ctaButtons: body.ctaButtons?.length ?? 0 },
       ip: req.ip,
     });
     const pacing = await publicProviderSettings(body.branchId);

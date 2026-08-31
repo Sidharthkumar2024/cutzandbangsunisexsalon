@@ -15,6 +15,7 @@ import {
   backendApi,
   type CashBreakdown,
   type BackendAppointment,
+  type BackendCampaignCtaButton,
   type BackendCustomer,
   type BackendCustomerDetail,
   type BackendCategory,
@@ -222,6 +223,28 @@ type CampaignManualContact = {
   emailConsent: boolean;
   consentSource: string;
 };
+type CampaignCtaDraft = BackendCampaignCtaButton & { id: string };
+const newCampaignCta = (): CampaignCtaDraft => ({
+  id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  type: "WEBSITE",
+  label: "Book now",
+  value: "",
+});
+const campaignCtaHint = (type: BackendCampaignCtaButton["type"]) => {
+  if (type === "CALL") return "Phone number, e.g. 9876543210";
+  if (type === "LOCATION") return "Google Maps link or salon address";
+  return "Website URL, e.g. https://cutzandbangs.com";
+};
+const sanitizeCampaignCtas = (buttons: CampaignCtaDraft[]): BackendCampaignCtaButton[] =>
+  buttons
+    .map((button) => ({
+      type: button.type,
+      label: button.label.trim(),
+      value: button.value.trim(),
+      ...(button.secondary?.trim() ? { secondary: button.secondary.trim() } : {}),
+    }))
+    .filter((button) => button.label.length >= 2 && button.value.length >= 3)
+    .slice(0, 3);
 const normalizeCampaignPhone = (value: string) => {
   const digits = value.replace(/\D/g, "");
   if (digits.length === 12 && digits.startsWith("91") && /^[6-9]\d{9}$/.test(digits.slice(2))) return digits.slice(2);
@@ -6178,6 +6201,7 @@ function Campaigns({
   const [mediaKey, setMediaKey] = useState("");
   const [mediaType, setMediaType] = useState<"image" | "document" | "video" | "">("");
   const [mediaName, setMediaName] = useState("");
+  const [ctaButtons, setCtaButtons] = useState<CampaignCtaDraft[]>([]);
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -6193,6 +6217,7 @@ function Campaigns({
   const manualContacts = campaignContactsFromText(manualNumbers, manualConsentConfirmed);
   const manualStats = campaignAudienceStats(manualContacts.map((contact) => contact.phone));
   const manualRecipients = dedupeCampaignContacts(manualContacts);
+  const validCtaButtons = sanitizeCampaignCtas(ctaButtons);
   const manualPhoneSet = new Set(manualStats.uniquePhones);
   const knownWhatsAppReady = data.customers.filter((customer) => customer.phone && manualPhoneSet.has(normalizeCampaignPhone(customer.phone)) && customer.waConsent).length;
   const campaignTotals = data.campaigns.reduce(
@@ -6220,6 +6245,7 @@ function Campaigns({
         String(item.engagement?.read ?? 0),
         String(item.engagement?.replied ?? 0),
         String(item.engagement?.failed ?? 0),
+        item.ctaJson?.length ? item.ctaJson.map((button) => button.label).join(", ") : "—",
       ],
   }));
   const visibleRows = statusFilter === "ALL"
@@ -6262,10 +6288,12 @@ function Campaigns({
         manualConsentConfirmed: audienceMode === "MANUAL" ? manualConsentConfirmed : undefined,
         mediaKey: mediaKey || undefined,
         mediaType: mediaType || undefined,
+        ctaButtons: validCtaButtons.length ? validCtaButtons : undefined,
       });
       setName("");
       setContent("");
       setMediaKey(""); setMediaType(""); setMediaName("");
+      setCtaButtons([]);
       if (audienceMode === "MANUAL") setManualNumbers("");
       setLastImportSummary("");
       setMessage(`Campaign created for ${result._count.recipients} eligible contacts. Pasted/CSV numbers were kept campaign-only, not added to Customers.`);
@@ -6395,6 +6423,31 @@ function Campaigns({
         <label>Offer<input value={offer} onChange={(event) => setOffer(event.target.value)} placeholder="20% off on weekday services" /></label>
         <label>Image / PDF creative<span className="campaign-file-picker">{mediaName || "Choose creative"}<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={(event) => void uploadCreative(event.target.files?.[0])} /></span></label>
         <label className="campaign-copy">Message<textarea value={content} onChange={(event) => setContent(event.target.value)} rows={5} /></label>
+        <div className="campaign-cta-builder">
+          <div>
+            <p className="eyebrow">Campaign buttons</p>
+            <h3>Call, website or location CTA</h3>
+            <small>These appear under the message as tappable phone, website, or Maps links. Add up to 3.</small>
+          </div>
+          {ctaButtons.map((button) => (
+            <div className="campaign-cta-row" key={button.id}>
+              <label>Type<select value={button.type} onChange={(event) => setCtaButtons((current) => current.map((item) => item.id === button.id ? { ...item, type: event.target.value as BackendCampaignCtaButton["type"], value: "" } : item))}><option value="WEBSITE">Website</option><option value="CALL">Call</option><option value="LOCATION">Location</option></select></label>
+              <label>Button text<input value={button.label} maxLength={32} onChange={(event) => setCtaButtons((current) => current.map((item) => item.id === button.id ? { ...item, label: event.target.value } : item))} placeholder={button.type === "CALL" ? "Call salon" : button.type === "LOCATION" ? "Get directions" : "Book now"} /></label>
+              <label>Link / phone / address<input value={button.value} onChange={(event) => setCtaButtons((current) => current.map((item) => item.id === button.id ? { ...item, value: event.target.value } : item))} placeholder={campaignCtaHint(button.type)} /></label>
+              <button type="button" aria-label={`Remove ${button.label || "CTA"} button`} onClick={() => setCtaButtons((current) => current.filter((item) => item.id !== button.id))}>Remove</button>
+            </div>
+          ))}
+          <button className="button" type="button" disabled={ctaButtons.length >= 3} onClick={() => setCtaButtons((current) => [...current, newCampaignCta()])}>
+            + Add campaign button
+          </button>
+          {validCtaButtons.length > 0 && (
+            <div className="campaign-cta-preview">
+              {validCtaButtons.map((button) => (
+                <span key={`${button.type}-${button.label}-${button.value}`}>{button.type === "CALL" ? "☎" : button.type === "LOCATION" ? "⌖" : "↗"} {button.label}</span>
+              ))}
+            </div>
+          )}
+        </div>
         {audienceMode === "MANUAL" && (
           <div className="campaign-manual-review">
             <p className="eyebrow">Selected recipients</p>
@@ -6451,7 +6504,7 @@ function Campaigns({
             <option value="FAILED">Failed</option>
           </select>
         </div>
-        <div className="campaign-table-labels"><span>Campaign</span><span>Audience</span><span>Channel</span><span>Status</span><span>Sent / total</span><span>Delivered</span><span>Read</span><span>Replied</span><span>Failed</span></div>
+        <div className="campaign-table-labels"><span>Campaign</span><span>Audience</span><span>Channel</span><span>Status</span><span>Sent / total</span><span>Delivered</span><span>Read</span><span>Replied</span><span>Failed</span><span>Buttons</span></div>
         {visibleRows.map(({ campaign, cells }) => (
           <div className="campaign-row" key={campaign.id}>
             {cells.map((cell, index) =>

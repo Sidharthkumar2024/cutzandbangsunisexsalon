@@ -347,6 +347,7 @@ export type BackendCampaign = {
   dailyCap?: number | null;
   riskLevel?: string | null;
   deliveryRisk?: { score: number; label: string };
+  ctaJson?: BackendCampaignCtaButton[] | null;
   mediaKey?: string | null;
   mediaType?: string | null;
   audienceLabel?: string;
@@ -354,6 +355,12 @@ export type BackendCampaign = {
   engagement?: { total: number; sent: number; delivered: number; read: number; replied: number; failed: number };
   createdAt: string;
   _count: { recipients: number };
+};
+export type BackendCampaignCtaButton = {
+  type: "CALL" | "WEBSITE" | "LOCATION";
+  label: string;
+  value: string;
+  secondary?: string;
 };
 export type BackendShift = {
   id?: string;
@@ -1538,6 +1545,7 @@ export const backendApi = {
       content: string;
       mediaKey?: string;
       mediaType?: "image" | "document" | "video";
+      ctaButtons?: BackendCampaignCtaButton[];
       couponCode?: string;
       branchId: string;
       scheduledAt?: string;

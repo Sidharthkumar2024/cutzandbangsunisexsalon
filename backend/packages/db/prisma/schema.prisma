@@ -1305,6 +1305,7 @@ model Campaign {
   content         String
   mediaKey        String?
   mediaType       String?
+  ctaJson         Json?
   couponCode      String?
   status          CampaignStatus   @default(DRAFT)
   scheduledAt     DateTime?
