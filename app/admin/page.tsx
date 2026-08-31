@@ -4783,6 +4783,7 @@ function Customers({
       )}
       <article className="admin-card customer-table">
         <header>
+          <span>S. No.</span>
           <span>Customer</span>
           <span>Segments</span>
           <span>Visits</span>
@@ -4791,8 +4792,9 @@ function Customers({
           <span>Last visit</span>
           <span />
         </header>
-        {liveRows.map((customer) => (
+        {liveRows.map((customer, index) => (
               <div key={customer.id}>
+                <strong className="customer-serial">{index + 1}</strong>
                 <span className="customer-cell">
                   <i>
                     {customer.name
