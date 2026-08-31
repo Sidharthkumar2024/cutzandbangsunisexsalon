@@ -1579,6 +1579,16 @@ export const backendApi = {
       { method: "POST", body: "{}" },
       token,
     ),
+  updateCampaignRecurrence: (
+    token: string,
+    campaignId: string,
+    payload: { enabled: boolean; recurrence?: BackendCampaignRecurrence },
+  ) =>
+    request<BackendCampaign>(
+      `/campaigns/${encodeURIComponent(campaignId)}/recurrence`,
+      { method: "PATCH", body: JSON.stringify(payload) },
+      token,
+    ),
   openCashSession: (token: string, payload: { branchId: string; openingCashMinor: number; openingBreakdown: CashBreakdown; openingNote?: string }) =>
     request<BackendCashSession>("/cash-sessions/open", { method: "POST", body: JSON.stringify(payload) }, token),
   closeCashSession: (token: string, cashSessionId: string, payload: { closingCashMinor: number; closingBreakdown?: CashBreakdown | null; closingNote?: string }) =>

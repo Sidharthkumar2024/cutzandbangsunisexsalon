@@ -15,6 +15,7 @@ import {
   backendApi,
   type CashBreakdown,
   type BackendAppointment,
+  type BackendCampaign,
   type BackendCampaignCtaButton,
   type BackendCampaignRecurrence,
   type BackendCustomer,
@@ -271,6 +272,16 @@ const campaignRecurrenceSummary = (value?: BackendCampaignRecurrence | null) => 
   }
   const selected = (value.daysOfMonth ?? []).join(", ");
   return `Repeats monthly ${selected ? `on date ${selected}` : ""} at ${value.time}${value.endDate ? ` until ${value.endDate}` : ""}`;
+};
+const defaultCampaignRecurrence = (): BackendCampaignRecurrence => {
+  const now = new Date();
+  return {
+    enabled: false,
+    frequency: "WEEKLY",
+    daysOfWeek: [now.getDay()],
+    daysOfMonth: [now.getDate()],
+    time: `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
+  };
 };
 const normalizeCampaignPhone = (value: string) => {
   const digits = value.replace(/\D/g, "");
@@ -6229,17 +6240,12 @@ function Campaigns({
   const [mediaType, setMediaType] = useState<"image" | "document" | "video" | "">("");
   const [mediaName, setMediaName] = useState("");
   const [ctaButtons, setCtaButtons] = useState<CampaignCtaDraft[]>([]);
-  const [recurrence, setRecurrence] = useState<BackendCampaignRecurrence>({
-    enabled: false,
-    frequency: "WEEKLY",
-    daysOfWeek: [5],
-    daysOfMonth: [1],
-    time: "11:00",
-  });
+  const [recurrence, setRecurrence] = useState<BackendCampaignRecurrence>(() => defaultCampaignRecurrence());
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [message, setMessage] = useState("");
   const [rowMessage, setRowMessage] = useState("");
   const [approvingId, setApprovingId] = useState("");
+  const [recurrenceBusyId, setRecurrenceBusyId] = useState("");
   const [busy, setBusy] = useState(false);
   const [waRisk, setWaRisk] = useState<BackendWhatsAppStatus["unofficial"]["risk"]>();
   useEffect(() => {
@@ -6347,7 +6353,7 @@ function Campaigns({
       setContent("");
       setMediaKey(""); setMediaType(""); setMediaName("");
       setCtaButtons([]);
-      setRecurrence((current) => ({ ...current, enabled: false }));
+      setRecurrence(() => defaultCampaignRecurrence());
       if (audienceMode === "MANUAL") setManualNumbers("");
       setLastImportSummary("");
       setMessage(`Campaign created for ${result._count.recipients} eligible contacts. Pasted/CSV numbers were kept campaign-only, not added to Customers.`);
@@ -6383,6 +6389,32 @@ function Campaigns({
       setMessage(`Approval failed: ${error}`);
     } finally {
       setApprovingId("");
+    }
+  };
+  const toggleCampaignRecurrence = async (campaign: BackendCampaign) => {
+    if (!token) return;
+    setRecurrenceBusyId(campaign.id);
+    setRowMessage("");
+    const enabled = !campaign.recurrenceEnabled;
+    try {
+      const existingRule = campaign.recurrenceRule && sanitizeCampaignRecurrence(campaign.recurrenceRule);
+      const nextRule = enabled
+        ? { ...(existingRule?.enabled ? existingRule : defaultCampaignRecurrence()), enabled: true }
+        : undefined;
+      const result = await backendApi.updateCampaignRecurrence(token, campaign.id, {
+        enabled,
+        recurrence: nextRule,
+      });
+      setMessage(enabled
+        ? `Auto repeat ON. Next run: ${result.recurrenceNextAt ? new Date(result.recurrenceNextAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }) : "scheduled soon"}.`
+        : "Auto repeat OFF. Future scheduled repeat runs are stopped.");
+      onRefresh();
+    } catch (cause) {
+      const error = cause instanceof Error ? prettyStatus(cause.message) : "Could not update auto repeat.";
+      setRowMessage(`Auto repeat update failed: ${error}`);
+      setMessage(`Auto repeat update failed: ${error}`);
+    } finally {
+      setRecurrenceBusyId("");
     }
   };
   const verifyManualNumbers = async () => {
@@ -6610,7 +6642,7 @@ function Campaigns({
           </select>
         </div>
         {rowMessage && <p className="campaign-form-warning">{rowMessage}</p>}
-        <div className="campaign-table-labels"><span>Campaign</span><span>Audience</span><span>Channel</span><span>Status</span><span>Sent / total</span><span>Delivered</span><span>Read</span><span>Replied</span><span>Failed</span><span>Buttons</span><span>Action</span></div>
+        <div className="campaign-table-labels"><span>Campaign</span><span>Audience</span><span>Channel</span><span>Status</span><span>Sent / total</span><span>Delivered</span><span>Read</span><span>Replied</span><span>Failed</span><span>Buttons</span><span>Auto</span><span>Action</span></div>
         {visibleRows.map(({ campaign, cells }) => (
           <div className="campaign-row" key={campaign.id}>
             {cells.map((cell, index) =>
@@ -6620,11 +6652,22 @@ function Campaigns({
                 <span key={`${cell}${index}`}>{cell}</span>
               ),
             )}
+            {campaign.recurrenceParentId ? (
+              <span>Auto run</span>
+            ) : (
+              <button
+                className={`campaign-auto-toggle ${campaign.recurrenceEnabled ? "active" : ""}`}
+                disabled={recurrenceBusyId === campaign.id}
+                onClick={() => void toggleCampaignRecurrence(campaign)}
+              >
+                {recurrenceBusyId === campaign.id ? "Saving…" : campaign.recurrenceEnabled ? "Auto ON" : "Auto OFF"}
+              </button>
+            )}
             {campaign.status === "PENDING_APPROVAL" && (
               <button disabled={Boolean(approvingId)} onClick={() => void approve(campaign.id)}>{approvingId === campaign.id ? "Approving…" : "Approve"}</button>
             )}
             {campaign.status !== "PENDING_APPROVAL" && <span>—</span>}
-            {campaign.recurrenceEnabled && <small className="campaign-row-note">{campaignRecurrenceSummary(campaign.recurrenceRule)}{campaign.recurrenceNextAt ? ` · Next ${new Date(campaign.recurrenceNextAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}` : ""}</small>}
+            {(campaign.recurrenceEnabled || campaign.recurrenceRule) && <small className="campaign-row-note">{campaign.recurrenceEnabled ? campaignRecurrenceSummary(campaign.recurrenceRule) : "Repeat saved but OFF"}{campaign.recurrenceNextAt ? ` · Next ${new Date(campaign.recurrenceNextAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}` : ""}</small>}
           </div>
         ))}
       </article>

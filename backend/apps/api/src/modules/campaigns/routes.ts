@@ -111,6 +111,27 @@ function localDateKeyFromParts(year: number, month: number, day: number) {
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
+function defaultWeeklyRecurrence(after: Date, timeZone: string): CampaignRecurrenceRule {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    weekday: "short",
+    hourCycle: "h23",
+  }).formatToParts(after);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(get("weekday"));
+  const hour = get("hour") || "11";
+  const minute = get("minute") || "00";
+  return {
+    enabled: true,
+    frequency: "WEEKLY",
+    daysOfWeek: [weekday >= 0 ? weekday : 5],
+    daysOfMonth: [1],
+    time: `${hour}:${minute}`,
+  };
+}
+
 function localToUtc(year: number, month: number, day: number, hour: number, minute: number, timeZone: string) {
   const rough = new Date(Date.UTC(year, month - 1, day, hour, minute, 0, 0));
   const actual = new Intl.DateTimeFormat("en-CA", {
@@ -500,6 +521,83 @@ export default async function campaignRoutes(app: FastifyInstance) {
       actorUserId: req.user?.id,
       before: { status: existing.status },
       after: { status: campaign.status, scheduledAt: firstRunAt, recipients: recipients.length, intervalSeconds, dailyCap, risk },
+      ip: req.ip,
+    });
+    return campaign;
+  });
+
+  app.patch("/campaigns/:id/recurrence", { preHandler: authorize(...ADMIN) }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z.object({
+      enabled: z.boolean(),
+      recurrence: campaignRecurrenceSchema.optional(),
+    }).parse(req.body);
+    const existing = await prisma.campaign.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        branchId: true,
+        recurrenceEnabled: true,
+        recurrenceRule: true,
+        recurrenceNextAt: true,
+        recurrenceParentId: true,
+      },
+    });
+    if (!existing) return reply.code(404).send({ error: "not_found" });
+    if (!["OWNER", "ADMIN"].includes(req.user!.role) && existing.branchId !== req.user?.branchId) {
+      return reply.code(403).send({ error: "forbidden" });
+    }
+    if (existing.recurrenceParentId) return reply.code(409).send({ error: "only_parent_campaign_can_repeat" });
+
+    const branch = await prisma.branch.findUnique({ where: { id: existing.branchId }, select: { timezone: true } });
+    const timeZone = branch?.timezone ?? "Asia/Kolkata";
+
+    if (!body.enabled) {
+      await prisma.$transaction([
+        prisma.campaign.update({
+          where: { id },
+          data: { recurrenceEnabled: false, recurrenceNextAt: null },
+        }),
+        prisma.campaignRecipient.updateMany({
+          where: { campaign: { recurrenceParentId: id, status: { in: ["PENDING_APPROVAL", "SCHEDULED"] } }, status: "queued" },
+          data: { status: "failed", error: "Recurring campaign turned off" },
+        }),
+        prisma.campaign.updateMany({
+          where: { recurrenceParentId: id, status: { in: ["PENDING_APPROVAL", "SCHEDULED"] } },
+          data: { status: "CANCELLED" },
+        }),
+      ]);
+      await audit("campaign.recurrence.off", "Campaign", id, {
+        actorUserId: req.user?.id,
+        before: { recurrenceEnabled: existing.recurrenceEnabled, recurrenceNextAt: existing.recurrenceNextAt },
+        after: { recurrenceEnabled: false },
+        ip: req.ip,
+      });
+      return prisma.campaign.findUnique({ where: { id }, include: { _count: { select: { recipients: true } } } });
+    }
+
+    const parsedExisting = campaignRecurrenceSchema.safeParse(existing.recurrenceRule);
+    const rule = body.recurrence?.enabled
+      ? body.recurrence
+      : parsedExisting.success && parsedExisting.data.enabled
+        ? parsedExisting.data
+        : defaultWeeklyRecurrence(new Date(), timeZone);
+    const enabledRule: CampaignRecurrenceRule = { ...rule, enabled: true };
+    const recurrenceNextAt = nextRecurringAt(enabledRule, new Date(), timeZone);
+    if (!recurrenceNextAt) return reply.code(400).send({ error: "recurrence_has_no_future_run" });
+    const campaign = await prisma.campaign.update({
+      where: { id },
+      data: {
+        recurrenceEnabled: true,
+        recurrenceRule: enabledRule,
+        recurrenceNextAt,
+      },
+      include: { _count: { select: { recipients: true } } },
+    });
+    await audit("campaign.recurrence.on", "Campaign", id, {
+      actorUserId: req.user?.id,
+      before: { recurrenceEnabled: existing.recurrenceEnabled, recurrenceNextAt: existing.recurrenceNextAt },
+      after: { recurrenceEnabled: true, recurrenceRule: enabledRule, recurrenceNextAt },
       ip: req.ip,
     });
     return campaign;
