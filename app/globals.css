@@ -1042,6 +1042,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .pos-service-price{display:grid;justify-items:end;gap:8px;white-space:nowrap}
 .pos-service-price b{color:var(--wine);font-size:14px!important}
 .pos-service-price i{grid-row:auto!important;grid-column:auto!important;width:30px!important;height:30px!important;border:1px solid #e2c8bf;border-radius:50%;background:#f6e2dc!important;color:#7f3e36!important;font-size:18px;font-weight:900;line-height:1}
+.pos-service-grid>button.selected,.pos-service-grid>button:disabled{border-color:#bfd1b6;background:#f1f7ee;cursor:not-allowed;opacity:.78}
+.pos-service-grid>button.selected .pos-service-price i,.pos-service-grid>button:disabled .pos-service-price i{border-color:#9eb394;background:#dfeadb!important;color:#4f7149!important}
+.pos-service-grid>button.selected .pos-service-copy small:last-child,.pos-service-grid>button:disabled .pos-service-copy small:last-child{color:#557b50!important;font-weight:900}
 .pos-service-grid>.empty-cart{grid-column:1/-1;min-height:120px;display:grid;place-items:center;border:1px dashed #cfc2ba;border-radius:12px;background:#fff}
 .pos-cart{overflow:hidden;border-color:#d5c9c1!important;box-shadow:0 18px 44px rgb(55 35 29 / 10%)}
 .pos-customer{grid-template-columns:44px minmax(0,1fr)!important;gap:12px;padding:18px!important;background:#fffdfb}

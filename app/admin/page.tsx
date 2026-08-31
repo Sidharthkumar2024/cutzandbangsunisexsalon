@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import BrandLogo from "../components/BrandLogo";
@@ -68,6 +68,7 @@ type CartItem = {
   price: number;
   taxRateBps: number;
 };
+const cartLineKey = (kind: CartItem["kind"], id: string) => `${kind}:${id}`;
 type InvoiceWhatsAppChannel =
   | "WHATSAPP_OFFICIAL"
   | "WHATSAPP_UNOFFICIAL";
@@ -525,6 +526,7 @@ export default function AdminPage() {
   const [headerCustomerSearchOpen, setHeaderCustomerSearchOpen] = useState(false);
   const [headerCustomerMatches, setHeaderCustomerMatches] = useState<BackendCustomer[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
+  const cartAddLockRef = useRef(new Set<string>());
   const [memberCredit, setMemberCredit] = useState(false);
   const [paid, setPaid] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
@@ -550,6 +552,13 @@ export default function AdminPage() {
   const activeBranch = backend.data.branches.find((branch) => branch.id === (backend.data.user?.branchId ?? "main")) ?? backend.data.branches[0];
   const role = backend.data.user?.role;
   const headerCustomerQuery = customerSearchQuery.trim();
+  useEffect(() => {
+    cartAddLockRef.current = new Set(
+      cart.map((item) =>
+        cartLineKey(item.kind, item.serviceId ?? item.productId ?? item.id),
+      ),
+    );
+  }, [cart]);
   useEffect(() => {
     if (view !== "pos" || !backend.token || !headerCustomerQuery) {
       setHeaderCustomerMatches([]);
@@ -611,40 +620,54 @@ export default function AdminPage() {
     setHeaderCustomerSearchOpen(false);
   };
   const addItem = (item: SaleService) => {
+    const key = cartLineKey("service", item.id);
+    if (cartAddLockRef.current.has(key)) return;
+    cartAddLockRef.current.add(key);
     playPosAddSound();
     const backendService = backend.data.categories
       .flatMap((category) => category.services)
       .find((service) => service.id === item.id);
     const staff =
       backendService?.serviceStaff[0]?.staff.displayName ?? "Unassigned";
-    setCart((current) => [
-      ...current,
-      {
-        id: item.id,
-        kind: "service",
-        serviceId: item.id,
-        name: item.name,
-        staff,
-        staffId: backendService?.serviceStaff[0]?.staff.id,
-        price: item.price,
-        taxRateBps: backendService?.taxRateBps ?? 1800,
-      },
-    ]);
+    setCart((current) =>
+      current.some((line) => line.kind === "service" && line.serviceId === item.id)
+        ? current
+        : [
+            ...current,
+            {
+              id: item.id,
+              kind: "service",
+              serviceId: item.id,
+              name: item.name,
+              staff,
+              staffId: backendService?.serviceStaff[0]?.staff.id,
+              price: item.price,
+              taxRateBps: backendService?.taxRateBps ?? 1800,
+            },
+          ],
+    );
   };
   const addProduct = (product: BackendSnapshot["products"][number]) => {
+    const key = cartLineKey("product", product.id);
+    if (cartAddLockRef.current.has(key)) return;
+    cartAddLockRef.current.add(key);
     playPosAddSound();
-    setCart((current) => [
-      ...current,
-      {
-        id: product.id,
-        kind: "product",
-        productId: product.id,
-        name: product.name,
-        staff: "Retail",
-        price: product.sellMinor / 100,
-        taxRateBps: product.taxRateBps,
-      },
-    ]);
+    setCart((current) =>
+      current.some((line) => line.kind === "product" && line.productId === product.id)
+        ? current
+        : [
+            ...current,
+            {
+              id: product.id,
+              kind: "product",
+              productId: product.id,
+              name: product.name,
+              staff: "Retail",
+              price: product.sellMinor / 100,
+              taxRateBps: product.taxRateBps,
+            },
+          ],
+    );
   };
 
   return (
@@ -3176,6 +3199,16 @@ function POS({
       (catalogFilter === "All" || catalogFilter === "Products") &&
       (!queryKey || `${product.name} ${product.brand ?? ""} ${product.sku ?? ""}`.toLowerCase().includes(queryKey)),
   );
+  const cartServiceIds = new Set(
+    cart.flatMap((item) =>
+      item.kind === "service" && item.serviceId ? [item.serviceId] : [],
+    ),
+  );
+  const cartProductIds = new Set(
+    cart.flatMap((item) =>
+      item.kind === "product" && item.productId ? [item.productId] : [],
+    ),
+  );
   const posCustomerQuery = headerCustomerSearch.trim();
   const posCustomerDigits = posCustomerQuery.replace(/\D/gu, "");
   const matchingCustomers = posCustomerResults;
@@ -3777,45 +3810,68 @@ function POS({
           ))}
         </div>
         <div className="pos-service-grid">
-          {visibleServices.map((service, index) => (
-            <button
-              type="button"
-              key={service.id}
-              onClick={() => addItem(service)}
-              aria-label={`Add ${service.name} for ₹${service.price.toLocaleString("en-IN")}`}
-            >
-              <span className={`tile-icon tile-${index % 6}`}>
-                {service.name
-                  .split(" ")
-                  .map((word) => word[0])
-                  .join("")
-                  .slice(0, 2)}
-              </span>
-              <span className="pos-service-copy">
-                <small className="pos-service-category">{serviceCategory.get(service.id) ?? "Salon service"}</small>
-                <strong>{service.name}</strong>
-                <small>{service.duration}</small>
-              </span>
-              <span className="pos-service-price">
-                <b>₹{service.price.toLocaleString("en-IN")}</b>
-                <i aria-hidden="true">+</i>
-              </span>
-            </button>
-          ))}
-          {visibleProducts.map((product, index) => (
-              <button type="button" key={product.id} onClick={() => addProduct(product)} aria-label={`Add ${product.name} for ${money(product.sellMinor)}`}>
+          {visibleServices.map((service, index) => {
+            const alreadyAdded = cartServiceIds.has(service.id);
+            return (
+              <button
+                type="button"
+                key={service.id}
+                className={alreadyAdded ? "selected" : ""}
+                disabled={alreadyAdded}
+                onClick={() => addItem(service)}
+                aria-label={
+                  alreadyAdded
+                    ? `${service.name} already added to this bill`
+                    : `Add ${service.name} for ₹${service.price.toLocaleString("en-IN")}`
+                }
+              >
+                <span className={`tile-icon tile-${index % 6}`}>
+                  {service.name
+                    .split(" ")
+                    .map((word) => word[0])
+                    .join("")
+                    .slice(0, 2)}
+                </span>
+                <span className="pos-service-copy">
+                  <small className="pos-service-category">{serviceCategory.get(service.id) ?? "Salon service"}</small>
+                  <strong>{service.name}</strong>
+                  <small>{alreadyAdded ? "Already added to bill" : service.duration}</small>
+                </span>
+                <span className="pos-service-price">
+                  <b>₹{service.price.toLocaleString("en-IN")}</b>
+                  <i aria-hidden="true">{alreadyAdded ? "✓" : "+"}</i>
+                </span>
+              </button>
+            );
+          })}
+          {visibleProducts.map((product, index) => {
+            const alreadyAdded = cartProductIds.has(product.id);
+            return (
+              <button
+                type="button"
+                key={product.id}
+                className={alreadyAdded ? "selected" : ""}
+                disabled={alreadyAdded}
+                onClick={() => addProduct(product)}
+                aria-label={
+                  alreadyAdded
+                    ? `${product.name} already added to this bill`
+                    : `Add ${product.name} for ${money(product.sellMinor)}`
+                }
+              >
                 <span className={`tile-icon tile-${(index + visibleServices.length) % 6}`}>PR</span>
                 <span className="pos-service-copy">
                   <small className="pos-service-category">Retail product</small>
                   <strong>{product.name}</strong>
-                  <small>{product.stockQty} in stock{product.sku ? ` · ${product.sku}` : ""}</small>
+                  <small>{alreadyAdded ? "Already added to bill" : `${product.stockQty} in stock${product.sku ? ` · ${product.sku}` : ""}`}</small>
                 </span>
                 <span className="pos-service-price">
                   <b>{money(product.sellMinor)}</b>
-                  <i aria-hidden="true">+</i>
+                  <i aria-hidden="true">{alreadyAdded ? "✓" : "+"}</i>
                 </span>
               </button>
-            ))}
+            );
+          })}
           {!visibleServices.length && !visibleProducts.length && (
             <p className="empty-cart">No matching services or products.</p>
           )}
