@@ -3414,16 +3414,15 @@ function POS({
       .then((detail) => {
         if (cancelled) return;
         setCustomerDetail(detail);
-        setMembershipId(
-          detail.memberships.find(
-            (item) => item.isActive && item.balanceMinor > 0,
-          )?.id ?? "",
+        const activeMembership = detail.memberships.find(
+          (item) => item.isActive && item.balanceMinor > 0,
         );
+        setMembershipId(activeMembership?.id ?? "");
         setPackageRedemptionEnabled(true);
-        // Prepaid service entitlements apply automatically. Monetary membership
-        // credit remains an explicit cashier choice so an unrelated extra
-        // service is still billed unless the customer asks to use their credit.
-        setMemberCredit(false);
+        // Membership credit auto-applies for services included in that plan.
+        // Extra services stay in the same bill and remain payable by the
+        // selected cash/card/UPI method.
+        setMemberCredit(Boolean(activeMembership));
       })
       .catch(() => {
         if (!cancelled) setCustomerDetail(null);
@@ -3478,10 +3477,6 @@ function POS({
     }
     if (memberCredit && !membership) {
       setCheckoutError("Select a customer with active membership credit.");
-      return;
-    }
-    if (memberCredit && membership && redeemMinor <= 0) {
-      setCheckoutError("This membership does not cover any unpaid service in the current bill.");
       return;
     }
     if (normalizedCouponCode && !couponAvailable) {
@@ -4147,12 +4142,12 @@ function POS({
         >
           <span>ME</span>
           <p>
-            <strong>Use membership credit</strong>
+            <strong>Membership auto credit</strong>
             <small>
               {membership
                 ? redeemMinor > 0
                   ? `${money(redeemMinor)} will apply · ${money(membership.balanceMinor)} available`
-                  : `${money(membership.balanceMinor)} available · add an included service`
+                  : `${money(membership.balanceMinor)} available · no included service in bill`
                 : "Choose a member customer"}
             </small>
           </p>
