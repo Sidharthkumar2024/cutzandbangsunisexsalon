@@ -55,6 +55,15 @@ function invoiceSendAuditPayload(value: Prisma.JsonValue | null) {
   return value as { channel?: unknown; recipient?: unknown; status?: unknown };
 }
 
+function membershipPlanAllowsService(
+  plan: { eligibleCategoryIds: string[]; excludedServiceIds: string[] },
+  service: { id: string; categoryId: string } | undefined,
+) {
+  if (!service) return false;
+  if (plan.excludedServiceIds.includes(service.id)) return false;
+  return plan.eligibleCategoryIds.length === 0 || plan.eligibleCategoryIds.includes(service.categoryId);
+}
+
 async function alreadyDeliveredInvoice(id: string, channel: "EMAIL" | "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL") {
   const logs = await prisma.auditLog.findMany({
     where: { action: "invoice.send", entityType: "Invoice", entityId: id },
@@ -376,8 +385,34 @@ export default async function posRoutes(app: FastifyInstance) {
         if (!body.customerId) return reply.code(400).send({ error: "customer_required_for_membership_credit" });
         if (membershipPayments.some((p) => !p.membershipId)) return reply.code(400).send({ error: "membership_id_required" });
         const ids = [...new Set(membershipPayments.map((p) => p.membershipId as string))];
-        const owned = await prisma.membership.findMany({ where: { id: { in: ids }, customerId: body.customerId, isActive: true }, select: { id: true } });
+        const owned = await prisma.membership.findMany({
+          where: { id: { in: ids }, customerId: body.customerId, isActive: true },
+          include: { plan: true },
+        });
         if (owned.length !== ids.length) return reply.code(403).send({ error: "membership_not_owned_by_customer" });
+        const requestedByMembershipId = new Map<string, number>();
+        for (const payment of membershipPayments) {
+          requestedByMembershipId.set(
+            payment.membershipId!,
+            (requestedByMembershipId.get(payment.membershipId!) ?? 0) + payment.amountMinor,
+          );
+        }
+        for (const membership of owned) {
+          const eligibleMinor = computed.reduce((sum, line) => {
+            if (line.input.kind !== "service" || !line.input.serviceId) return sum;
+            return membershipPlanAllowsService(membership.plan, serviceById.get(line.input.serviceId))
+              ? sum + line.calc.lineTotalMinor
+              : sum;
+          }, 0);
+          const requestedMinor = requestedByMembershipId.get(membership.id) ?? 0;
+          if (requestedMinor > eligibleMinor) {
+            return reply.code(400).send({
+              error: "membership_service_not_eligible",
+              eligibleMinor,
+              requestedMinor,
+            });
+          }
+        }
       }
 
       const loyaltyRules = await getLoyaltyRules(prisma, body.branchId);
@@ -757,8 +792,43 @@ export default async function posRoutes(app: FastifyInstance) {
         if (!existing.customerId) return reply.code(400).send({ error: "customer_required_for_membership_credit" });
         if (membershipPayments.some((p) => !p.membershipId)) return reply.code(400).send({ error: "membership_id_required" });
         const ids = [...new Set(membershipPayments.map((p) => p.membershipId as string))];
-        const owned = await prisma.membership.findMany({ where: { id: { in: ids }, customerId: existing.customerId, isActive: true }, select: { id: true } });
+        const owned = await prisma.membership.findMany({
+          where: { id: { in: ids }, customerId: existing.customerId, isActive: true },
+          include: { plan: true },
+        });
         if (owned.length !== ids.length) return reply.code(403).send({ error: "membership_not_owned_by_customer" });
+        const items = await prisma.invoiceItem.findMany({
+          where: { invoiceId: id },
+          select: { kind: true, serviceId: true, lineTotalMinor: true },
+        });
+        const itemServices = await prisma.service.findMany({
+          where: { id: { in: items.flatMap((item) => item.serviceId ? [item.serviceId] : []) } },
+          select: { id: true, categoryId: true },
+        });
+        const itemServiceById = new Map(itemServices.map((service) => [service.id, service]));
+        const requestedByMembershipId = new Map<string, number>();
+        for (const payment of membershipPayments) {
+          requestedByMembershipId.set(
+            payment.membershipId!,
+            (requestedByMembershipId.get(payment.membershipId!) ?? 0) + payment.amountMinor,
+          );
+        }
+        for (const membership of owned) {
+          const eligibleMinor = items.reduce((sum, item) => {
+            if (item.kind !== "service" || !item.serviceId) return sum;
+            return membershipPlanAllowsService(membership.plan, itemServiceById.get(item.serviceId))
+              ? sum + item.lineTotalMinor
+              : sum;
+          }, 0);
+          const requestedMinor = requestedByMembershipId.get(membership.id) ?? 0;
+          if (requestedMinor > eligibleMinor) {
+            return reply.code(400).send({
+              error: "membership_service_not_eligible",
+              eligibleMinor,
+              requestedMinor,
+            });
+          }
+        }
       }
       const addedMinor = payments.reduce((sum, payment) => sum + payment.amountMinor, 0);
       try {

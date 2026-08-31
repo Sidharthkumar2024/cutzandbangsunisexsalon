@@ -134,6 +134,8 @@ export type BackendMembershipPlan = {
   creditMinor: number;
   validityDays?: number | null;
   memberDiscountBps: number;
+  eligibleCategoryIds: string[];
+  excludedServiceIds: string[];
 };
 export type BackendServicePackage = {
   id: string;
@@ -522,6 +524,7 @@ export type BackendCustomerHistoryEntry = {
 };
 export type BackendService = {
   id: string;
+  categoryId: string;
   name: string;
   durationMin: number;
   priceMinor: number;

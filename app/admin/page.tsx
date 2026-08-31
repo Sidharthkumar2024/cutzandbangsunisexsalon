@@ -3180,6 +3180,11 @@ function POS({
       category.services.map((service) => [service.id, categoryGroupName(category)] as const),
     ),
   );
+  const serviceCategoryIdByService = new Map(
+    data.categories.flatMap((category) =>
+      category.services.map((service) => [service.id, category.id] as const),
+    ),
+  );
   const catalogFilters = [
     "All",
     ...Array.from(new Set(data.categories.flatMap((category) => [categoryGroupName(category), categoryDisplayName(category)]))),
@@ -3296,9 +3301,42 @@ function POS({
   const loyaltyMinor = effectiveLoyaltyPoints > 0 && loyaltyRedemptionValid
     ? effectiveLoyaltyPoints * loyaltyRules.redeemMinorPerPoint
     : 0;
+  const membershipEligibleServiceIds = new Set(
+    membership
+      ? services
+          .filter((service) => {
+            const excluded = new Set(membership.plan.excludedServiceIds ?? []);
+            const eligibleCategories = new Set(membership.plan.eligibleCategoryIds ?? []);
+            if (excluded.has(service.id)) return false;
+            if (eligibleCategories.size > 0 && !eligibleCategories.has(serviceCategoryIdByService.get(service.id) ?? "")) return false;
+            return true;
+          })
+          .map((service) => service.id)
+      : [],
+  );
+  const coveredQtyByServiceForMembership = new Map<string, number>();
+  for (const redemption of packageRedemptions) {
+    coveredQtyByServiceForMembership.set(
+      redemption.serviceId,
+      (coveredQtyByServiceForMembership.get(redemption.serviceId) ?? 0) + redemption.qty,
+    );
+  }
+  const membershipEligiblePayableMinor = cart.reduce((sum, line) => {
+    if (line.kind !== "service" || !line.serviceId || !membershipEligibleServiceIds.has(line.serviceId)) return sum;
+    const coveredQty = coveredQtyByServiceForMembership.get(line.serviceId) ?? 0;
+    if (coveredQty > 0) {
+      coveredQtyByServiceForMembership.set(line.serviceId, coveredQty - 1);
+      return sum;
+    }
+    return sum + line.price * 100;
+  }, 0);
   const redeemMinor =
     memberCredit && membership
-      ? Math.min(membership.balanceMinor, afterCouponMinor - loyaltyMinor)
+      ? Math.min(
+          membership.balanceMinor,
+          Math.max(0, afterCouponMinor - loyaltyMinor),
+          Math.max(0, membershipEligiblePayableMinor - couponDiscountMinor - loyaltyMinor),
+        )
       : 0;
   const emailDeliveryBlockedReason = !selectedCustomer
     ? "Select a customer before sending a receipt."
@@ -3440,6 +3478,10 @@ function POS({
     }
     if (memberCredit && !membership) {
       setCheckoutError("Select a customer with active membership credit.");
+      return;
+    }
+    if (memberCredit && membership && redeemMinor <= 0) {
+      setCheckoutError("This membership does not cover any unpaid service in the current bill.");
       return;
     }
     if (normalizedCouponCode && !couponAvailable) {
@@ -4108,7 +4150,9 @@ function POS({
             <strong>Use membership credit</strong>
             <small>
               {membership
-                ? `${money(membership.balanceMinor)} available`
+                ? redeemMinor > 0
+                  ? `${money(redeemMinor)} will apply · ${money(membership.balanceMinor)} available`
+                  : `${money(membership.balanceMinor)} available · add an included service`
                 : "Choose a member customer"}
             </small>
           </p>
@@ -4979,13 +5023,75 @@ function Memberships({
   const [planPay, setPlanPay] = useState(3000);
   const [planCredit, setPlanCredit] = useState(5000);
   const [planValidity, setPlanValidity] = useState(180);
+  const [planServiceQuery, setPlanServiceQuery] = useState("");
+  const [planIncludedServiceIds, setPlanIncludedServiceIds] = useState<string[]>([]);
   const [packageName, setPackageName] = useState("");
   const [packagePrice, setPackagePrice] = useState(1999);
   const [packageValidity, setPackageValidity] = useState(90);
   const [packageItems, setPackageItems] = useState<Record<string, number>>({});
   const [packageId, setPackageId] = useState("");
   const [soldByStaffId, setSoldByStaffId] = useState("");
+  const [memberCustomerQuery, setMemberCustomerQuery] = useState("");
+  const [memberCustomerResults, setMemberCustomerResults] = useState<BackendCustomer[]>([]);
+  const [memberCustomerSearching, setMemberCustomerSearching] = useState(false);
+  const planServiceSelectionReady = useRef(false);
   const services = data.categories.flatMap((category) => category.services);
+  const serviceCategoryName = new Map(
+    data.categories.flatMap((category) =>
+      category.services.map((service) => [service.id, categoryDisplayName(category)] as const),
+    ),
+  );
+  const serviceCategoryId = new Map(
+    data.categories.flatMap((category) =>
+      category.services.map((service) => [service.id, category.id] as const),
+    ),
+  );
+  const planServiceQueryKey = planServiceQuery.trim().toLowerCase();
+  const visiblePlanServices = services.filter((service) => {
+    const haystack = `${service.name} ${serviceCategoryName.get(service.id) ?? ""}`.toLowerCase();
+    return !planServiceQueryKey || haystack.includes(planServiceQueryKey);
+  });
+  const includedServiceSet = new Set(planIncludedServiceIds);
+  const customerOptionsSource = memberCustomerQuery.trim() ? memberCustomerResults : data.customers;
+  const selectedMemberCustomer = data.customers.find((customer) => customer.id === customerId);
+  const memberCustomerOptions = [
+    ...(selectedMemberCustomer && !customerOptionsSource.some((customer) => customer.id === selectedMemberCustomer.id)
+      ? [selectedMemberCustomer]
+      : []),
+    ...customerOptionsSource,
+  ];
+  useEffect(() => {
+    if (!planServiceSelectionReady.current && services.length) {
+      setPlanIncludedServiceIds(services.map((service) => service.id));
+      planServiceSelectionReady.current = true;
+    }
+  }, [services]);
+  useEffect(() => {
+    if (!token || !memberCustomerQuery.trim()) {
+      setMemberCustomerResults([]);
+      setMemberCustomerSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setMemberCustomerSearching(true);
+    const timer = window.setTimeout(() => {
+      backendApi
+        .customerDirectory(token, { q: memberCustomerQuery, take: 12 })
+        .then((result) => {
+          if (!cancelled) setMemberCustomerResults(result.customers);
+        })
+        .catch(() => {
+          if (!cancelled) setMemberCustomerResults([]);
+        })
+        .finally(() => {
+          if (!cancelled) setMemberCustomerSearching(false);
+        });
+    }, 180);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [memberCustomerQuery, token]);
   const enroll = async () => {
     if (!token || !customerId || !planId) return;
     setBusy(true);
@@ -5011,17 +5117,22 @@ function Memberships({
     }
   };
   const createPlan = async () => {
-    if (!token || !planName || planCredit <= 0 || planPay < 0) return;
+    if (!token || !planName || planCredit <= 0 || planPay < 0 || !planIncludedServiceIds.length) return;
     setBusy(true);
     setMessage("");
     try {
+      const selectedServices = new Set(planIncludedServiceIds);
       await backendApi.createMembershipPlan(token, {
         name: planName,
         payMinor: planPay * 100,
         creditMinor: planCredit * 100,
         validityDays: planValidity > 0 ? planValidity : null,
+        excludedServiceIds: services
+          .filter((service) => !selectedServices.has(service.id))
+          .map((service) => service.id),
       });
       setPlanName("");
+      setPlanIncludedServiceIds(services.map((service) => service.id));
       setMessage("Membership plan created and available for enrolment.");
       onRefresh();
     } catch (cause) {
@@ -5069,6 +5180,15 @@ function Memberships({
     }
   };
   const activePlans = plans;
+  const servicesForPlan = (plan: BackendSnapshot["membershipPlans"][number]) => {
+    const excluded = new Set(plan.excludedServiceIds ?? []);
+    const eligibleCategories = new Set(plan.eligibleCategoryIds ?? []);
+    return services.filter((service) => {
+      if (excluded.has(service.id)) return false;
+      if (eligibleCategories.size > 0 && !eligibleCategories.has(serviceCategoryId.get(service.id) ?? "")) return false;
+      return true;
+    });
+  };
   return (
     <div>
       {message && <div className="calendar-message">{message}</div>}
@@ -5082,7 +5202,45 @@ function Memberships({
           <label>Customer pays (₹)<input type="number" min="0" value={planPay} onChange={(event) => setPlanPay(Number(event.target.value))} /></label>
           <label>Service credit (₹)<input type="number" min="1" value={planCredit} onChange={(event) => setPlanCredit(Number(event.target.value))} /></label>
           <label>Validity days<input type="number" min="0" value={planValidity} onChange={(event) => setPlanValidity(Number(event.target.value))} /></label>
-          <button className="button admin-primary" disabled={busy || !token || !planName} onClick={() => void createPlan()}>{busy ? "Saving…" : "Create membership"}</button>
+          <fieldset className="membership-service-picker">
+            <legend>Membership included services</legend>
+            <div className="membership-service-tools">
+              <input
+                value={planServiceQuery}
+                onChange={(event) => setPlanServiceQuery(event.target.value)}
+                placeholder="Search services to include..."
+              />
+              <button type="button" onClick={() => setPlanIncludedServiceIds(services.map((service) => service.id))}>All</button>
+              <button type="button" onClick={() => setPlanIncludedServiceIds([])}>Clear</button>
+            </div>
+            <small>{planIncludedServiceIds.length} of {services.length} services included in this membership.</small>
+            <div>
+              {visiblePlanServices.map((service) => {
+                const included = includedServiceSet.has(service.id);
+                return (
+                  <label key={service.id} className={included ? "selected" : ""}>
+                    <input
+                      type="checkbox"
+                      checked={included}
+                      onChange={(event) =>
+                        setPlanIncludedServiceIds((current) =>
+                          event.target.checked
+                            ? Array.from(new Set([...current, service.id]))
+                            : current.filter((id) => id !== service.id),
+                        )
+                      }
+                    />
+                    <span>
+                      <strong>{service.name}</strong>
+                      <small>{serviceCategoryName.get(service.id) ?? "Service"} · {money(service.priceMinor)}</small>
+                    </span>
+                  </label>
+                );
+              })}
+              {!visiblePlanServices.length && <p>No services match this search.</p>}
+            </div>
+          </fieldset>
+          <button className="button admin-primary" disabled={busy || !token || !planName || !planIncludedServiceIds.length} onClick={() => void createPlan()}>{busy ? "Saving…" : "Create membership"}</button>
         </section>
         <section className="admin-card phase-one-form compact-builder package-builder">
           <div>
@@ -5114,15 +5272,24 @@ function Memberships({
           </small>
         </div>
         <label>
+          Find customer
+          <input
+            value={memberCustomerQuery}
+            onChange={(event) => setMemberCustomerQuery(event.target.value)}
+            placeholder="Search customer name or phone..."
+          />
+          <small>{memberCustomerSearching ? "Searching…" : `${memberCustomerOptions.length} customer${memberCustomerOptions.length === 1 ? "" : "s"} shown`}</small>
+        </label>
+        <label>
           Customer
           <select
             value={customerId}
             onChange={(event) => setCustomerId(event.target.value)}
           >
             <option value="">Select customer</option>
-            {data.customers.map((customer) => (
+            {memberCustomerOptions.map((customer) => (
               <option value={customer.id} key={customer.id}>
-                {customer.name}
+                {customer.name}{customer.phone ? ` · ${customer.phone}` : ""}
               </option>
             ))}
           </select>
@@ -5212,6 +5379,14 @@ function Memberships({
                 ? ` · ${plan.memberDiscountBps / 100}% member discount`
                 : ""}
             </p>
+            <ul className="plan-service-list">
+              {servicesForPlan(plan).slice(0, 8).map((service) => (
+                <li key={service.id}>{service.name}</li>
+              ))}
+              {servicesForPlan(plan).length > 8 && (
+                <li>+{servicesForPlan(plan).length - 8} more services</li>
+              )}
+            </ul>
             <span className="plan-ready">Available for enrolment</span>
           </article>
         ))}
