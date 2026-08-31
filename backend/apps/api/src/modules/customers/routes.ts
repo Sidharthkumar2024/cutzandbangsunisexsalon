@@ -9,6 +9,8 @@ import { getLoyaltyRules, postLoyaltyEntry } from "../loyalty/ledger.js";
 
 const STAFF_ROLES = ["OWNER", "ADMIN", "MANAGER", "RECEPTION", "STAFF"] as const;
 const CUSTOMER_PAGE_SIZE_LIMIT = 500;
+const CUSTOMER_IMPORT_ROW_LIMIT = 100_000;
+const CUSTOMER_IMPORT_BODY_LIMIT = 25_000_000;
 const companionSchema = z.object({
   name: z.string().trim().min(1).max(120),
   relation: z.string().trim().max(80).optional(),
@@ -181,11 +183,42 @@ export default async function customerRoutes(app: FastifyInstance) {
     const normalized = {
       ...profile,
       phone: body.phone ? body.phone.replace(/\D/g, "") : undefined,
+      email: body.email ? body.email.toLowerCase() : undefined,
       referralPhone: body.referralPhone ? body.referralPhone.replace(/\D/g, "") : undefined,
     };
     try {
       const c = await prisma.$transaction(async (tx) => {
-        const customer = await tx.customer.create({ data: normalized });
+        const pk = phoneKey(normalized.phone);
+        const activeDuplicate = pk
+          ? await tx.customer.findFirst({
+              where: { branchId: body.branchId, deletedAt: null, phone: { endsWith: pk } },
+              select: { id: true },
+            })
+          : null;
+        if (activeDuplicate) {
+          throw Object.assign(new Error("duplicate_active_customer"), { appCode: "duplicate_phone" });
+        }
+
+        const archivedDuplicate = pk
+          ? await tx.customer.findFirst({
+              where: { branchId: body.branchId, deletedAt: { not: null }, phone: { endsWith: pk } },
+            })
+          : normalized.email
+            ? await tx.customer.findFirst({
+                where: { branchId: body.branchId, deletedAt: { not: null }, email: normalized.email },
+              })
+            : null;
+
+        const customer = archivedDuplicate
+          ? await tx.customer.update({
+              where: { id: archivedDuplicate.id },
+              data: {
+                ...normalized,
+                source: normalized.source || "walk_in",
+                deletedAt: null,
+              },
+            })
+          : await tx.customer.create({ data: normalized });
         if (companions.length) {
           await tx.customerCompanion.createMany({
             data: companions.map((companion) => ({
@@ -209,7 +242,10 @@ export default async function customerRoutes(app: FastifyInstance) {
           });
         }
         const rules = await getLoyaltyRules(tx, body.branchId);
-        if (rules.enabled && rules.welcomePoints > 0) {
+        const existingWelcome = archivedDuplicate
+          ? await tx.loyaltyLedger.findFirst({ where: { customerId: customer.id, type: "WELCOME" }, select: { id: true } })
+          : null;
+        if (rules.enabled && rules.welcomePoints > 0 && !existingWelcome) {
           await postLoyaltyEntry(tx, {
             customerId: customer.id,
             type: "WELCOME",
@@ -218,8 +254,9 @@ export default async function customerRoutes(app: FastifyInstance) {
             actorUserId: req.user?.id,
           });
         }
-        await audit("customer.create", "Customer", customer.id, {
+        await audit(archivedDuplicate ? "customer.restore" : "customer.create", "Customer", customer.id, {
           actorUserId: req.user?.id,
+          before: archivedDuplicate || undefined,
           after: { ...normalized, companions: companions.length, initialVisit, welcomePoints: rules.enabled ? rules.welcomePoints : 0 },
           ip: req.ip,
         }, tx);
@@ -230,6 +267,8 @@ export default async function customerRoutes(app: FastifyInstance) {
       });
       return reply.code(201).send(c);
     } catch (e) {
+      if ((e as { appCode?: string }).appCode === "duplicate_phone")
+        return reply.code(409).send({ error: "duplicate_phone" });
       if ((e as { code?: string }).code === "P2002")
         return reply.code(409).send({ error: "duplicate_phone" });
       throw e;
@@ -417,40 +456,61 @@ export default async function customerRoutes(app: FastifyInstance) {
     return customer;
   });
 
-  // CSV / Google-Sheet import with phone/email dedupe
+  // CSV / Google-Sheet import with phone/email dedupe. If a matching archived
+  // customer exists (for example an old WAHA/contact-sync row), revive it
+  // instead of blocking the operator with a duplicate-phone error.
   app.post("/customers/import", { preHandler: authorize("OWNER", "ADMIN", "MANAGER") }, async (req, reply) => {
-    const { branchId, csv } = z.object({ branchId: z.string(), csv: z.string().max(1_000_000) }).parse(req.body);
+    const { branchId, csv } = z.object({ branchId: z.string(), csv: z.string().max(CUSTOMER_IMPORT_BODY_LIMIT) }).parse(req.body);
     if (!["OWNER", "ADMIN"].includes(req.user!.role) && req.user!.branchId !== branchId) return reply.code(403).send({ error: "forbidden" });
     const rows = parseCsv(csv);
-    if (rows.length > 500) return reply.code(413).send({ error: "too_many_rows", maxRows: 500 });
+    if (rows.length > CUSTOMER_IMPORT_ROW_LIMIT) return reply.code(413).send({ error: "too_many_rows", maxRows: CUSTOMER_IMPORT_ROW_LIMIT });
     let created = 0;
+    let restored = 0;
     let skipped = 0;
     const loyaltyRules = await getLoyaltyRules(prisma, branchId);
     for (const r of rows) {
       const pk = phoneKey(r.phone);
+      const phone = r.phone ? r.phone.replace(/\D/g, "") : undefined;
       const email = r.email?.toLowerCase() || undefined;
-      const dup = await prisma.customer.findFirst({
+      const duplicateWhere = [
+        ...(pk ? [{ phone: { endsWith: pk } }] : []),
+        ...(email ? [{ email }] : []),
+      ];
+      const activeDup = duplicateWhere.length ? await prisma.customer.findFirst({
         where: {
           branchId,
-          OR: [
-            ...(pk ? [{ phone: { endsWith: pk } }] : []),
-            ...(email ? [{ email }] : []),
-          ],
+          deletedAt: null,
+          OR: duplicateWhere,
         },
-      });
-      if (dup) { skipped++; continue; }
+        select: { id: true },
+      }) : null;
+      if (activeDup) { skipped++; continue; }
+      const archivedDup = duplicateWhere.length ? await prisma.customer.findFirst({
+        where: {
+          branchId,
+          deletedAt: { not: null },
+          OR: duplicateWhere,
+        },
+      }) : null;
       await prisma.$transaction(async (tx) => {
-        const customer = await tx.customer.create({
-          data: {
-            branchId,
-            name: r.name || r.customer || "Unknown",
-            phone: r.phone || undefined,
-            email,
-            source: r.source || "import",
-            tags: r.tags ? r.tags.split(/[;|]/).map((t) => t.trim()).filter(Boolean) : [],
-          },
-        });
-        if (loyaltyRules.enabled && loyaltyRules.welcomePoints > 0) {
+        const imported = {
+          branchId,
+          name: r.name || r.customer || "Unknown",
+          phone,
+          email,
+          source: r.source || "import",
+          tags: r.tags ? r.tags.split(/[;|]/).map((t) => t.trim()).filter(Boolean) : [],
+        };
+        const customer = archivedDup
+          ? await tx.customer.update({
+              where: { id: archivedDup.id },
+              data: { ...imported, deletedAt: null },
+            })
+          : await tx.customer.create({ data: imported });
+        const existingWelcome = archivedDup
+          ? await tx.loyaltyLedger.findFirst({ where: { customerId: customer.id, type: "WELCOME" }, select: { id: true } })
+          : null;
+        if (loyaltyRules.enabled && loyaltyRules.welcomePoints > 0 && !existingWelcome) {
           await postLoyaltyEntry(tx, {
             customerId: customer.id,
             type: "WELCOME",
@@ -459,9 +519,18 @@ export default async function customerRoutes(app: FastifyInstance) {
             actorUserId: req.user?.id,
           });
         }
+        if (archivedDup) {
+          await audit("customer.restore", "Customer", customer.id, {
+            actorUserId: req.user?.id,
+            before: archivedDup,
+            after: imported,
+            ip: req.ip,
+          }, tx);
+        }
       });
-      created++;
+      if (archivedDup) restored++;
+      else created++;
     }
-    return reply.send({ created, skipped, total: rows.length });
+    return reply.send({ created, restored, skipped, total: rows.length });
   });
 }
