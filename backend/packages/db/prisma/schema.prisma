@@ -1309,6 +1309,11 @@ model Campaign {
   couponCode      String?
   status          CampaignStatus   @default(DRAFT)
   scheduledAt     DateTime?
+  recurrenceEnabled Boolean         @default(false)
+  recurrenceRule    Json?
+  recurrenceNextAt  DateTime?
+  recurrenceLastAt  DateTime?
+  recurrenceParentId String?
   approvedBy      String?
   intervalSeconds Int?
   dailyCap        Int?
@@ -1318,6 +1323,7 @@ model Campaign {
   recipients CampaignRecipient[]
 
   @@index([branchId, createdAt])
+  @@index([recurrenceEnabled, recurrenceNextAt])
 }
 
 model CampaignRecipient {

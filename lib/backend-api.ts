@@ -348,6 +348,11 @@ export type BackendCampaign = {
   riskLevel?: string | null;
   deliveryRisk?: { score: number; label: string };
   ctaJson?: BackendCampaignCtaButton[] | null;
+  recurrenceEnabled?: boolean;
+  recurrenceRule?: BackendCampaignRecurrence | null;
+  recurrenceNextAt?: string | null;
+  recurrenceLastAt?: string | null;
+  recurrenceParentId?: string | null;
   mediaKey?: string | null;
   mediaType?: string | null;
   audienceLabel?: string;
@@ -361,6 +366,14 @@ export type BackendCampaignCtaButton = {
   label: string;
   value: string;
   secondary?: string;
+};
+export type BackendCampaignRecurrence = {
+  enabled: boolean;
+  frequency: "WEEKLY" | "MONTHLY";
+  daysOfWeek?: number[];
+  daysOfMonth?: number[];
+  time: string;
+  endDate?: string;
 };
 export type BackendShift = {
   id?: string;
@@ -1546,6 +1559,7 @@ export const backendApi = {
       mediaKey?: string;
       mediaType?: "image" | "document" | "video";
       ctaButtons?: BackendCampaignCtaButton[];
+      recurrence?: BackendCampaignRecurrence;
       couponCode?: string;
       branchId: string;
       scheduledAt?: string;

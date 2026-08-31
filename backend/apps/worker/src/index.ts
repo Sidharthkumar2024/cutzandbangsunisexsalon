@@ -8,7 +8,7 @@
 
 import { Worker } from "bullmq";
 import { prisma } from "@cutz/db";
-import { makeConnection, QUEUES, ReminderJob, EmailJob, CampaignJob } from "@cutz/queue";
+import { enqueueCampaignRecipient, makeConnection, QUEUES, ReminderJob, EmailJob, CampaignJob } from "@cutz/queue";
 import { appointmentEmail, appointmentWhatsAppText, decryptSecret, providers } from "@cutz/providers";
 
 const connection = makeConnection();
@@ -18,6 +18,14 @@ type CampaignCtaButton = {
   label: string;
   value: string;
   secondary?: string | null;
+};
+type CampaignRecurrenceRule = {
+  enabled: boolean;
+  frequency: "WEEKLY" | "MONTHLY";
+  daysOfWeek?: number[];
+  daysOfMonth?: number[];
+  time: string;
+  endDate?: string;
 };
 
 function campaignCtaButtons(value: unknown): CampaignCtaButton[] {
@@ -47,6 +55,82 @@ function campaignCtaText(value: unknown) {
     return `↗ ${button.label}: ${button.value}`;
   });
   return `\n\nQuick actions:\n${lines.join("\n")}`;
+}
+
+function campaignRecurrenceRule(value: unknown): CampaignRecurrenceRule | null {
+  if (!value || typeof value !== "object") return null;
+  const rule = value as Partial<CampaignRecurrenceRule>;
+  const frequency = rule.frequency;
+  const time = rule.time;
+  if (!rule.enabled || (frequency !== "WEEKLY" && frequency !== "MONTHLY")) return null;
+  if (typeof time !== "string" || !/^\d{2}:\d{2}$/u.test(time)) return null;
+  const daysOfWeek = Array.isArray(rule.daysOfWeek)
+    ? rule.daysOfWeek.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+    : [];
+  const daysOfMonth = Array.isArray(rule.daysOfMonth)
+    ? rule.daysOfMonth.map(Number).filter((day) => Number.isInteger(day) && day >= 1 && day <= 31)
+    : [];
+  if (frequency === "WEEKLY" && !daysOfWeek.length) return null;
+  if (frequency === "MONTHLY" && !daysOfMonth.length) return null;
+  const endDate = typeof rule.endDate === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(rule.endDate) ? rule.endDate : undefined;
+  return { enabled: true, frequency, daysOfWeek, daysOfMonth, time, endDate };
+}
+
+function localDateParts(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const get = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? "0");
+  return { year: get("year"), month: get("month"), day: get("day") };
+}
+
+function localDateKeyFromParts(year: number, month: number, day: number) {
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function localToUtc(year: number, month: number, day: number, hour: number, minute: number, timeZone: string) {
+  const rough = new Date(Date.UTC(year, month - 1, day, hour, minute, 0, 0));
+  const actual = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(rough);
+  const part = (type: string) => Number(actual.find((item) => item.type === type)?.value ?? "0");
+  const actualAsUtc = Date.UTC(part("year"), part("month") - 1, part("day"), part("hour"), part("minute"), 0, 0);
+  const wantedAsUtc = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  return new Date(rough.getTime() + (wantedAsUtc - actualAsUtc));
+}
+
+function nextRecurringAt(rule: CampaignRecurrenceRule | null | undefined, after: Date, timeZone: string) {
+  if (!rule?.enabled) return null;
+  const [hour, minute] = rule.time.split(":").map(Number);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  const start = localDateParts(after, timeZone);
+  const startUtc = Date.UTC(start.year, start.month - 1, start.day);
+  const afterWithBuffer = new Date(after.getTime() + 60_000);
+  for (let offset = 0; offset < 370; offset += 1) {
+    const local = new Date(startUtc + offset * 86_400_000);
+    const year = local.getUTCFullYear();
+    const month = local.getUTCMonth() + 1;
+    const day = local.getUTCDate();
+    const localKey = localDateKeyFromParts(year, month, day);
+    if (rule.endDate && localKey > rule.endDate) return null;
+    const weekday = local.getUTCDay();
+    const matches = rule.frequency === "WEEKLY"
+      ? (rule.daysOfWeek ?? []).includes(weekday)
+      : (rule.daysOfMonth ?? []).includes(day);
+    if (!matches) continue;
+    const candidate = localToUtc(year, month, day, hour, minute, timeZone);
+    if (candidate > afterWithBuffer) return candidate;
+  }
+  return null;
 }
 
 // ---- Reminders ----
@@ -249,6 +333,105 @@ async function finishCampaignIfComplete(campaignId: string) {
   if (!remaining) await prisma.campaign.update({ where: { id: campaignId }, data: { status: "SENT" } });
 }
 
+async function queueCampaignRun(campaignId: string, startAt: Date, intervalSeconds: number) {
+  const recipients = await prisma.campaignRecipient.findMany({
+    where: { campaignId, status: "queued" },
+    select: { id: true },
+    orderBy: { id: "asc" },
+  });
+  if (!recipients.length) {
+    await prisma.campaign.update({ where: { id: campaignId }, data: { status: "SENT" } });
+    return;
+  }
+  const plan = recipients.map((recipient, index) => ({
+    id: recipient.id,
+    scheduledFor: new Date(startAt.getTime() + index * Math.max(0, intervalSeconds) * 1000),
+  }));
+  const firstRunAt = plan[0]!.scheduledFor;
+  await prisma.campaign.update({
+    where: { id: campaignId },
+    data: { status: firstRunAt.getTime() > Date.now() + 5_000 ? "SCHEDULED" : "SENDING" },
+  });
+  await prisma.$transaction(plan.map((item) => prisma.campaignRecipient.update({
+    where: { id: item.id },
+    data: { scheduledFor: item.scheduledFor },
+  })));
+  await Promise.all(plan.map((item) => enqueueCampaignRecipient({ campaignId, recipientId: item.id }, item.scheduledFor)));
+}
+
+let recurringSchedulerRunning = false;
+async function runRecurringCampaignScheduler() {
+  if (recurringSchedulerRunning) return;
+  recurringSchedulerRunning = true;
+  try {
+    const due = await prisma.campaign.findMany({
+      where: {
+        recurrenceEnabled: true,
+        recurrenceParentId: null,
+        recurrenceNextAt: { lte: new Date() },
+      },
+      orderBy: { recurrenceNextAt: "asc" },
+      take: 10,
+      include: {
+        recipients: {
+          select: {
+            customerId: true,
+            externalName: true,
+            externalPhone: true,
+            externalEmail: true,
+          },
+        },
+      },
+    });
+    for (const template of due) {
+      if (!template.recurrenceNextAt) continue;
+      const branch = await prisma.branch.findUnique({ where: { id: template.branchId }, select: { timezone: true } });
+      const timeZone = branch?.timezone ?? "Asia/Kolkata";
+      const rule = campaignRecurrenceRule(template.recurrenceRule);
+      const nextRun = nextRecurringAt(rule, template.recurrenceNextAt, timeZone);
+      const claim = await prisma.campaign.updateMany({
+        where: { id: template.id, recurrenceNextAt: template.recurrenceNextAt },
+        data: { recurrenceLastAt: template.recurrenceNextAt, recurrenceNextAt: nextRun },
+      });
+      if (!claim.count) continue;
+      if (!rule) continue;
+      const recipientCreates = template.recipients
+        .filter((recipient) => recipient.customerId || recipient.externalPhone || recipient.externalEmail)
+        .map((recipient) => ({
+          customerId: recipient.customerId,
+          externalName: recipient.externalName,
+          externalPhone: recipient.externalPhone,
+          externalEmail: recipient.externalEmail,
+        }));
+      if (!recipientCreates.length) continue;
+      const child = await prisma.campaign.create({
+        data: {
+          branchId: template.branchId,
+          name: `${template.name} · auto ${template.recurrenceNextAt.toLocaleDateString("en-IN")}`,
+          channel: template.channel,
+          segment: template.segment,
+          content: template.content,
+          mediaKey: template.mediaKey,
+          mediaType: template.mediaType,
+          ctaJson: template.ctaJson ?? undefined,
+          couponCode: template.couponCode,
+          scheduledAt: template.recurrenceNextAt,
+          status: "PENDING_APPROVAL",
+          recurrenceParentId: template.id,
+          intervalSeconds: template.intervalSeconds,
+          dailyCap: template.dailyCap,
+          riskLevel: template.riskLevel,
+          recipients: { create: recipientCreates },
+        },
+      });
+      await queueCampaignRun(child.id, template.recurrenceNextAt, template.intervalSeconds ?? (template.channel === "WHATSAPP_UNOFFICIAL" ? 120 : 0));
+      console.log(`[campaign-recurring] queued ${child.id} from ${template.id}`);
+    }
+  } finally {
+    recurringSchedulerRunning = false;
+  }
+}
+
 let cachedRuleId: string | null = null;
 async function reminderRuleId(): Promise<string> {
   if (cachedRuleId) return cachedRuleId;
@@ -259,6 +442,9 @@ async function reminderRuleId(): Promise<string> {
   });
   return (cachedRuleId = rule.id);
 }
+
+setInterval(() => void runRecurringCampaignScheduler().catch((error) => console.error("[campaign-recurring]", error)), 60_000);
+void runRecurringCampaignScheduler().catch((error) => console.error("[campaign-recurring]", error));
 
 console.log("worker up: reminders, email, campaigns");
 

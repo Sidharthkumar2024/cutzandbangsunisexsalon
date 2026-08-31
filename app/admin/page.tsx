@@ -16,6 +16,7 @@ import {
   type CashBreakdown,
   type BackendAppointment,
   type BackendCampaignCtaButton,
+  type BackendCampaignRecurrence,
   type BackendCustomer,
   type BackendCustomerDetail,
   type BackendCategory,
@@ -224,6 +225,15 @@ type CampaignManualContact = {
   consentSource: string;
 };
 type CampaignCtaDraft = BackendCampaignCtaButton & { id: string };
+const campaignWeekdays = [
+  ["0", "Sun"],
+  ["1", "Mon"],
+  ["2", "Tue"],
+  ["3", "Wed"],
+  ["4", "Thu"],
+  ["5", "Fri"],
+  ["6", "Sat"],
+] as const;
 const newCampaignCta = (): CampaignCtaDraft => ({
   id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
   type: "WEBSITE",
@@ -245,6 +255,23 @@ const sanitizeCampaignCtas = (buttons: CampaignCtaDraft[]): BackendCampaignCtaBu
     }))
     .filter((button) => button.label.length >= 2 && button.value.length >= 3)
     .slice(0, 3);
+const sanitizeCampaignRecurrence = (value: BackendCampaignRecurrence): BackendCampaignRecurrence => ({
+  enabled: value.enabled,
+  frequency: value.frequency,
+  daysOfWeek: [...new Set(value.daysOfWeek ?? [])].filter((day) => day >= 0 && day <= 6).sort((a, b) => a - b),
+  daysOfMonth: [...new Set(value.daysOfMonth ?? [])].filter((day) => day >= 1 && day <= 31).sort((a, b) => a - b),
+  time: /^\d{2}:\d{2}$/u.test(value.time) ? value.time : "11:00",
+  ...(value.endDate ? { endDate: value.endDate } : {}),
+});
+const campaignRecurrenceSummary = (value?: BackendCampaignRecurrence | null) => {
+  if (!value?.enabled) return "One-time campaign";
+  if (value.frequency === "WEEKLY") {
+    const selected = (value.daysOfWeek ?? []).map((day) => campaignWeekdays.find(([id]) => Number(id) === day)?.[1]).filter(Boolean).join(", ");
+    return `Repeats weekly ${selected ? `on ${selected}` : ""} at ${value.time}${value.endDate ? ` until ${value.endDate}` : ""}`;
+  }
+  const selected = (value.daysOfMonth ?? []).join(", ");
+  return `Repeats monthly ${selected ? `on date ${selected}` : ""} at ${value.time}${value.endDate ? ` until ${value.endDate}` : ""}`;
+};
 const normalizeCampaignPhone = (value: string) => {
   const digits = value.replace(/\D/g, "");
   if (digits.length === 12 && digits.startsWith("91") && /^[6-9]\d{9}$/.test(digits.slice(2))) return digits.slice(2);
@@ -6202,8 +6229,17 @@ function Campaigns({
   const [mediaType, setMediaType] = useState<"image" | "document" | "video" | "">("");
   const [mediaName, setMediaName] = useState("");
   const [ctaButtons, setCtaButtons] = useState<CampaignCtaDraft[]>([]);
+  const [recurrence, setRecurrence] = useState<BackendCampaignRecurrence>({
+    enabled: false,
+    frequency: "WEEKLY",
+    daysOfWeek: [5],
+    daysOfMonth: [1],
+    time: "11:00",
+  });
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [message, setMessage] = useState("");
+  const [rowMessage, setRowMessage] = useState("");
+  const [approvingId, setApprovingId] = useState("");
   const [busy, setBusy] = useState(false);
   const [waRisk, setWaRisk] = useState<BackendWhatsAppStatus["unofficial"]["risk"]>();
   useEffect(() => {
@@ -6218,6 +6254,22 @@ function Campaigns({
   const manualStats = campaignAudienceStats(manualContacts.map((contact) => contact.phone));
   const manualRecipients = dedupeCampaignContacts(manualContacts);
   const validCtaButtons = sanitizeCampaignCtas(ctaButtons);
+  const validRecurrence = sanitizeCampaignRecurrence(recurrence);
+  const createBlockReason = !token
+    ? "Login required."
+    : !name.trim()
+      ? "Campaign name required."
+      : !content.trim()
+        ? "Message required."
+        : audienceMode === "MANUAL" && !manualStats.valid
+          ? "Paste numbers or upload CSV before creating this campaign."
+          : audienceMode === "MANUAL" && channel.startsWith("WHATSAPP") && !manualConsentConfirmed
+            ? "Tick WhatsApp consent confirmation for CSV/pasted numbers."
+            : recurrence.enabled && recurrence.frequency === "WEEKLY" && !validRecurrence.daysOfWeek?.length
+              ? "Select at least one weekday for repeat campaign."
+              : recurrence.enabled && recurrence.frequency === "MONTHLY" && !validRecurrence.daysOfMonth?.length
+                ? "Select at least one month date for repeat campaign."
+                : "";
   const manualPhoneSet = new Set(manualStats.uniquePhones);
   const knownWhatsAppReady = data.customers.filter((customer) => customer.phone && manualPhoneSet.has(normalizeCampaignPhone(customer.phone)) && customer.waConsent).length;
   const campaignTotals = data.campaigns.reduce(
@@ -6289,11 +6341,13 @@ function Campaigns({
         mediaKey: mediaKey || undefined,
         mediaType: mediaType || undefined,
         ctaButtons: validCtaButtons.length ? validCtaButtons : undefined,
+        recurrence: validRecurrence.enabled ? validRecurrence : undefined,
       });
       setName("");
       setContent("");
       setMediaKey(""); setMediaType(""); setMediaName("");
       setCtaButtons([]);
+      setRecurrence((current) => ({ ...current, enabled: false }));
       if (audienceMode === "MANUAL") setManualNumbers("");
       setLastImportSummary("");
       setMessage(`Campaign created for ${result._count.recipients} eligible contacts. Pasted/CSV numbers were kept campaign-only, not added to Customers.`);
@@ -6317,16 +6371,18 @@ function Campaigns({
   };
   const approve = async (campaignId: string) => {
     if (!token) return;
-    setBusy(true);
-    setMessage("");
+    setApprovingId(campaignId);
+    setRowMessage("");
     try {
       const result = await backendApi.approveCampaign(token, campaignId);
       setMessage(result.status === "SCHEDULED" ? "Campaign approved. Safe pacing placed some messages in the next delivery window." : "Campaign approved and queued for immediate delivery.");
       onRefresh();
     } catch (cause) {
-      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Approval failed.");
+      const error = cause instanceof Error ? prettyStatus(cause.message) : "Approval failed.";
+      setRowMessage(`Approval failed: ${error}. Check eligible recipients, consent, and WAHA connection.`);
+      setMessage(`Approval failed: ${error}`);
     } finally {
-      setBusy(false);
+      setApprovingId("");
     }
   };
   const verifyManualNumbers = async () => {
@@ -6440,12 +6496,60 @@ function Campaigns({
           <button className="button" type="button" disabled={ctaButtons.length >= 3} onClick={() => setCtaButtons((current) => [...current, newCampaignCta()])}>
             + Add campaign button
           </button>
-          {validCtaButtons.length > 0 && (
+        {validCtaButtons.length > 0 && (
             <div className="campaign-cta-preview">
               {validCtaButtons.map((button) => (
                 <span key={`${button.type}-${button.label}-${button.value}`}>{button.type === "CALL" ? "☎" : button.type === "LOCATION" ? "⌖" : "↗"} {button.label}</span>
               ))}
             </div>
+          )}
+        </div>
+        <div className="campaign-repeat-builder">
+          <div>
+            <p className="eyebrow">Automatic campaign</p>
+            <h3>Repeat this campaign</h3>
+            <small>Turn this on for offers that should keep running, for example every Friday. The same selected audience is reused campaign-only; CSV numbers are not added to Customers.</small>
+          </div>
+          <label className="campaign-repeat-toggle">
+            <input
+              type="checkbox"
+              checked={recurrence.enabled}
+              onChange={(event) => setRecurrence((current) => ({ ...current, enabled: event.target.checked }))}
+            />
+            <span>{recurrence.enabled ? "Repeat is ON" : "Repeat is OFF"}</span>
+          </label>
+          {recurrence.enabled && (
+            <>
+              <label>Repeat type<select value={recurrence.frequency} onChange={(event) => setRecurrence((current) => ({ ...current, frequency: event.target.value as BackendCampaignRecurrence["frequency"] }))}><option value="WEEKLY">Weekly</option><option value="MONTHLY">Monthly</option></select></label>
+              <label>Send time<input type="time" value={recurrence.time} onChange={(event) => setRecurrence((current) => ({ ...current, time: event.target.value || "11:00" }))} /></label>
+              <label>Stop after date<input type="date" value={recurrence.endDate ?? ""} onChange={(event) => setRecurrence((current) => ({ ...current, endDate: event.target.value || undefined }))} /></label>
+              {recurrence.frequency === "WEEKLY" ? (
+                <div className="campaign-repeat-days">
+                  {campaignWeekdays.map(([id, label]) => {
+                    const day = Number(id);
+                    const active = recurrence.daysOfWeek?.includes(day) ?? false;
+                    return (
+                      <button
+                        type="button"
+                        className={active ? "active" : ""}
+                        key={id}
+                        onClick={() => setRecurrence((current) => {
+                          const days = new Set(current.daysOfWeek ?? []);
+                          if (days.has(day)) days.delete(day);
+                          else days.add(day);
+                          return { ...current, daysOfWeek: [...days].sort((a, b) => a - b) };
+                        })}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <label className="campaign-month-days">Month dates<input value={(recurrence.daysOfMonth ?? []).join(", ")} onChange={(event) => setRecurrence((current) => ({ ...current, daysOfMonth: event.target.value.split(/[,\s]+/u).map(Number).filter((day) => Number.isInteger(day) && day >= 1 && day <= 31) }))} placeholder="1, 15, 30" /></label>
+              )}
+              <p className="campaign-repeat-summary">{campaignRecurrenceSummary(validRecurrence)}</p>
+            </>
           )}
         </div>
         {audienceMode === "MANUAL" && (
@@ -6465,7 +6569,8 @@ function Campaigns({
             </div>
           </div>
         )}
-        <div className="form-actions"><button disabled={!token || busy} onClick={() => void draft()}>AI draft</button><button className="button admin-primary" disabled={!token || busy || !name || !content || (audienceMode === "MANUAL" && !manualStats.valid)} onClick={() => void create()}>Create for approval</button></div>
+        {createBlockReason && <p className="campaign-form-warning">{createBlockReason}</p>}
+        <div className="form-actions"><button disabled={!token || busy} onClick={() => void draft()}>AI draft</button><button className="button admin-primary" disabled={busy || Boolean(createBlockReason)} onClick={() => void create()}>Create for approval</button></div>
       </section>
       <div className="campaign-steps">
         {[
@@ -6504,7 +6609,8 @@ function Campaigns({
             <option value="FAILED">Failed</option>
           </select>
         </div>
-        <div className="campaign-table-labels"><span>Campaign</span><span>Audience</span><span>Channel</span><span>Status</span><span>Sent / total</span><span>Delivered</span><span>Read</span><span>Replied</span><span>Failed</span><span>Buttons</span></div>
+        {rowMessage && <p className="campaign-form-warning">{rowMessage}</p>}
+        <div className="campaign-table-labels"><span>Campaign</span><span>Audience</span><span>Channel</span><span>Status</span><span>Sent / total</span><span>Delivered</span><span>Read</span><span>Replied</span><span>Failed</span><span>Buttons</span><span>Action</span></div>
         {visibleRows.map(({ campaign, cells }) => (
           <div className="campaign-row" key={campaign.id}>
             {cells.map((cell, index) =>
@@ -6515,8 +6621,10 @@ function Campaigns({
               ),
             )}
             {campaign.status === "PENDING_APPROVAL" && (
-              <button disabled={busy} onClick={() => void approve(campaign.id)}>Approve</button>
+              <button disabled={Boolean(approvingId)} onClick={() => void approve(campaign.id)}>{approvingId === campaign.id ? "Approving…" : "Approve"}</button>
             )}
+            {campaign.status !== "PENDING_APPROVAL" && <span>—</span>}
+            {campaign.recurrenceEnabled && <small className="campaign-row-note">{campaignRecurrenceSummary(campaign.recurrenceRule)}{campaign.recurrenceNextAt ? ` · Next ${new Date(campaign.recurrenceNextAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}` : ""}</small>}
           </div>
         ))}
       </article>

@@ -10,6 +10,7 @@ import { applyProviderSettings, publicProviderSettings } from "../provider-confi
 
 const ADMIN = ["OWNER", "ADMIN", "MANAGER"] as const;
 const CAMPAIGN_CTA_TYPES = ["CALL", "WEBSITE", "LOCATION"] as const;
+const CAMPAIGN_RECURRENCE_FREQUENCIES = ["WEEKLY", "MONTHLY"] as const;
 const phoneDigits = (value: string) => {
   const digits = value.replace(/\D/g, "");
   if (digits.length === 12 && digits.startsWith("91") && /^[6-9]\d{9}$/.test(digits.slice(2))) return digits.slice(2);
@@ -44,6 +45,25 @@ const campaignCtaSchema = z
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "cta_website_url_invalid", path: ["value"] });
     }
   });
+const campaignRecurrenceSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    frequency: z.enum(CAMPAIGN_RECURRENCE_FREQUENCIES).default("WEEKLY"),
+    daysOfWeek: z.array(z.number().int().min(0).max(6)).max(7).optional(),
+    daysOfMonth: z.array(z.number().int().min(1).max(31)).max(31).optional(),
+    time: z.string().regex(/^\d{2}:\d{2}$/u).default("11:00"),
+    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (!value.enabled) return;
+    if (value.frequency === "WEEKLY" && !value.daysOfWeek?.length) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "recurrence_weekday_required", path: ["daysOfWeek"] });
+    }
+    if (value.frequency === "MONTHLY" && !value.daysOfMonth?.length) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "recurrence_month_day_required", path: ["daysOfMonth"] });
+    }
+  });
+type CampaignRecurrenceRule = z.infer<typeof campaignRecurrenceSchema>;
 type ManualRecipientInput = {
   name?: string;
   phone: string;
@@ -74,6 +94,63 @@ function localParts(date: Date, timeZone: string) {
   }).formatToParts(date);
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
   return { key: `${get("year")}-${get("month")}-${get("day")}`, hour: Number(get("hour")) };
+}
+
+function localDateParts(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const get = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? "0");
+  return { year: get("year"), month: get("month"), day: get("day") };
+}
+
+function localDateKeyFromParts(year: number, month: number, day: number) {
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function localToUtc(year: number, month: number, day: number, hour: number, minute: number, timeZone: string) {
+  const rough = new Date(Date.UTC(year, month - 1, day, hour, minute, 0, 0));
+  const actual = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(rough);
+  const part = (type: string) => Number(actual.find((item) => item.type === type)?.value ?? "0");
+  const actualAsUtc = Date.UTC(part("year"), part("month") - 1, part("day"), part("hour"), part("minute"), 0, 0);
+  const wantedAsUtc = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  return new Date(rough.getTime() + (wantedAsUtc - actualAsUtc));
+}
+
+function nextRecurringAt(rule: CampaignRecurrenceRule | null | undefined, after: Date, timeZone: string) {
+  if (!rule?.enabled) return null;
+  const [hour, minute] = rule.time.split(":").map(Number);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  const start = localDateParts(after, timeZone);
+  const startUtc = Date.UTC(start.year, start.month - 1, start.day);
+  const afterWithBuffer = new Date(after.getTime() + 60_000);
+  for (let offset = 0; offset < 370; offset += 1) {
+    const local = new Date(startUtc + offset * 86_400_000);
+    const year = local.getUTCFullYear();
+    const month = local.getUTCMonth() + 1;
+    const day = local.getUTCDate();
+    const localKey = localDateKeyFromParts(year, month, day);
+    if (rule.endDate && localKey > rule.endDate) return null;
+    const weekday = local.getUTCDay();
+    const matches = rule.frequency === "WEEKLY"
+      ? (rule.daysOfWeek ?? []).includes(weekday)
+      : (rule.daysOfMonth ?? []).includes(day);
+    if (!matches) continue;
+    const candidate = localToUtc(year, month, day, hour, minute, timeZone);
+    if (candidate > afterWithBuffer) return candidate;
+  }
+  return null;
 }
 
 function insideDeliveryWindow(date: Date, timeZone: string, startHour: number, endHour: number) {
@@ -254,6 +331,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
         mediaKey: z.string().trim().max(512).optional(),
         mediaType: z.enum(["image", "document", "video"]).optional(),
         ctaButtons: z.array(campaignCtaSchema).max(3).optional(),
+        recurrence: campaignRecurrenceSchema.optional(),
         couponCode: z.string().optional(),
         branchId: z.string(),
         scheduledAt: z.coerce.date().optional(),
@@ -324,6 +402,8 @@ export default async function campaignRoutes(app: FastifyInstance) {
         ctaJson: body.ctaButtons?.length ? body.ctaButtons : undefined,
         couponCode: body.couponCode,
         scheduledAt: body.scheduledAt,
+        recurrenceEnabled: body.recurrence?.enabled ?? false,
+        recurrenceRule: body.recurrence?.enabled ? body.recurrence : undefined,
         status: "PENDING_APPROVAL",
         recipients: { create: recipientCreates },
       },
@@ -331,7 +411,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
     });
     await audit("campaign.create", "Campaign", campaign.id, {
       actorUserId: req.user?.id,
-      after: { branchId: body.branchId, name: body.name, channel: body.channel, segment: manualAudienceRequested ? "MANUAL_EXTERNAL" : body.segment, manualPhones: manualCreates.length, recipientCount: recipientCreates.length, hasMedia: Boolean(body.mediaKey), ctaButtons: body.ctaButtons?.length ?? 0 },
+      after: { branchId: body.branchId, name: body.name, channel: body.channel, segment: manualAudienceRequested ? "MANUAL_EXTERNAL" : body.segment, manualPhones: manualCreates.length, recipientCount: recipientCreates.length, hasMedia: Boolean(body.mediaKey), ctaButtons: body.ctaButtons?.length ?? 0, recurrence: body.recurrence?.enabled ? body.recurrence : undefined },
       ip: req.ip,
     });
     const pacing = await publicProviderSettings(body.branchId);
@@ -397,6 +477,12 @@ export default async function campaignRoutes(app: FastifyInstance) {
     const risk = existing.channel === "WHATSAPP_UNOFFICIAL" ? unofficialRisk(intervalSeconds, dailyCap, recipients.length) : undefined;
     const firstRunAt = plan[0]!.scheduledFor;
     const scheduled = firstRunAt.getTime() > Date.now() + 5_000;
+    const recurrenceRule = existing.recurrenceEnabled
+      ? campaignRecurrenceSchema.safeParse(existing.recurrenceRule).success
+        ? campaignRecurrenceSchema.parse(existing.recurrenceRule)
+        : null
+      : null;
+    const recurrenceNextAt = nextRecurringAt(recurrenceRule, firstRunAt, timeZone);
     const campaign = await prisma.campaign.update({
       where: { id },
       data: {
@@ -405,6 +491,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
         intervalSeconds: intervalSeconds || null,
         dailyCap: existing.channel === "WHATSAPP_UNOFFICIAL" ? dailyCap : null,
         riskLevel: risk?.label,
+        recurrenceNextAt,
       },
     });
     await prisma.$transaction(plan.map((item) => prisma.campaignRecipient.update({ where: { id: item.id }, data: { scheduledFor: item.scheduledFor } })));
