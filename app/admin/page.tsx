@@ -82,6 +82,36 @@ type CustomerDirectorySegment = "ALL" | "NEW" | "REPEAT" | "AT_RISK" | "LAPSED";
 const money = (minor: number) =>
   `₹${Math.round(minor / 100).toLocaleString("en-IN")}`;
 
+function playPosAddSound() {
+  if (typeof window === "undefined") return;
+  const audioWindow = window as Window &
+    typeof globalThis & { webkitAudioContext?: typeof AudioContext };
+  const AudioContextClass =
+    audioWindow.AudioContext ?? audioWindow.webkitAudioContext;
+  if (!AudioContextClass) return;
+  try {
+    const audio = new AudioContextClass();
+    const startedAt = audio.currentTime;
+    const oscillator = audio.createOscillator();
+    const gain = audio.createGain();
+
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(880, startedAt);
+    oscillator.frequency.exponentialRampToValueAtTime(1320, startedAt + 0.08);
+    gain.gain.setValueAtTime(0.0001, startedAt);
+    gain.gain.exponentialRampToValueAtTime(0.045, startedAt + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startedAt + 0.16);
+
+    oscillator.connect(gain);
+    gain.connect(audio.destination);
+    oscillator.start(startedAt);
+    oscillator.stop(startedAt + 0.17);
+    oscillator.onended = () => void audio.close();
+  } catch {
+    // Browser or WebView audio policies can reject sound; POS add must still work.
+  }
+}
+
 const CUSTOMER_DIRECTORY_PAGE_SIZE = 100;
 
 const initialsFor = (name?: string | null) =>
@@ -581,6 +611,7 @@ export default function AdminPage() {
     setHeaderCustomerSearchOpen(false);
   };
   const addItem = (item: SaleService) => {
+    playPosAddSound();
     const backendService = backend.data.categories
       .flatMap((category) => category.services)
       .find((service) => service.id === item.id);
@@ -601,6 +632,7 @@ export default function AdminPage() {
     ]);
   };
   const addProduct = (product: BackendSnapshot["products"][number]) => {
+    playPosAddSound();
     setCart((current) => [
       ...current,
       {
