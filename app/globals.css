@@ -1067,7 +1067,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .pos-quick-consent input{width:18px;height:18px;flex:0 0 18px;margin-top:1px;accent-color:var(--wine)}
 .pos-quick-customer>.admin-primary{width:100%;min-height:46px!important;justify-content:center}
 .pos-customer-message{margin:0;padding:10px 12px;border-radius:9px;background:#edf4e9;color:#486a49!important;font-size:12px!important;font-weight:800;line-height:1.45}
-.cart-items strong{font-size:12px!important}.cart-items>div{grid-template-columns:minmax(0,1fr) auto 26px;gap:10px;padding:13px 0}.cart-items>div>button{min-width:26px;min-height:36px;font-size:18px}
+.cart-items strong{font-size:12px!important}.cart-items>div{grid-template-columns:minmax(0,1fr) minmax(92px,112px) 26px;gap:10px;padding:13px 0}.cart-items>div>button{min-width:26px;min-height:36px;font-size:18px}
+.cart-price-editor{min-width:0;display:grid;gap:4px;text-align:right;color:#474541;font-weight:900}
+.cart-price-editor small{font-size:8px!important;text-transform:uppercase;letter-spacing:.08em;color:#77716b!important}
+.cart-price-editor span{display:flex;align-items:center;justify-content:flex-end;gap:3px;font-size:12px}
+.cart-price-editor input{width:74px;min-height:34px!important;border:1px solid #d6cbc4!important;border-radius:8px;background:#fff!important;padding:0 6px!important;text-align:right;color:#3d3631;font-size:13px!important;font-weight:900}
+.cart-price-editor input:focus{outline:2px solid rgba(109,56,57,.18);border-color:#9b6b61!important}
 .credit-toggle{min-height:58px;cursor:pointer}.credit-toggle strong{font-size:12px}.credit-toggle small{font-size:10px!important}.credit-toggle i{font-size:14px;font-weight:900}
 .pos-entitlement-wallet>header button.toggle{min-width:48px;min-height:28px!important}
 .pos-reward-controls input{min-height:44px!important}.pos-loyalty-choice button,.payment-methods button{min-height:44px!important;font-size:11px!important;cursor:pointer}

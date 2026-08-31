@@ -821,6 +821,7 @@ export default function AdminPage() {
               addProduct={addProduct}
               assignStaff={(index, staffId) => setCart((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, staffId, staff: dataStaffName(backend.data, staffId) } : item))}
               assignCompanion={(index, companionId) => setCart((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, companionId: companionId || undefined } : item))}
+              updateItemPrice={(index, price) => setCart((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, price } : item))}
               removeItem={(index) =>
                 setCart((current) =>
                   current.filter((_, itemIndex) => itemIndex !== index),
@@ -3017,6 +3018,7 @@ function POS({
   addProduct,
   assignStaff,
   assignCompanion,
+  updateItemPrice,
   removeItem,
   resetCart,
   subtotal,
@@ -3042,6 +3044,7 @@ function POS({
   addProduct: (item: BackendSnapshot["products"][number]) => void;
   assignStaff: (index: number, staffId: string) => void;
   assignCompanion: (index: number, companionId: string) => void;
+  updateItemPrice: (index: number, price: number) => void;
   removeItem: (index: number) => void;
   resetCart: () => void;
   subtotal: number;
@@ -3095,6 +3098,9 @@ function POS({
     "OFF" | "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL"
   >("OFF");
   const [deliveryMessage, setDeliveryMessage] = useState("");
+  const [sentDeliveryChannels, setSentDeliveryChannels] = useState<
+    Partial<Record<InvoiceWhatsAppChannel | "EMAIL", boolean>>
+  >({});
   const [whatsappActionFeedback, setWhatsappActionFeedback] = useState<{
     channel: InvoiceWhatsAppChannel;
     state: "sending" | "success" | "error";
@@ -3382,6 +3388,7 @@ function POS({
     setCharging(true);
     setCheckoutError("");
     setDeliveryMessage("");
+    setSentDeliveryChannels({});
     setWhatsappActionFeedback(null);
     setRewardMessage("");
     try {
@@ -3481,6 +3488,18 @@ function POS({
             .filter(Boolean)
             .join(" "),
         );
+        if (delivered.length) {
+          setSentDeliveryChannels((current) => ({
+            ...current,
+            ...(delivered.includes("email") ? { EMAIL: true } : {}),
+            ...(delivered.includes("official WhatsApp")
+              ? { WHATSAPP_OFFICIAL: true }
+              : {}),
+            ...(delivered.includes("unofficial WhatsApp")
+              ? { WHATSAPP_UNOFFICIAL: true }
+              : {}),
+          }));
+        }
       }
     } catch (cause) {
       setCheckoutError(
@@ -3509,10 +3528,15 @@ function POS({
   };
   const emailInvoice = async () => {
     if (!token || !invoiceId) return;
+    if (sentDeliveryChannels.EMAIL) {
+      setDeliveryMessage("Invoice email is already queued for this bill.");
+      return;
+    }
     setCharging(true);
     setCheckoutError("");
     try {
       await backendApi.sendInvoice(token, invoiceId);
+      setSentDeliveryChannels((current) => ({ ...current, EMAIL: true }));
       setDeliveryMessage("Invoice email queued once; retries are idempotent.");
     } catch (cause) {
       setCheckoutError(
@@ -3538,6 +3562,14 @@ function POS({
       });
       return;
     }
+    if (sentDeliveryChannels[channel]) {
+      setWhatsappActionFeedback({
+        channel,
+        state: "success",
+        message: `${invoice || "Invoice"} already queued through ${channelLabel}; it will not be sent twice.`,
+      });
+      return;
+    }
     if (charging) return;
     setCharging(true);
     setCheckoutError("");
@@ -3558,6 +3590,7 @@ function POS({
         state: "success",
         message: `${invoice || "Invoice"} ${outcome} through ${channelLabel} to ${selectedCustomer?.phone}. Delivery runs in the background; no WhatsApp window opens here.`,
       });
+      setSentDeliveryChannels((current) => ({ ...current, [channel]: true }));
     } catch (cause) {
       const reason =
         cause instanceof Error
@@ -3942,7 +3975,29 @@ function POS({
                   {item.kind === "service" && customerDetail && <select value={item.companionId ?? ""} onChange={(event) => assignCompanion(index, event.target.value)} aria-label={`Service recipient for ${item.name}`}><option value="">For {customerDetail.name} (primary)</option>{customerDetail.companions.map((companion) => <option key={companion.id} value={companion.id}>For {companion.name}{companion.relation ? ` · ${companion.relation}` : ""}</option>)}</select>}
                   {item.kind === "product" && <select value={item.staffId ?? ""} onChange={(event) => assignStaff(index, event.target.value)} aria-label={`Assign staff for ${item.name}`}><option value="">No staff commission</option>{data.staff.map((staff) => <option key={staff.id} value={staff.id}>{staff.displayName}</option>)}</select>}
                 </span>
-                <strong><small>MRP</small> ₹{item.price.toLocaleString("en-IN")}</strong>
+                {item.kind === "service" ? (
+                  <label className="cart-price-editor">
+                    <small>MRP</small>
+                    <span>
+                      ₹
+                      <input
+                        aria-label={`Edit MRP for ${item.name}`}
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={Number.isFinite(item.price) ? item.price : 0}
+                        onChange={(event) =>
+                          updateItemPrice(
+                            index,
+                            Math.max(0, Number(event.target.value) || 0),
+                          )
+                        }
+                      />
+                    </span>
+                  </label>
+                ) : (
+                  <strong><small>MRP</small> ₹{item.price.toLocaleString("en-IN")}</strong>
+                )}
                 <button
                   onClick={() => removeItem(index)}
                   aria-label={`Remove ${item.name}`}
@@ -4146,6 +4201,7 @@ function POS({
                 setInvoice("");
                 setInvoiceId("");
                 setDeliveryMessage("");
+                setSentDeliveryChannels({});
                 setPackageRedemptionEnabled(true);
                 setCouponCode("");
                 setLoyaltyPoints(0);

@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   retireLegacyPublicObject: vi.fn(),
   enqueueEmail: vi.fn(),
   audit: vi.fn(),
+  auditLogFindMany: vi.fn(),
   txQueryRaw: vi.fn(),
   txInvoiceFindUnique: vi.fn(),
   txInvoiceUpdate: vi.fn(),
@@ -34,6 +35,7 @@ vi.mock("@cutz/db", () => ({
       aggregate: mocks.invoiceAggregate,
     },
     membership: { findMany: mocks.membershipFindMany },
+    auditLog: { findMany: mocks.auditLogFindMany },
     $transaction: mocks.transaction,
   },
 }));
@@ -74,6 +76,7 @@ async function testApp(role: "OWNER" | "MANAGER" = "OWNER") {
 describe("invoice archive", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.auditLogFindMany.mockResolvedValue([]);
     mocks.whatsappHealth.mockResolvedValue(undefined);
     mocks.applyProviderSettings.mockResolvedValue({
       whatsapp: () => ({ send: mocks.whatsappSend, health: mocks.whatsappHealth }),

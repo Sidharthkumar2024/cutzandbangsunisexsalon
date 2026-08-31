@@ -50,6 +50,29 @@ function invoiceWhatsAppMediaError(
   }
 }
 
+function invoiceSendAuditPayload(value: Prisma.JsonValue | null) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as { channel?: unknown; recipient?: unknown; status?: unknown };
+}
+
+async function alreadyDeliveredInvoice(id: string, channel: "EMAIL" | "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL") {
+  const logs = await prisma.auditLog.findMany({
+    where: { action: "invoice.send", entityType: "Invoice", entityId: id },
+    orderBy: { createdAt: "desc" },
+    take: 25,
+  });
+  return logs.find((log) => {
+    const after = invoiceSendAuditPayload(log.after);
+    return (
+      after.channel === channel &&
+      (after.status === "sent" ||
+        after.status === "queued" ||
+        after.status === "already_queued" ||
+        after.status === undefined)
+    );
+  });
+}
+
 const invoiceArchiveQuerySchema = z.object({
   branchId: z.string().trim().min(1).optional(),
   customerId: z.string().trim().min(1).optional(),
@@ -275,6 +298,10 @@ export default async function posRoutes(app: FastifyInstance) {
 
       let computed = body.lines.map((line) => {
         const catalog = line.kind === "service" ? serviceById.get(line.serviceId!) : productById.get(line.productId!);
+        const unitMinor =
+          line.kind === "service"
+            ? line.unitMinor
+            : productById.get(line.productId!)!.sellMinor;
         const remaining = line.kind === "service" ? redemptionRemaining.get(line.serviceId!) ?? 0 : 0;
         const redeemedQty = Math.min(line.qty, remaining);
         if (redeemedQty) redemptionRemaining.set(line.serviceId!, remaining - redeemedQty);
@@ -282,17 +309,17 @@ export default async function posRoutes(app: FastifyInstance) {
           ...line,
           description: catalog!.name,
           servedFor: line.companionId ? companionById.get(line.companionId)?.name : body.customerId ? "Primary customer" : "Walk-in",
-          unitMinor: line.kind === "service" ? serviceById.get(line.serviceId!)!.priceMinor : productById.get(line.productId!)!.sellMinor,
+          unitMinor,
           // Cutz & Bangs currently bills catalogue prices as the final payable
           // price. Do not add a separate GST/tax amount in POS, even if older
           // clients or catalogue rows still carry taxRateBps.
           taxRateBps: 0,
-          // Catalog prices are authoritative. Package redemptions are the only
-          // automatic line discount in phase one; a future manual-discount
-          // route can add explicit approval and audit requirements.
+          // Service MRP may be adjusted at the billing table for client-specific
+          // pricing. Package redemptions cover the edited service price so the
+          // customer is not charged a residual amount for a covered service.
           discountMinor:
             line.kind === "service"
-              ? redeemedQty * serviceById.get(line.serviceId!)!.priceMinor
+              ? redeemedQty * unitMinor
               : 0,
         };
         return {
@@ -372,6 +399,20 @@ export default async function posRoutes(app: FastifyInstance) {
       if (paidMinor > totals.totalMinor) {
         return reply.code(400).send({ error: "overpayment", totalMinor: totals.totalMinor, paidMinor });
       }
+      const servicePriceOverrides = computed.flatMap((line) => {
+        if (line.input.kind !== "service" || !line.input.serviceId) return [];
+        const catalogPriceMinor = serviceById.get(line.input.serviceId)?.priceMinor;
+        return catalogPriceMinor !== undefined && catalogPriceMinor !== line.input.unitMinor
+          ? [
+              {
+                serviceId: line.input.serviceId,
+                description: line.input.description,
+                catalogPriceMinor,
+                billedUnitMinor: line.input.unitMinor,
+              },
+            ]
+          : [];
+      });
 
       try {
         const result = await prisma.$transaction(async (tx) => {
@@ -557,6 +598,7 @@ export default async function posRoutes(app: FastifyInstance) {
               couponDiscountMinor,
               loyaltyPointsRedeemed: body.loyaltyPointsToRedeem,
               loyaltyPointsEarned: earned.points,
+              servicePriceOverrides,
             },
             ip: req.ip,
           }, tx);
@@ -609,6 +651,11 @@ export default async function posRoutes(app: FastifyInstance) {
                   : undefined,
                 dedupeKey: `invoice-auto:${result.invoice.id}:email`,
               });
+              await audit("invoice.send", "Invoice", result.invoice.id, {
+                actorUserId: req.user?.id,
+                after: { channel: "EMAIL", recipient: customer.email, status: "queued", automatic: true },
+                ip: req.ip,
+              });
             } catch (error) {
               app.log.error({ err: error, invoiceId: result.invoice.id }, "automatic invoice email could not be queued");
             }
@@ -645,6 +692,17 @@ export default async function posRoutes(app: FastifyInstance) {
                 if (sendResult.status === "failed") {
                   throw new Error([sendResult.error ?? "whatsapp_send_failed", sendResult.detail].filter(Boolean).join(": "));
                 }
+                await audit("invoice.send", "Invoice", result.invoice.id, {
+                  actorUserId: req.user?.id,
+                  after: {
+                    channel: automation.invoiceWhatsappChannel,
+                    recipient: customer.phone,
+                    status: sendResult.status,
+                    externalId: sendResult.externalId,
+                    automatic: true,
+                  },
+                  ip: req.ip,
+                });
               }
             } catch (error) {
               app.log.warn({ err: error, invoiceId: result.invoice.id }, "automatic WhatsApp receipt was skipped");
@@ -869,6 +927,17 @@ export default async function posRoutes(app: FastifyInstance) {
       if (channel !== "EMAIL" && !whatsappRecipient) return reply.code(400).send({ error: "customer_has_no_phone" });
       if (channel !== "EMAIL" && !inv.customer?.waConsent) {
         return reply.code(409).send({ error: "whatsapp_consent_required" });
+      }
+      const previousDelivery = await alreadyDeliveredInvoice(id, channel);
+      if (previousDelivery) {
+        const previous = invoiceSendAuditPayload(previousDelivery.after);
+        const status = typeof previous.status === "string" ? previous.status : "already_queued";
+        return {
+          queued: channel === "EMAIL" || status === "queued" || status === "already_queued",
+          channel,
+          status: "already_queued",
+          alreadySent: true,
+        };
       }
       // Auto-generate the PDF if it hasn't been rendered yet.
       let key = inv.pdfUrl;
