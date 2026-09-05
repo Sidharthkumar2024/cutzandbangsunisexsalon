@@ -68,6 +68,10 @@ type CartItem = {
   price: number;
   taxRateBps: number;
 };
+const todayInputDate = () => {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+};
 const cartLineKey = (kind: CartItem["kind"], id: string) => `${kind}:${id}`;
 type InvoiceWhatsAppChannel =
   | "WHATSAPP_OFFICIAL"
@@ -3132,7 +3136,7 @@ function POS({
   const [quickCustomerName, setQuickCustomerName] = useState("");
   const [quickCustomerPhone, setQuickCustomerPhone] = useState("");
   const [quickCustomerEmail, setQuickCustomerEmail] = useState("");
-  const [quickCustomerVisitDate, setQuickCustomerVisitDate] = useState("");
+  const [quickCustomerVisitDate, setQuickCustomerVisitDate] = useState(todayInputDate);
   const [quickCustomerService, setQuickCustomerService] = useState("");
   const [quickCustomerAmount, setQuickCustomerAmount] = useState(0);
   const [quickCustomerWaConsent, setQuickCustomerWaConsent] = useState(false);
@@ -3731,10 +3735,6 @@ function POS({
   };
   const createQuickCustomer = async () => {
     if (!token || !quickCustomerName.trim()) return;
-    if (quickCustomerVisitDate && !quickCustomerService.trim()) {
-      setQuickCustomerMessage("Add the earlier service name so the dated visit can be saved correctly.");
-      return;
-    }
     setQuickCustomerBusy(true);
     setQuickCustomerMessage("");
     try {
@@ -3758,6 +3758,7 @@ function POS({
         source: "walk_in",
         waConsent: quickCustomerWaConsent,
         emailConsent: quickCustomerEmailConsent,
+        customerSince: new Date(`${quickCustomerVisitDate || todayInputDate()}T12:00:00`).toISOString(),
         initialVisit: quickCustomerVisitDate && quickCustomerService.trim()
           ? {
               visitedAt: new Date(`${quickCustomerVisitDate}T12:00:00`).toISOString(),
@@ -3772,7 +3773,7 @@ function POS({
       setQuickCustomerName("");
       setQuickCustomerPhone("");
       setQuickCustomerEmail("");
-      setQuickCustomerVisitDate("");
+      setQuickCustomerVisitDate(todayInputDate());
       setQuickCustomerService("");
       setQuickCustomerAmount(0);
       setQuickCustomerWaConsent(false);
@@ -4058,21 +4059,17 @@ function POS({
                 <input type="email" value={quickCustomerEmail} onChange={(event) => setQuickCustomerEmail(event.target.value)} placeholder="name@example.com" />
               </label>
               <label>
-                Customer since / earlier visit date
-                <input type="date" max={new Date().toISOString().slice(0, 10)} value={quickCustomerVisitDate} onChange={(event) => setQuickCustomerVisitDate(event.target.value)} />
+                Customer since date
+                <input type="date" max={todayInputDate()} value={quickCustomerVisitDate} onChange={(event) => setQuickCustomerVisitDate(event.target.value || todayInputDate())} />
               </label>
-              {quickCustomerVisitDate && (
-                <>
-                  <label>
-                    Earlier service
-                    <input value={quickCustomerService} onChange={(event) => setQuickCustomerService(event.target.value)} placeholder="Haircut, colour, facial…" required />
-                  </label>
-                  <label>
-                    Earlier sale (₹)
-                    <input type="number" min="0" step="1" value={quickCustomerAmount || ""} onChange={(event) => setQuickCustomerAmount(Math.max(0, Number(event.target.value)))} placeholder="0" />
-                  </label>
-                </>
-              )}
+              <label>
+                Earlier service (optional)
+                <input value={quickCustomerService} onChange={(event) => setQuickCustomerService(event.target.value)} placeholder="Haircut, colour, facial…" />
+              </label>
+              <label>
+                Earlier sale (₹)
+                <input type="number" min="0" step="1" value={quickCustomerAmount || ""} onChange={(event) => setQuickCustomerAmount(Math.max(0, Number(event.target.value)))} placeholder="0" />
+              </label>
               <div className="pos-quick-consents">
                 <label className="pos-quick-consent">
                   <input type="checkbox" checked={quickCustomerWaConsent} onChange={(event) => setQuickCustomerWaConsent(event.target.checked)} />
@@ -4083,7 +4080,7 @@ function POS({
                   <span>Customer agreed to receive email receipts and updates</span>
                 </label>
               </div>
-              <button className="button admin-primary" type="submit" disabled={quickCustomerBusy || !token || !quickCustomerName.trim() || Boolean(quickCustomerVisitDate && !quickCustomerService.trim())}>
+              <button className="button admin-primary" type="submit" disabled={quickCustomerBusy || !token || !quickCustomerName.trim()}>
                 {quickCustomerBusy ? "Checking & selecting…" : "Save & Select Customer"}
               </button>
             </form>
@@ -4397,7 +4394,7 @@ function Customers({
   const [referralPhone, setReferralPhone] = useState("");
   const [waConsent, setWaConsent] = useState(false);
   const [emailConsent, setEmailConsent] = useState(false);
-  const [initialVisitDate, setInitialVisitDate] = useState("");
+  const [initialVisitDate, setInitialVisitDate] = useState(todayInputDate);
   const [initialVisitService, setInitialVisitService] = useState("");
   const [initialVisitAmount, setInitialVisitAmount] = useState(0);
   const [initialVisitStaff, setInitialVisitStaff] = useState("");
@@ -4543,6 +4540,7 @@ function Customers({
         referralPhone: source === "referral" ? referralPhone || undefined : undefined,
         waConsent,
         emailConsent,
+        customerSince: new Date(`${initialVisitDate || todayInputDate()}T12:00:00`).toISOString(),
         companions: newCompanions.length ? newCompanions : undefined,
         initialVisit: initialVisitDate && initialVisitService.trim() ? {
           visitedAt: new Date(`${initialVisitDate}T12:00:00`).toISOString(),
@@ -4559,7 +4557,7 @@ function Customers({
       setReferralPhone("");
       setWaConsent(false);
       setEmailConsent(false);
-      setInitialVisitDate(""); setInitialVisitService(""); setInitialVisitAmount(0); setInitialVisitStaff("");
+      setInitialVisitDate(todayInputDate()); setInitialVisitService(""); setInitialVisitAmount(0); setInitialVisitStaff("");
       setNewCompanions([]); setCompanionName(""); setCompanionRelation("");
       setShowCreate(false);
       const loyalty = data.settings.loyalty as Record<string, unknown> | undefined;
@@ -4759,13 +4757,13 @@ function Customers({
           <div className="historical-customer-create">
             <div className="historical-customer-heading">
               <strong>Customer since / historical visit</strong>
-              <small>For an old register customer, add their first known visit date and service. Leave blank for a brand-new customer.</small>
+              <small>Today is selected for a new customer. Pick an older date for previous-register customers; service details are optional.</small>
             </div>
             <label>
-              Customer since / first visit date (optional)
-              <input type="date" max={new Date().toISOString().slice(0, 10)} value={initialVisitDate} onChange={(event) => setInitialVisitDate(event.target.value)} />
+              Customer since date
+              <input type="date" max={todayInputDate()} value={initialVisitDate} onChange={(event) => setInitialVisitDate(event.target.value || todayInputDate())} />
             </label>
-            {initialVisitDate && <><label>Earlier service<input value={initialVisitService} onChange={(event) => setInitialVisitService(event.target.value)} placeholder="Haircut + colour" required /></label><label>Earlier sale (₹)<input type="number" min="0" value={initialVisitAmount || ""} placeholder="0" onChange={(event) => setInitialVisitAmount(Math.max(0, Number(event.target.value)))} /></label><label>Staff (optional)<input value={initialVisitStaff} onChange={(event) => setInitialVisitStaff(event.target.value)} /></label></>}
+            <label>Earlier service (optional)<input value={initialVisitService} onChange={(event) => setInitialVisitService(event.target.value)} placeholder="Haircut + colour" /></label><label>Earlier sale (₹)<input type="number" min="0" value={initialVisitAmount || ""} placeholder="0" onChange={(event) => setInitialVisitAmount(Math.max(0, Number(event.target.value)))} /></label><label>Staff (optional)<input value={initialVisitStaff} onChange={(event) => setInitialVisitStaff(event.target.value)} /></label>
           </div>
           <fieldset>
             <legend>Communication consent</legend>
@@ -4774,7 +4772,7 @@ function Customers({
           </fieldset>
           <button
             className="button admin-primary"
-            disabled={busy || !token || !name || Boolean(duplicate) || (source === "referral" && !referralName.trim()) || Boolean(initialVisitDate && !initialVisitService.trim())}
+            disabled={busy || !token || !name || Boolean(duplicate) || (source === "referral" && !referralName.trim())}
             onClick={() => void create()}
           >
             {busy ? "Saving…" : "Create customer"}
@@ -4789,6 +4787,7 @@ function Customers({
           <span>Visits</span>
           <span>Points</span>
           <span>Total spend</span>
+          <span>Customer since</span>
           <span>Last visit</span>
           <span />
         </header>
@@ -4821,6 +4820,14 @@ function Customers({
                 <span>{customer.visitCount}</span>
                 <strong>{customer.loyaltyPoints}</strong>
                 <strong>{money(customer.totalSpent)}</strong>
+                <span>
+                  {customer.customerSince
+                    ? new Date(customer.customerSince).toLocaleDateString(
+                        "en-IN",
+                        { day: "numeric", month: "short", year: "numeric" },
+                      )
+                    : "Today"}
+                </span>
                 <span>
                   {customer.lastVisitAt
                     ? new Date(customer.lastVisitAt).toLocaleDateString(
@@ -4901,6 +4908,10 @@ function Customers({
             <span>
               <small>Loyalty points</small>
               <strong>{detail.loyaltyPoints}</strong>
+            </span>
+            <span>
+              <small>Customer since</small>
+              <strong>{new Date(detail.customerSince).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</strong>
             </span>
           </div>
           <div className="loyalty-adjustment">

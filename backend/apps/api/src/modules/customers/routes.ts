@@ -24,6 +24,9 @@ const initialVisitSchema = z.object({
   staffName: z.string().trim().max(150).optional(),
   notes: z.string().trim().max(1000).optional(),
 });
+const customerSinceSchema = z.coerce.date().refine((value) => value <= new Date(), {
+  message: "customer_since_cannot_be_future",
+});
 
 export default async function customerRoutes(app: FastifyInstance) {
   // List + search + segment filter
@@ -171,6 +174,7 @@ export default async function customerRoutes(app: FastifyInstance) {
         notes: z.string().optional(),
         waConsent: z.boolean().optional(),
         emailConsent: z.boolean().optional(),
+        customerSince: customerSinceSchema.optional(),
         companions: z.array(companionSchema).max(12).optional(),
         initialVisit: initialVisitSchema.optional(),
       })
@@ -182,6 +186,7 @@ export default async function customerRoutes(app: FastifyInstance) {
     const { companions = [], initialVisit, ...profile } = body;
     const normalized = {
       ...profile,
+      customerSince: body.customerSince ?? initialVisit?.visitedAt,
       phone: body.phone ? body.phone.replace(/\D/g, "") : undefined,
       email: body.email ? body.email.toLowerCase() : undefined,
       referralPhone: body.referralPhone ? body.referralPhone.replace(/\D/g, "") : undefined,
@@ -214,6 +219,7 @@ export default async function customerRoutes(app: FastifyInstance) {
               where: { id: archivedDuplicate.id },
               data: {
                 ...normalized,
+                customerSince: normalized.customerSince && normalized.customerSince < archivedDuplicate.customerSince ? normalized.customerSince : archivedDuplicate.customerSince,
                 source: normalized.source || "walk_in",
                 deletedAt: null,
               },
@@ -238,6 +244,7 @@ export default async function customerRoutes(app: FastifyInstance) {
               visitCount: { increment: 1 },
               totalSpent: { increment: initialVisit.amountMinor },
               lastVisitAt: initialVisit.visitedAt,
+              customerSince: customer.customerSince && customer.customerSince < initialVisit.visitedAt ? customer.customerSince : initialVisit.visitedAt,
             },
           });
         }
@@ -414,6 +421,7 @@ export default async function customerRoutes(app: FastifyInstance) {
           visitCount: { increment: 1 },
           totalSpent: { increment: body.amountMinor },
           ...(!customer.lastVisitAt || body.visitedAt > customer.lastVisitAt ? { lastVisitAt: body.visitedAt } : {}),
+          ...(!customer.customerSince || body.visitedAt < customer.customerSince ? { customerSince: body.visitedAt } : {}),
         },
       });
       await audit("customer.history.create", "CustomerHistoryEntry", created.id, { actorUserId: req.user?.id, after: body, ip: req.ip }, tx);
@@ -437,6 +445,7 @@ export default async function customerRoutes(app: FastifyInstance) {
       waConsent: z.boolean().optional(),
       emailConsent: z.boolean().optional(),
       smsConsent: z.boolean().optional(),
+      customerSince: customerSinceSchema.optional(),
     }).parse(req.body);
     const current = await prisma.customer.findFirst({ where: { id, deletedAt: null } });
     if (!current) return reply.code(404).send({ error: "not_found" });
@@ -500,6 +509,9 @@ export default async function customerRoutes(app: FastifyInstance) {
           email,
           source: r.source || "import",
           tags: r.tags ? r.tags.split(/[;|]/).map((t) => t.trim()).filter(Boolean) : [],
+          customerSince: r.customerSince || r.customer_since || r.since || r.date
+            ? new Date(`${r.customerSince || r.customer_since || r.since || r.date}T12:00:00`)
+            : undefined,
         };
         const customer = archivedDup
           ? await tx.customer.update({

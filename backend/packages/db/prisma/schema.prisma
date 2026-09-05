@@ -442,6 +442,7 @@ model Customer {
   smsConsent    Boolean   @default(false)
   waConsent     Boolean   @default(false)
   emailConsent  Boolean   @default(false)
+  customerSince DateTime  @default(now())
   lastVisitAt   DateTime?
   totalSpent    Int       @default(0) // paise, denormalized cache
   visitCount    Int       @default(0)

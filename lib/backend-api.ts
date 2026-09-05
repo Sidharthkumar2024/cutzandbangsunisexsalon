@@ -116,6 +116,7 @@ export type BackendCustomer = {
   loyaltyPoints: number;
   waConsent?: boolean;
   emailConsent?: boolean;
+  customerSince: string;
   lastVisitAt?: string | null;
   segments: string[];
 };
@@ -1173,6 +1174,7 @@ export const backendApi = {
       notes?: string;
       waConsent?: boolean;
       emailConsent?: boolean;
+      customerSince?: string;
       companions?: Array<{ name: string; relation?: string; phone?: string; notes?: string }>;
       initialVisit?: { visitedAt: string; serviceName: string; amountMinor: number; staffName?: string; notes?: string };
     },
