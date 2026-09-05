@@ -313,8 +313,8 @@ const marketingProgramBlueprints: Array<Omit<MarketingProgramSetting, "enabled">
   { id: "whatsappAutomation", label: "WhatsApp Automation", description: "Invoice/follow-up delivery through official or QR connector with pacing.", phase: "live" },
   { id: "winBack", label: "Win-back Campaigns", description: "Lapsed customer targeting through campaign segments and follow-up automation.", phase: "live" },
   { id: "membershipOffers", label: "Membership Offers", description: "Membership/package based benefits and POS membership credit matching.", phase: "live" },
-  { id: "stampCards", label: "Digital Stamp Cards", description: "Configurable paid-visit/service stamps; next engine phase will process invoice-paid events.", phase: "foundation" },
-  { id: "referrals", label: "Referral Rewards", description: "Referral source capture exists; reward issue after qualifying invoice is the next phase.", phase: "foundation" },
+  { id: "stampCards", label: "Digital Stamp Cards", description: "Invoice-paid milestone engine grants bonus points on every 5th paid customer visit.", phase: "foundation" },
+  { id: "referrals", label: "Referral Rewards", description: "Referral-source customers trigger welcome/referrer bonus points on first paid invoice.", phase: "foundation" },
   { id: "birthday", label: "Birthday Offers", description: "Needs DOB capture, customer segment and scheduled automation before activation.", phase: "planned" },
   { id: "spinWin", label: "Spin & Win", description: "Server-side weighted rewards, limits and budget guardrails are planned.", phase: "planned" },
   { id: "scratchWin", label: "Scratch & Win", description: "Server-locked scratch results with expiry and redemption states are planned.", phase: "planned" },
@@ -3241,6 +3241,8 @@ function POS({
   const [paymentMethod, setPaymentMethod] = useState<
     "CASH" | "UPI" | "CARD" | "SPLIT"
   >("UPI");
+  const [splitCashAmount, setSplitCashAmount] = useState(0);
+  const [splitUpiAmount, setSplitUpiAmount] = useState(0);
   const [receiptEmailEnabled, setReceiptEmailEnabled] = useState(false);
   const [receiptWhatsappChannel, setReceiptWhatsappChannel] = useState<
     "OFF" | "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL"
@@ -3431,6 +3433,12 @@ function POS({
           Math.max(0, membershipEligiblePayableMinor - couponDiscountMinor - loyaltyMinor),
         )
       : 0;
+  const payableBalanceMinor = Math.max(0, afterCouponMinor - loyaltyMinor - redeemMinor);
+  const splitCashMinor = Math.max(0, Math.round(Number(splitCashAmount || 0) * 100));
+  const splitUpiMinor = Math.max(0, Math.round(Number(splitUpiAmount || 0) * 100));
+  const splitTotalMinor = splitCashMinor + splitUpiMinor;
+  const splitBalanceMinor = payableBalanceMinor - splitTotalMinor;
+  const splitPaymentValid = paymentMethod !== "SPLIT" || (payableBalanceMinor > 0 && splitCashMinor >= 0 && splitUpiMinor >= 0 && splitTotalMinor === payableBalanceMinor);
   const emailDeliveryBlockedReason = !selectedCustomer
     ? "Select a customer before sending a receipt."
     : !selectedCustomer.email
@@ -3555,13 +3563,21 @@ function POS({
   const manualPayments = (amountMinor: number) => {
     if (amountMinor <= 0) return [];
     if (paymentMethod === "SPLIT") {
-      const cash = Math.floor(amountMinor / 2);
+      if (splitCashMinor + splitUpiMinor !== amountMinor) throw new Error("split_payment_must_match_total");
       return [
-        { method: "CASH", amountMinor: cash },
-        { method: "UPI", amountMinor: amountMinor - cash },
-      ];
+        splitCashMinor > 0 ? { method: "CASH", amountMinor: splitCashMinor } : null,
+        splitUpiMinor > 0 ? { method: "UPI", amountMinor: splitUpiMinor } : null,
+      ].filter(Boolean) as Array<{ method: "CASH" | "UPI"; amountMinor: number }>;
     }
     return [{ method: paymentMethod, amountMinor }];
+  };
+  const choosePaymentMethod = (method: "CASH" | "UPI" | "CARD" | "SPLIT") => {
+    setPaymentMethod(method);
+    if (method === "SPLIT") {
+      const cashMinor = Math.floor(payableBalanceMinor / 2);
+      setSplitCashAmount(cashMinor / 100);
+      setSplitUpiAmount((payableBalanceMinor - cashMinor) / 100);
+    }
   };
   const charge = async () => {
     if (!token) {
@@ -3578,6 +3594,10 @@ function POS({
     }
     if (!loyaltyRedemptionValid) {
       setCheckoutError(`Redeem at least ${loyaltyRules.minRedeemPoints} points and no more than ${maxLoyaltyPoints}.`);
+      return;
+    }
+    if (!splitPaymentValid) {
+      setCheckoutError(`Cash + UPI must exactly equal ${money(payableBalanceMinor)} before saving the bill.`);
       return;
     }
     setCharging(true);
@@ -3597,7 +3617,7 @@ function POS({
               },
             ]
           : []),
-        ...manualPayments(afterCouponMinor - loyaltyMinor - redeemMinor),
+        ...manualPayments(payableBalanceMinor),
       ];
       const result = await backendApi.checkout(token, {
         branchId: "main",
@@ -3622,8 +3642,9 @@ function POS({
       setInvoice(result.number);
       setInvoiceId(result.id);
       setPaid(true);
+      const marketingRewardPoints = Number(result.loyalty.marketingRewardPoints ?? 0);
       setRewardMessage(
-        `${result.loyalty.redeemedPoints ? `${result.loyalty.redeemedPoints} points redeemed. ` : ""}${result.loyalty.earnedPoints} points earned${result.loyalty.balanceAfter != null ? ` · balance ${result.loyalty.balanceAfter}` : ""}.`,
+        `${result.loyalty.redeemedPoints ? `${result.loyalty.redeemedPoints} points redeemed. ` : ""}${result.loyalty.earnedPoints} points earned${marketingRewardPoints ? ` · ${marketingRewardPoints} marketing bonus` : ""}${result.loyalty.balanceAfter != null ? ` · balance ${result.loyalty.balanceAfter}` : ""}.`,
       );
       let pdfMessage = "Branded PDF invoice ready.";
       try {
@@ -4423,6 +4444,8 @@ function POS({
                 setReceiptEmailEnabled(false);
                 setReceiptWhatsappChannel("OFF");
                 setWhatsappActionFeedback(null);
+                setSplitCashAmount(0);
+                setSplitUpiAmount(0);
                 resetCart();
               }}
             >
@@ -4436,20 +4459,55 @@ function POS({
                 <button
                   key={method}
                   className={paymentMethod === method ? "active" : ""}
-                  onClick={() => setPaymentMethod(method)}
+                  onClick={() => choosePaymentMethod(method)}
                 >
                   {prettyStatus(method)}
                 </button>
               ))}
             </div>
+            {paymentMethod === "SPLIT" && (
+              <div className="split-payment-card">
+                <div>
+                  <strong>Cash + UPI split</strong>
+                  <small>Total payable: {money(payableBalanceMinor)}</small>
+                </div>
+                <label>
+                  Cash
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={splitCashAmount}
+                    onChange={(event) => setSplitCashAmount(Number(event.target.value || 0))}
+                  />
+                </label>
+                <label>
+                  UPI
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={splitUpiAmount}
+                    onChange={(event) => setSplitUpiAmount(Number(event.target.value || 0))}
+                  />
+                </label>
+                <p className={splitBalanceMinor === 0 ? "split-ok" : "split-error"}>
+                  {splitBalanceMinor === 0
+                    ? `Matched · Cash ${money(splitCashMinor)} + UPI ${money(splitUpiMinor)}`
+                    : splitBalanceMinor > 0
+                      ? `${money(splitBalanceMinor)} still pending`
+                      : `${money(Math.abs(splitBalanceMinor))} extra entered`}
+                </p>
+              </div>
+            )}
             <button
               className="button pay-button"
-              disabled={!cart.length || charging}
+              disabled={!cart.length || charging || !splitPaymentValid}
               onClick={() => void charge()}
             >
               {charging
                 ? "Saving invoice…"
-                : `Mark payment · ${money(afterCouponMinor - loyaltyMinor - redeemMinor)}`}{" "}
+                : `Mark payment · ${money(payableBalanceMinor)}`}{" "}
               <span>→</span>
             </button>
           </>
@@ -6767,7 +6825,7 @@ function Marketing({
           {[
             ["Phase 1", "Audit + customer date fix", "Done: customer_since model, UI defaults, historical date preservation and VPS deployment."],
             ["Phase 2", "Control center + campaign builder", "Done here: programme toggles, budget guardrails, CTA/CSV/repeat campaign workflow is available."],
-            ["Phase 3", "Reward engines", "Next: normalized stamp, spin, scratch, referral and reward redemption tables with idempotent invoice-paid processing."],
+            ["Phase 3", "Reward engines", "Live foundation: invoice-paid stamp/referral bonuses post to the loyalty ledger once per invoice. Next SaaS phase: normalized spin/scratch reward tables and redemption wallet."],
             ["Phase 4", "Customer wallet", "Next: secure /r/{token} rewards page with points, stamp progress, coupons and book-now CTA."],
             ["Phase 5", "Analytics + regression", "Next: campaign ROI, reward liability, redemption cost and end-to-end tests for abuse/race conditions."],
           ].map(([phase, title, body]) => (
@@ -8255,8 +8313,8 @@ function Settings({
       session: "cutz-bangs-main",
       intervalSeconds: 90,
       dailyCap: 75,
-      windowStartHour: 10,
-      windowEndHour: 20,
+      windowStartHour: 0,
+      windowEndHour: 23,
       hasApiKey: false,
       hasWebhookSecret: false,
     },
@@ -8603,9 +8661,9 @@ function Settings({
           callbackUrl: providerConfig.whatsappUnofficial.callbackUrl,
           session: providerConfig.whatsappUnofficial.session,
           intervalSeconds: providerConfig.whatsappUnofficial.intervalSeconds,
-          dailyCap: providerConfig.whatsappUnofficial.dailyCap,
-          windowStartHour: providerConfig.whatsappUnofficial.windowStartHour,
-          windowEndHour: providerConfig.whatsappUnofficial.windowEndHour,
+          dailyCap: Math.min(75, Math.max(5, providerConfig.whatsappUnofficial.dailyCap)),
+          windowStartHour: 0,
+          windowEndHour: 23,
           ...(wahaApiKey ? { apiKey: wahaApiKey } : {}),
           ...(wahaWebhookSecret ? { webhookSecret: wahaWebhookSecret } : {}),
         },
@@ -8801,11 +8859,10 @@ function Settings({
               <label>WAHA API key<input type="password" value={wahaApiKey} onChange={(event) => setWahaApiKey(event.target.value)} placeholder={providerConfig.whatsappUnofficial.hasApiKey ? "Saved · enter only to replace" : "At least 24 characters"} /></label>
               <label>Webhook secret<input type="password" value={wahaWebhookSecret} onChange={(event) => setWahaWebhookSecret(event.target.value)} placeholder={providerConfig.whatsappUnofficial.hasWebhookSecret ? "Saved · enter only to replace" : "Separate 24+ character secret"} /></label>
               <label>Seconds between messages<select value={providerConfig.whatsappUnofficial.intervalSeconds} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, intervalSeconds: Number(event.target.value) } }))}><option value="60">60 seconds</option><option value="90">90 seconds · recommended</option><option value="120">120 seconds</option><option value="180">180 seconds</option></select></label>
-              <label>Daily recipient cap<input type="number" min="5" max="200" value={providerConfig.whatsappUnofficial.dailyCap} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, dailyCap: Number(event.target.value) } }))} /></label>
-              <label>Send from hour<input type="number" min="0" max="22" value={providerConfig.whatsappUnofficial.windowStartHour} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, windowStartHour: Number(event.target.value) } }))} /></label>
-              <label>Send until hour<input type="number" min="1" max="23" value={providerConfig.whatsappUnofficial.windowEndHour} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, windowEndHour: Number(event.target.value) } }))} /></label>
+              <label>Daily recipient cap<input type="number" min="5" max="75" value={Math.min(75, providerConfig.whatsappUnofficial.dailyCap)} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, dailyCap: Math.min(75, Math.max(5, Number(event.target.value || 75))) } }))} /></label>
+              <label>Delivery window<input value="24 hours · all day" disabled readOnly /></label>
             </div>
-            <p className="provider-warning">Unofficial access can still be restricted or banned. Pacing reduces burst volume; it does not make bulk messaging safe or compliant. Only message people with recorded opt-in.</p>
+            <p className="provider-warning">Unofficial access can still be restricted or banned. Campaigns can run 24 hours, but backend pacing is capped at 75 recipients/day with spacing and opt-out safety. Only message people with recorded opt-in.</p>
           </section>
         </div>
         <button className="button admin-primary" disabled={busy || !token} onClick={() => void saveProviders()}>{busy ? "Saving…" : "Save & apply provider credentials"}</button>

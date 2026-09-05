@@ -35,7 +35,7 @@ const providerSchema = z.object({
     apiKey: z.string().min(24).max(500).optional(),
     webhookSecret: z.string().min(24).max(500).optional(),
     intervalSeconds: z.number().int().min(60).max(300),
-    dailyCap: z.number().int().min(5).max(200),
+    dailyCap: z.number().int().min(5).max(75),
     windowStartHour: z.number().int().min(0).max(22),
     windowEndHour: z.number().int().min(1).max(23),
   }),

@@ -333,7 +333,7 @@ async function finishCampaignIfComplete(campaignId: string) {
   if (!remaining) await prisma.campaign.update({ where: { id: campaignId }, data: { status: "SENT" } });
 }
 
-async function queueCampaignRun(campaignId: string, startAt: Date, intervalSeconds: number) {
+async function queueCampaignRun(campaignId: string, startAt: Date, intervalSeconds: number, dailyCap?: number | null) {
   const recipients = await prisma.campaignRecipient.findMany({
     where: { campaignId, status: "queued" },
     select: { id: true },
@@ -343,9 +343,11 @@ async function queueCampaignRun(campaignId: string, startAt: Date, intervalSecon
     await prisma.campaign.update({ where: { id: campaignId }, data: { status: "SENT" } });
     return;
   }
+  const cappedDailyLimit = Math.max(1, Math.min(75, Math.round(dailyCap ?? recipients.length)));
+  const spacingMs = Math.max(0, intervalSeconds) * 1000;
   const plan = recipients.map((recipient, index) => ({
     id: recipient.id,
-    scheduledFor: new Date(startAt.getTime() + index * Math.max(0, intervalSeconds) * 1000),
+    scheduledFor: new Date(startAt.getTime() + Math.floor(index / cappedDailyLimit) * 24 * 60 * 60 * 1000 + (index % cappedDailyLimit) * spacingMs),
   }));
   const firstRunAt = plan[0]!.scheduledFor;
   await prisma.campaign.update({
@@ -424,7 +426,12 @@ async function runRecurringCampaignScheduler() {
           recipients: { create: recipientCreates },
         },
       });
-      await queueCampaignRun(child.id, template.recurrenceNextAt, template.intervalSeconds ?? (template.channel === "WHATSAPP_UNOFFICIAL" ? 120 : 0));
+      await queueCampaignRun(
+        child.id,
+        template.recurrenceNextAt,
+        template.intervalSeconds ?? (template.channel === "WHATSAPP_UNOFFICIAL" ? 120 : 0),
+        template.channel === "WHATSAPP_UNOFFICIAL" ? template.dailyCap ?? 75 : recipientCreates.length,
+      );
       console.log(`[campaign-recurring] queued ${child.id} from ${template.id}`);
     }
   } finally {

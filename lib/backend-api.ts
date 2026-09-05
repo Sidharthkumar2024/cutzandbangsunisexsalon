@@ -1135,7 +1135,7 @@ export const backendApi = {
     request<{
       number: string;
       id: string;
-      loyalty: { redeemedPoints: number; redeemedMinor: number; earnedPoints: number; balanceAfter: number | null };
+      loyalty: { redeemedPoints: number; redeemedMinor: number; earnedPoints: number; marketingRewardPoints?: number; balanceAfter: number | null };
       coupon?: { code: string; discountMinor: number } | null;
     }>(
       "/pos/checkout",

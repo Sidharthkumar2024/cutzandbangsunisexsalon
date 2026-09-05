@@ -217,7 +217,7 @@ export default async function inboxRoutes(app: FastifyInstance) {
     const score = Math.min(100, 50
       + (unofficial?.connected ? 0 : 15)
       + (guardrails.intervalSeconds < 90 ? 8 : 0)
-      + (guardrails.dailyCap > 75 ? 10 : 0)
+      + (guardrails.dailyCap > 75 ? 14 : 0)
       + (failureRate > 10 ? 12 : 0)
       + (completed === 0 ? 5 : 0));
     const risk = {
@@ -232,7 +232,7 @@ export default async function inboxRoutes(app: FastifyInstance) {
         optOutHonoured: true,
         intervalSeconds: guardrails.intervalSeconds,
         dailyCap: guardrails.dailyCap,
-        deliveryWindow: `${String(guardrails.windowStartHour).padStart(2, "0")}:00–${String(guardrails.windowEndHour).padStart(2, "0")}:00`,
+        deliveryWindow: "24 hours",
       },
     };
     return {

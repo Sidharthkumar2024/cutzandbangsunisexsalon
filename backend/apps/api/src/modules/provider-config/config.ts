@@ -74,6 +74,18 @@ const nonEmpty = (value: string | undefined) => {
   return trimmed ? trimmed : undefined;
 };
 
+const safeUnofficialDailyCap = (value: unknown) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 75;
+  return Math.max(5, Math.min(75, Math.round(parsed)));
+};
+
+const safeUnofficialHour = (value: unknown, fallback: number) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.min(23, Math.round(parsed)));
+};
+
 async function storedSettings(branchId: string): Promise<StoredProviderSettings> {
   const row = await prisma.setting.findUnique({ where: { key: keyFor(branchId) } });
   return (row?.value ?? {}) as StoredProviderSettings;
@@ -108,9 +120,9 @@ function envProviderSettings(): StoredProviderSettings {
       callbackUrl: process.env.WA_UNOFFICIAL_CALLBACK_URL ?? "",
       session: process.env.WAHA_SESSION ?? "cutz-bangs-main",
       intervalSeconds: Number(process.env.WA_UNOFFICIAL_INTERVAL_SECONDS ?? 90),
-      dailyCap: Number(process.env.WA_UNOFFICIAL_DAILY_CAP ?? 75),
-      windowStartHour: Number(process.env.WA_UNOFFICIAL_WINDOW_START_HOUR ?? 10),
-      windowEndHour: Number(process.env.WA_UNOFFICIAL_WINDOW_END_HOUR ?? 20),
+      dailyCap: safeUnofficialDailyCap(process.env.WA_UNOFFICIAL_DAILY_CAP ?? 75),
+      windowStartHour: safeUnofficialHour(process.env.WA_UNOFFICIAL_WINDOW_START_HOUR ?? 0, 0),
+      windowEndHour: safeUnofficialHour(process.env.WA_UNOFFICIAL_WINDOW_END_HOUR ?? 23, 23),
       apiKeyEncrypted: undefined,
       webhookSecretEncrypted: undefined,
     },
@@ -153,9 +165,9 @@ function mergeStoredWithEnv(stored: StoredProviderSettings): StoredProviderSetti
       callbackUrl: nonEmpty(stored.whatsappUnofficial?.callbackUrl) ?? envUnofficial.callbackUrl,
       session: nonEmpty(stored.whatsappUnofficial?.session) ?? envUnofficial.session,
       intervalSeconds: stored.whatsappUnofficial?.intervalSeconds ?? envUnofficial.intervalSeconds,
-      dailyCap: stored.whatsappUnofficial?.dailyCap ?? envUnofficial.dailyCap,
-      windowStartHour: stored.whatsappUnofficial?.windowStartHour ?? envUnofficial.windowStartHour,
-      windowEndHour: stored.whatsappUnofficial?.windowEndHour ?? envUnofficial.windowEndHour,
+      dailyCap: safeUnofficialDailyCap(stored.whatsappUnofficial?.dailyCap ?? envUnofficial.dailyCap),
+      windowStartHour: safeUnofficialHour(stored.whatsappUnofficial?.windowStartHour ?? envUnofficial.windowStartHour, 0),
+      windowEndHour: safeUnofficialHour(stored.whatsappUnofficial?.windowEndHour ?? envUnofficial.windowEndHour, 23),
       apiKeyEncrypted: stored.whatsappUnofficial?.apiKeyEncrypted ?? stored.whatsappUnofficial?.secretEncrypted,
       webhookSecretEncrypted: stored.whatsappUnofficial?.webhookSecretEncrypted,
     },
@@ -279,9 +291,9 @@ export async function publicProviderSettings(branchId = "main") {
       callbackUrl: stored.whatsappUnofficial?.callbackUrl ?? process.env.WA_UNOFFICIAL_CALLBACK_URL ?? "",
       session: stored.whatsappUnofficial?.session ?? process.env.WAHA_SESSION ?? "cutz-bangs-main",
       intervalSeconds: stored.whatsappUnofficial?.intervalSeconds ?? 90,
-      dailyCap: stored.whatsappUnofficial?.dailyCap ?? 75,
-      windowStartHour: stored.whatsappUnofficial?.windowStartHour ?? 10,
-      windowEndHour: stored.whatsappUnofficial?.windowEndHour ?? 20,
+      dailyCap: safeUnofficialDailyCap(stored.whatsappUnofficial?.dailyCap ?? 75),
+      windowStartHour: safeUnofficialHour(stored.whatsappUnofficial?.windowStartHour ?? 0, 0),
+      windowEndHour: safeUnofficialHour(stored.whatsappUnofficial?.windowEndHour ?? 23, 23),
       hasApiKey: Boolean(stored.whatsappUnofficial?.apiKeyEncrypted || stored.whatsappUnofficial?.secretEncrypted || process.env.WAHA_API_KEY),
       hasWebhookSecret: Boolean(stored.whatsappUnofficial?.webhookSecretEncrypted || process.env.WA_UNOFFICIAL_WEBHOOK_SECRET),
     },
@@ -306,7 +318,6 @@ export async function saveProviderSettings(branchId: string, input: ProviderSett
     if (!input.whatsappUnofficial.session) throw new ProviderConfigError("whatsapp_unofficial_session_required");
     if (!input.whatsappUnofficial.apiKey && !current.whatsappUnofficial?.apiKeyEncrypted && !current.whatsappUnofficial?.secretEncrypted && !process.env.WAHA_API_KEY) throw new ProviderConfigError("waha_api_key_required");
     if (!input.whatsappUnofficial.webhookSecret && !current.whatsappUnofficial?.webhookSecretEncrypted && !process.env.WA_UNOFFICIAL_WEBHOOK_SECRET) throw new ProviderConfigError("waha_webhook_secret_required");
-    if (input.whatsappUnofficial.windowStartHour >= input.whatsappUnofficial.windowEndHour) throw new ProviderConfigError("whatsapp_delivery_window_invalid");
   }
   let normalizedWahaBaseUrl = input.whatsappUnofficial.baseUrl;
   if (input.whatsappUnofficial.baseUrl) {
@@ -349,9 +360,9 @@ export async function saveProviderSettings(branchId: string, input: ProviderSett
       callbackUrl: input.whatsappUnofficial.callbackUrl,
       session: input.whatsappUnofficial.session,
       intervalSeconds: input.whatsappUnofficial.intervalSeconds,
-      dailyCap: input.whatsappUnofficial.dailyCap,
-      windowStartHour: input.whatsappUnofficial.windowStartHour,
-      windowEndHour: input.whatsappUnofficial.windowEndHour,
+      dailyCap: safeUnofficialDailyCap(input.whatsappUnofficial.dailyCap),
+      windowStartHour: 0,
+      windowEndHour: 23,
       apiKeyEncrypted: input.whatsappUnofficial.apiKey
         ? encryptSecret(input.whatsappUnofficial.apiKey)
         : current.whatsappUnofficial?.apiKeyEncrypted ?? current.whatsappUnofficial?.secretEncrypted,

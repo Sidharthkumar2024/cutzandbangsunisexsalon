@@ -9,7 +9,7 @@ import { renderInvoicePdf } from "../../lib/invoicePdf.js";
 import { invoiceEmail, isRestrictedWahaHost, providers, WAHA_INLINE_MEDIA_MAX_BYTES } from "@cutz/providers";
 import { enqueueEmail } from "@cutz/queue";
 import { audit } from "../../lib/audit.js";
-import { calculateRedemptionMinor, earnForPaidInvoice, getLoyaltyRules, postLoyaltyEntry } from "../loyalty/ledger.js";
+import { applyMarketingRewardBonuses, calculateRedemptionMinor, earnForPaidInvoice, getLoyaltyRules, postLoyaltyEntry } from "../loyalty/ledger.js";
 import { consumeCoupon, quoteCoupon } from "../coupons/engine.js";
 import { applyProviderSettings } from "../provider-config/config.js";
 import {
@@ -622,6 +622,15 @@ export default async function posRoutes(app: FastifyInstance) {
                 actorUserId: req.user?.id,
               })
             : { points: 0, balanceAfter: loyaltyBalanceAfter };
+          const marketingRewards = body.customerId && status === "PAID"
+            ? await applyMarketingRewardBonuses(tx, {
+                branchId: body.branchId,
+                invoiceId: inv.id,
+                customerId: body.customerId,
+                eligibleMinor: Math.max(0, totals.totalMinor - loyaltyRedemptionMinor),
+                actorUserId: req.user?.id,
+              })
+            : { points: 0, balanceAfter: null };
 
           await audit("pos.checkout", "Invoice", inv.id, {
             actorUserId: req.user?.id,
@@ -633,6 +642,7 @@ export default async function posRoutes(app: FastifyInstance) {
               couponDiscountMinor,
               loyaltyPointsRedeemed: body.loyaltyPointsToRedeem,
               loyaltyPointsEarned: earned.points,
+              marketingRewardPoints: marketingRewards.points,
               servicePriceOverrides,
             },
             ip: req.ip,
@@ -644,7 +654,8 @@ export default async function posRoutes(app: FastifyInstance) {
               redeemedPoints: body.loyaltyPointsToRedeem,
               redeemedMinor: loyaltyRedemptionMinor,
               earnedPoints: earned.points,
-              balanceAfter: earned.balanceAfter ?? loyaltyBalanceAfter,
+              marketingRewardPoints: marketingRewards.points,
+              balanceAfter: marketingRewards.balanceAfter ?? earned.balanceAfter ?? loyaltyBalanceAfter,
             },
           };
         });
@@ -868,6 +879,13 @@ export default async function posRoutes(app: FastifyInstance) {
               customerId: updated.customerId,
               eligibleMinor: Math.max(0, updated.totalMinor - loyaltyTenderMinor),
               rules,
+              actorUserId: req.user!.id,
+            });
+            await applyMarketingRewardBonuses(tx, {
+              branchId: updated.branchId,
+              invoiceId: updated.id,
+              customerId: updated.customerId,
+              eligibleMinor: Math.max(0, updated.totalMinor - loyaltyTenderMinor),
               actorUserId: req.user!.id,
             });
           }

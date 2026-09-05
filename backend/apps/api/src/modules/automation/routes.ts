@@ -25,13 +25,6 @@ function localParts(date: Date, timeZone: string) {
   return { key: `${get("year")}-${get("month")}-${get("day")}`, hour: Number(get("hour")) };
 }
 
-function insideDeliveryWindow(date: Date, timeZone: string, startHour: number, endHour: number) {
-  const { hour } = localParts(date, timeZone);
-  if (hour < startHour) return new Date(date.getTime() + (startHour - hour) * 60 * 60 * 1_000);
-  if (hour >= endHour) return new Date(date.getTime() + (24 - hour + startHour) * 60 * 60 * 1_000);
-  return date;
-}
-
 function automationKey(branchId: string) {
   return `branch:${branchId}:automation`;
 }
@@ -99,20 +92,9 @@ async function createCampaign(
   const schedule: Date[] = [];
   for (let index = 0; index < customerIds.length; index += 1) {
     if (channel === "WHATSAPP_UNOFFICIAL") {
-      cursor = insideDeliveryWindow(
-        cursor,
-        timeZone,
-        providerConfig.whatsappUnofficial.windowStartHour,
-        providerConfig.whatsappUnofficial.windowEndHour,
-      );
       let key = localParts(cursor, timeZone).key;
       while ((occupied.get(key) ?? 0) >= dailyCap) {
-        cursor = insideDeliveryWindow(
-          new Date(cursor.getTime() + 24 * 60 * 60 * 1_000),
-          timeZone,
-          providerConfig.whatsappUnofficial.windowStartHour,
-          providerConfig.whatsappUnofficial.windowEndHour,
-        );
+        cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1_000);
         key = localParts(cursor, timeZone).key;
       }
       occupied.set(key, (occupied.get(key) ?? 0) + 1);

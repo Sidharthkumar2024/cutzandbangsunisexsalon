@@ -174,15 +174,8 @@ function nextRecurringAt(rule: CampaignRecurrenceRule | null | undefined, after:
   return null;
 }
 
-function insideDeliveryWindow(date: Date, timeZone: string, startHour: number, endHour: number) {
-  const { hour } = localParts(date, timeZone);
-  if (hour < startHour) return new Date(date.getTime() + (startHour - hour) * 60 * 60 * 1000);
-  if (hour >= endHour) return new Date(date.getTime() + (24 - hour + startHour) * 60 * 60 * 1000);
-  return date;
-}
-
 function unofficialRisk(intervalSeconds: number, dailyCap: number, recipientCount: number) {
-  const score = Math.min(100, 50 + (intervalSeconds < 90 ? 8 : 0) + (dailyCap > 75 ? 10 : 0) + (recipientCount > dailyCap ? 7 : 0));
+  const score = Math.min(100, 48 + (intervalSeconds < 90 ? 8 : 0) + (dailyCap > 75 ? 14 : 0) + (recipientCount > dailyCap ? 7 : 0));
   return { score, label: score >= 85 ? "critical" : score >= 65 ? "high" : "moderate" };
 }
 
@@ -484,10 +477,9 @@ export default async function campaignRoutes(app: FastifyInstance) {
     const plan: Array<{ id: string; scheduledFor: Date }> = [];
     for (const recipient of recipients) {
       if (existing.channel === "WHATSAPP_UNOFFICIAL") {
-        cursor = insideDeliveryWindow(cursor, timeZone, unofficial.windowStartHour, unofficial.windowEndHour);
         let key = localParts(cursor, timeZone).key;
         while ((occupied.get(key) ?? 0) >= dailyCap) {
-          cursor = insideDeliveryWindow(new Date(cursor.getTime() + 24 * 60 * 60 * 1000), timeZone, unofficial.windowStartHour, unofficial.windowEndHour);
+          cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000);
           key = localParts(cursor, timeZone).key;
         }
         occupied.set(key, (occupied.get(key) ?? 0) + 1);
