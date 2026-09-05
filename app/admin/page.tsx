@@ -48,6 +48,7 @@ type View =
   | "inbox"
   | "content"
   | "coupons"
+  | "marketing"
   | "campaigns"
   | "reports"
   | "staff"
@@ -260,7 +261,81 @@ type CampaignManualContact = {
   emailConsent: boolean;
   consentSource: string;
 };
+type MarketingProgramId =
+  | "stampCards"
+  | "loyaltyPoints"
+  | "spinWin"
+  | "scratchWin"
+  | "coupons"
+  | "referrals"
+  | "birthday"
+  | "winBack"
+  | "festival"
+  | "happyHours"
+  | "membershipOffers"
+  | "whatsappAutomation";
+type MarketingProgramSetting = {
+  id: MarketingProgramId;
+  label: string;
+  description: string;
+  phase: "live" | "foundation" | "planned";
+  enabled: boolean;
+};
+type MarketingSettings = {
+  programmes: Record<MarketingProgramId, boolean>;
+  monthlyBudgetMinor: number;
+  maxRewardsPerDay: number;
+  reviewLink: string;
+};
 type CampaignCtaDraft = BackendCampaignCtaButton & { id: string };
+const defaultMarketingSettings = (): MarketingSettings => ({
+  programmes: {
+    stampCards: false,
+    loyaltyPoints: true,
+    spinWin: false,
+    scratchWin: false,
+    coupons: true,
+    referrals: false,
+    birthday: false,
+    winBack: true,
+    festival: false,
+    happyHours: false,
+    membershipOffers: true,
+    whatsappAutomation: true,
+  },
+  monthlyBudgetMinor: 10_000_00,
+  maxRewardsPerDay: 50,
+  reviewLink: "",
+});
+const marketingProgramBlueprints: Array<Omit<MarketingProgramSetting, "enabled">> = [
+  { id: "loyaltyPoints", label: "Loyalty Points", description: "Configurable points earning and POS redemption already wired into billing.", phase: "live" },
+  { id: "coupons", label: "Coupons", description: "Flat/percentage coupons with usage limits and POS application.", phase: "live" },
+  { id: "whatsappAutomation", label: "WhatsApp Automation", description: "Invoice/follow-up delivery through official or QR connector with pacing.", phase: "live" },
+  { id: "winBack", label: "Win-back Campaigns", description: "Lapsed customer targeting through campaign segments and follow-up automation.", phase: "live" },
+  { id: "membershipOffers", label: "Membership Offers", description: "Membership/package based benefits and POS membership credit matching.", phase: "live" },
+  { id: "stampCards", label: "Digital Stamp Cards", description: "Configurable paid-visit/service stamps; next engine phase will process invoice-paid events.", phase: "foundation" },
+  { id: "referrals", label: "Referral Rewards", description: "Referral source capture exists; reward issue after qualifying invoice is the next phase.", phase: "foundation" },
+  { id: "birthday", label: "Birthday Offers", description: "Needs DOB capture, customer segment and scheduled automation before activation.", phase: "planned" },
+  { id: "spinWin", label: "Spin & Win", description: "Server-side weighted rewards, limits and budget guardrails are planned.", phase: "planned" },
+  { id: "scratchWin", label: "Scratch & Win", description: "Server-locked scratch results with expiry and redemption states are planned.", phase: "planned" },
+  { id: "festival", label: "Festival Campaigns", description: "Seasonal template library plus monthly activation window.", phase: "planned" },
+  { id: "happyHours", label: "Happy Hours", description: "Day/time discount rules with blackout services and budget limits.", phase: "planned" },
+];
+const normalizeMarketingSettings = (value: unknown): MarketingSettings => {
+  const defaults = defaultMarketingSettings();
+  const source = (value && typeof value === "object" ? value : {}) as Partial<MarketingSettings> & { programmes?: Partial<Record<MarketingProgramId, unknown>> };
+  return {
+    programmes: Object.fromEntries(
+      marketingProgramBlueprints.map((program) => [
+        program.id,
+        Boolean(source.programmes?.[program.id] ?? defaults.programmes[program.id]),
+      ]),
+    ) as Record<MarketingProgramId, boolean>,
+    monthlyBudgetMinor: Number(source.monthlyBudgetMinor ?? defaults.monthlyBudgetMinor),
+    maxRewardsPerDay: Number(source.maxRewardsPerDay ?? defaults.maxRewardsPerDay),
+    reviewLink: String(source.reviewLink ?? defaults.reviewLink),
+  };
+};
 const campaignWeekdays = [
   ["0", "Sun"],
   ["1", "Mon"],
@@ -447,6 +522,7 @@ const navGroups: Array<{
     label: "Growth",
     items: [
       { id: "content", label: "Website content", icon: "WC" },
+      { id: "marketing", label: "Marketing", icon: "MK" },
       { id: "coupons", label: "Coupons", icon: "CO" },
       { id: "campaigns", label: "Campaigns", icon: "CP" },
       { id: "reports", label: "Reports", icon: "RP" },
@@ -470,6 +546,7 @@ const navGroups: Array<{
 const viewPermission: Partial<Record<View, string>> = {
   dashboard: "dashboard", calendar: "calendar", pos: "pos", customers: "customers", memberships: "memberships",
   inbox: "inbox", services: "services", inventory: "inventory", cash: "cash", invoices: "pos", content: "website", coupons: "coupons",
+  marketing: "campaigns",
   campaigns: "campaigns", reports: "reports", staff: "staff", attendance: "staff", payroll: "payroll", system: "audit", settings: "settings",
 };
 
@@ -498,6 +575,10 @@ const viewTitles: Record<View, [string, string]> = {
     "Manage what customers see on the public website.",
   ],
   coupons: ["Coupons", "Create percentage or fixed offers with controlled usage."],
+  marketing: [
+    "Marketing",
+    "Control rewards, retention programmes and growth campaigns from one place.",
+  ],
   campaigns: [
     "Campaigns",
     "Reach the right audience with an approval-first workflow.",
@@ -952,6 +1033,14 @@ export default function AdminPage() {
               token={backend.token}
               data={backend.data}
               onRefresh={() => void backend.refresh()}
+            />
+          )}
+          {activeView === "marketing" && (
+            <Marketing
+              token={backend.token}
+              data={backend.data}
+              onRefresh={() => void backend.refresh()}
+              onView={selectView}
             />
           )}
           {activeView === "campaigns" && (
@@ -6538,6 +6627,157 @@ function Inbox({
           </div>
         </aside>
       </div>
+    </div>
+  );
+}
+
+function Marketing({
+  token,
+  data,
+  onRefresh,
+  onView,
+}: {
+  token: string;
+  data: BackendSnapshot;
+  onRefresh: () => void;
+  onView: (view: View) => void;
+}) {
+  const [settings, setSettings] = useState<MarketingSettings>(() => normalizeMarketingSettings(data.settings.marketing));
+  const [message, setMessage] = useState("");
+  const [busyKey, setBusyKey] = useState("");
+  useEffect(() => {
+    setSettings(normalizeMarketingSettings(data.settings.marketing));
+  }, [data.settings.marketing]);
+
+  const programmes = marketingProgramBlueprints.map((program) => ({
+    ...program,
+    enabled: settings.programmes[program.id],
+  }));
+  const livePrograms = programmes.filter((program) => program.phase === "live");
+  const activePrograms = programmes.filter((program) => program.enabled);
+  const activeCampaigns = data.campaigns.filter((campaign) => ["PENDING_APPROVAL", "SCHEDULED", "SENDING"].includes(campaign.status)).length;
+  const rewardsIssued = data.customers.reduce((sum, customer) => sum + Math.max(0, customer.loyaltyPoints), 0);
+  const campaignAudience = data.campaigns.reduce((sum, campaign) => sum + (campaign.engagement?.total ?? campaign._count.recipients), 0);
+  const campaignSent = data.campaigns.reduce((sum, campaign) => sum + (campaign.engagement?.sent ?? 0), 0);
+  const redemptionRate = data.coupons.length
+    ? Math.round((data.coupons.reduce((sum, coupon) => sum + coupon.usedCount, 0) / Math.max(1, data.coupons.reduce((sum, coupon) => sum + (coupon.usageLimit ?? coupon.usedCount), 0))) * 100)
+    : 0;
+  const saveMarketing = async (next: MarketingSettings, busy = "marketing") => {
+    if (!token) return;
+    setBusyKey(busy);
+    setMessage("");
+    try {
+      await backendApi.updateBranchSetting(token, "marketing", next);
+      setSettings(next);
+      setMessage("Marketing control center saved. OFF programmes keep history but stop new activation rules.");
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Marketing settings could not be saved.");
+    } finally {
+      setBusyKey("");
+    }
+  };
+  const toggleProgram = async (id: MarketingProgramId) => {
+    const next = {
+      ...settings,
+      programmes: { ...settings.programmes, [id]: !settings.programmes[id] },
+    };
+    await saveMarketing(next, id);
+  };
+  const saveBudget = async () => {
+    await saveMarketing({
+      ...settings,
+      monthlyBudgetMinor: Math.max(0, Math.round(settings.monthlyBudgetMinor)),
+      maxRewardsPerDay: Math.max(1, Math.round(settings.maxRewardsPerDay || 1)),
+      reviewLink: settings.reviewLink.trim(),
+    }, "budget");
+  };
+  return (
+    <div className="marketing-view">
+      {message && <div className="calendar-message">{message}</div>}
+      <section className="marketing-hero admin-card">
+        <div>
+          <p className="eyebrow">Growth & retention platform</p>
+          <h2>Marketing Control Center</h2>
+          <p>Use this page as the master ON/OFF switchboard for loyalty, coupons, campaigns and upcoming reward engines. Turning a programme OFF does not delete history or analytics.</p>
+        </div>
+        <div className="marketing-hero-actions">
+          <button className="button admin-primary" onClick={() => onView("campaigns")}>Create campaign</button>
+          <button className="button" onClick={() => onView("settings")}>Automation settings</button>
+        </div>
+      </section>
+      <section className="marketing-kpi-grid">
+        <article><small>Active programmes</small><strong>{activePrograms.length}/{programmes.length}</strong><span>{livePrograms.filter((program) => program.enabled).length} live modules enabled</span></article>
+        <article><small>Active campaigns</small><strong>{activeCampaigns}</strong><span>Pending, scheduled or sending</span></article>
+        <article><small>Loyalty liability</small><strong>{rewardsIssued.toLocaleString("en-IN")} pts</strong><span>Outstanding customer points</span></article>
+        <article><small>Coupon redemption</small><strong>{redemptionRate}%</strong><span>{data.coupons.length} coupon rules</span></article>
+        <article><small>Campaign reach</small><strong>{campaignSent}/{campaignAudience}</strong><span>Sent vs total recipients</span></article>
+      </section>
+      <section className="marketing-grid">
+        <article className="admin-card marketing-programmes">
+          <div className="card-head">
+            <div>
+              <p className="eyebrow">Programme switches</p>
+              <h2>Monthly marketing controls</h2>
+              <p>Switch programmes by month without losing old customer progress. Live programmes are already wired; foundation/planned switches prepare the admin workflow for the next engine phase.</p>
+            </div>
+            <span className="integration-badge connected">Multi-tenant setting</span>
+          </div>
+          <div className="marketing-program-list">
+            {programmes.map((program) => (
+              <div key={program.id} className={`marketing-program-row phase-${program.phase}`}>
+                <div>
+                  <strong>{program.label}</strong>
+                  <small>{program.description}</small>
+                  <em>{program.phase === "live" ? "Live" : program.phase === "foundation" ? "Foundation ready" : "Planned engine"}</em>
+                </div>
+                <button
+                  type="button"
+                  className={`toggle ${program.enabled ? "active" : ""}`}
+                  aria-label={`Toggle ${program.label}`}
+                  disabled={!token || Boolean(busyKey)}
+                  onClick={() => void toggleProgram(program.id)}
+                >
+                  <i />
+                </button>
+              </div>
+            ))}
+          </div>
+        </article>
+        <aside className="admin-card marketing-guardrails">
+          <p className="eyebrow">Loss protection</p>
+          <h2>Reward budget guardrails</h2>
+          <p>These numbers are saved now and will be consumed by stamp/spin/scratch reward processors as they are rolled out.</p>
+          <label>Monthly reward budget<input type="number" min="0" value={Math.round(settings.monthlyBudgetMinor / 100)} onChange={(event) => setSettings((current) => ({ ...current, monthlyBudgetMinor: Math.round(Number(event.target.value || 0) * 100) }))} /></label>
+          <label>Max rewards per day<input type="number" min="1" value={settings.maxRewardsPerDay} onChange={(event) => setSettings((current) => ({ ...current, maxRewardsPerDay: Math.max(1, Number(event.target.value || 1)) }))} /></label>
+          <label>Google review link<input value={settings.reviewLink} onChange={(event) => setSettings((current) => ({ ...current, reviewLink: event.target.value }))} placeholder="https://g.page/r/..." /></label>
+          <button className="button admin-primary" disabled={!token || Boolean(busyKey)} onClick={() => void saveBudget()}>{busyKey === "budget" ? "Saving…" : "Save guardrails"}</button>
+          <small>Review requests stay separate from rewards; no points or discounts are awarded for positive reviews.</small>
+        </aside>
+      </section>
+      <section className="admin-card marketing-roadmap">
+        <div className="card-head">
+          <div>
+            <p className="eyebrow">Prompt audit</p>
+            <h2>Implementation status from the master prompt</h2>
+            <p>The master prompt is now converted into safe phases instead of a risky full rewrite.</p>
+          </div>
+        </div>
+        <div className="marketing-phase-list">
+          {[
+            ["Phase 1", "Audit + customer date fix", "Done: customer_since model, UI defaults, historical date preservation and VPS deployment."],
+            ["Phase 2", "Control center + campaign builder", "Done here: programme toggles, budget guardrails, CTA/CSV/repeat campaign workflow is available."],
+            ["Phase 3", "Reward engines", "Next: normalized stamp, spin, scratch, referral and reward redemption tables with idempotent invoice-paid processing."],
+            ["Phase 4", "Customer wallet", "Next: secure /r/{token} rewards page with points, stamp progress, coupons and book-now CTA."],
+            ["Phase 5", "Analytics + regression", "Next: campaign ROI, reward liability, redemption cost and end-to-end tests for abuse/race conditions."],
+          ].map(([phase, title, body]) => (
+            <article key={phase}>
+              <span>{phase}</span>
+              <div><strong>{title}</strong><small>{body}</small></div>
+            </article>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }
