@@ -195,7 +195,7 @@ export default async function authRoutes(app: FastifyInstance) {
 
     const customer = await prisma.customer.findFirst({
       where: { id: stored.customerId, branchId, deletedAt: null },
-      include: { user: true, branch: { select: { tenantId: true } } },
+      include: { user: true },
     });
     if (!customer) return reply.code(404).send({ error: "customer_profile_not_found" });
     const normalizedPhone = phoneDigits(customer.phone ?? rawPhone);
@@ -208,7 +208,7 @@ export default async function authRoutes(app: FastifyInstance) {
         if (existingByPhone?.role === "CUSTOMER" && !existingByPhone.customer) {
           linked = await tx.user.update({
             where: { id: existingByPhone.id },
-            data: { isActive: true, branchId, activeTenantId: customer.branch.tenantId },
+            data: { isActive: true, branchId },
           });
         } else {
           linked = await tx.user.create({
@@ -216,7 +216,6 @@ export default async function authRoutes(app: FastifyInstance) {
               role: "CUSTOMER",
               phone: existingByPhone ? undefined : normalizedPhone || undefined,
               branchId,
-              activeTenantId: customer.branch.tenantId,
             },
           });
         }
@@ -227,12 +226,10 @@ export default async function authRoutes(app: FastifyInstance) {
       await tx.setting.delete({ where: { key } }).catch(() => undefined);
       return linked;
     });
-    const activeTenantId = await resolveActiveTenantId(user);
     const { token, tokenHash } = issueToken();
     await prisma.session.create({
       data: {
         userId: user.id,
-        activeTenantId,
         tokenHash,
         expiresAt: new Date(Date.now() + SESSION_TTL_MS),
         ip: req.ip,
@@ -250,7 +247,7 @@ export default async function authRoutes(app: FastifyInstance) {
         id: user.id,
         email: user.email ?? "",
         role: user.role,
-        activeTenantId,
+        activeTenantId: null,
         branchId: user.branchId,
         permissionKeys: user.permissionKeys,
       },
