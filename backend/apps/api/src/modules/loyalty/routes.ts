@@ -13,6 +13,7 @@ const rewardAttemptSchema = z.object({
   attempted: z.boolean(),
   won: z.boolean(),
   points: z.number().int(),
+  prizeLabel: z.string().optional(),
   balanceAfter: z.number().int(),
   message: z.string(),
   roll: z.number().int().min(1).max(100),
@@ -37,6 +38,15 @@ function nextBranchDayIso(dateKey: string) {
   const next = new Date(`${dateKey}T18:30:00.000Z`);
   next.setUTCDate(next.getUTCDate() + 1);
   return next.toISOString();
+}
+
+function spinPrizeLabel(labels: string[], roll: number, won: boolean) {
+  const fallback = won ? "Lucky reward" : "Better luck";
+  const clean = labels.map((label) => label.trim()).filter(Boolean);
+  if (!clean.length) return fallback;
+  const winningLabels = clean.filter((label) => !/better luck|try again|no prize/i.test(label));
+  const pool = won && winningLabels.length ? winningLabels : clean;
+  return pool[(roll - 1) % pool.length] ?? fallback;
 }
 
 export default async function loyaltyRoutes(app: FastifyInstance) {
@@ -80,6 +90,13 @@ export default async function loyaltyRoutes(app: FastifyInstance) {
         : settings.programmes.scratchWin !== false;
       if (!enabled) return reply.code(409).send({ error: `${kind}_disabled` });
 
+      const paidInvoiceCount = await prisma.invoice.count({
+        where: { customerId: customer.id, status: "PAID" },
+      });
+      if (paidInvoiceCount <= 0) {
+        return reply.code(409).send({ error: "reward_locked_until_first_paid_invoice" });
+      }
+
       const dateKey = branchDateKey(new Date(), customer.branch.timezone ?? "Asia/Kolkata");
       const attemptKey = `customer:${customer.id}:reward:${kind}:${dateKey}`;
       const existing = await prisma.setting.findUnique({ where: { key: attemptKey } });
@@ -88,15 +105,19 @@ export default async function loyaltyRoutes(app: FastifyInstance) {
 
       const chancePercent = kind === "spin"
         ? settings.rewardRules.spinChancePercent
-        : Math.max(5, Math.min(30, Math.round(100 / settings.rewardRules.scratchEveryVisits)));
+        : settings.rewardRules.scratchChancePercent;
       const points = kind === "spin"
         ? settings.rewardRules.spinRewardPoints
         : settings.rewardRules.scratchRewardPoints;
       const roll = randomInt(1, 101);
       const won = points > 0 && roll <= chancePercent;
+      const prizeLabel = kind === "spin"
+        ? spinPrizeLabel(settings.rewardRules.spinPrizeLabels, roll, won)
+        : won ? `${points} loyalty points` : "Better luck";
 
       try {
         const result = await prisma.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${attemptKey})) IS NULL AS locked`;
           const concurrent = await tx.setting.findUnique({ where: { key: attemptKey } });
           const parsedConcurrent = rewardAttemptSchema.safeParse(concurrent?.value);
           if (parsedConcurrent.success) return parsedConcurrent.data;
@@ -118,10 +139,11 @@ export default async function loyaltyRoutes(app: FastifyInstance) {
             attempted: true,
             won,
             points: won ? points : 0,
+            prizeLabel,
             balanceAfter,
             message: won
-              ? `Congratulations! You won ${points} loyalty points.`
-              : "Better luck next time.",
+              ? `Congratulations! You won ${prizeLabel}${points > 0 ? ` (+${points} loyalty points)` : ""}.`
+              : "Better luck next time. One safe try is saved for today.",
             roll,
             chancePercent,
             dateKey,

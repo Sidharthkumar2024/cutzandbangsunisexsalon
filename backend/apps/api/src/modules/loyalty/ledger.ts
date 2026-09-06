@@ -47,7 +47,18 @@ const marketingRewardRulesSchema = z.object({
   birthdayRewardPoints: z.number().int().min(0).max(100_000).default(75),
   spinChancePercent: z.number().int().min(1).max(100).default(12),
   spinRewardPoints: z.number().int().min(0).max(100_000).default(15),
+  spinPrizeLabels: z.array(z.string().trim().min(1).max(40)).min(2).max(12).default([
+    "₹10",
+    "₹20",
+    "₹50",
+    "Chocolate",
+    "Better luck",
+    "Try again",
+    "VIP treat",
+    "₹100",
+  ]),
   scratchEveryVisits: z.number().int().min(2).max(50).default(5),
+  scratchChancePercent: z.number().int().min(1).max(100).default(2),
   scratchRewardPoints: z.number().int().min(0).max(100_000).default(20),
   happyHoursRewardPoints: z.number().int().min(0).max(100_000).default(10),
   happyHoursDaysOfWeek: z.array(z.number().int().min(0).max(6)).default([1, 2, 3, 4, 5]),
@@ -280,19 +291,10 @@ export async function applyMarketingRewardBonuses(
     }
   }
 
-  if (programmes.spinWin && paidVisits > 0) {
-    const draw = deterministicPercent(`${input.invoiceId}:${input.customerId}:spin`);
-    if (draw <= rewardRules.spinChancePercent) {
-      enqueueReward(`Marketing reward: spin & win draw ${draw}/${rewardRules.spinChancePercent}`, rewardRules.spinRewardPoints);
-    }
-  }
-
-  if (programmes.scratchWin && paidVisits > 0 && paidVisits % rewardRules.scratchEveryVisits === 0) {
-    enqueueReward(
-      `Marketing reward: scratch & win milestone ${paidVisits}/${rewardRules.scratchEveryVisits}`,
-      rewardRules.scratchRewardPoints,
-    );
-  }
+  // Spin & Scratch are customer-portal draws now: first paid invoice unlocks
+  // them, and /portal/customer/rewards/:kind/play enforces one safe attempt per
+  // customer per branch day. Keeping invoice settlement out of these draws
+  // prevents refreshes/payment callbacks from silently adding surprise points.
 
   if (programmes.happyHours && rewardRules.happyHoursDaysOfWeek.includes(localNow.weekday)) {
     const startHour = Math.min(rewardRules.happyHoursStartHour, rewardRules.happyHoursEndHour - 1);

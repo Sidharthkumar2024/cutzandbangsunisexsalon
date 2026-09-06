@@ -31,4 +31,19 @@ describe("loyalty rules", () => {
     expect(settings.rewardRules.stampRewardMaxServiceMinor).toBe(100_000);
     expect(calculateStampRewardPoints(DEFAULT_MARKETING_SETTINGS.rewardRules, DEFAULT_LOYALTY_RULES)).toBe(500);
   });
+
+  it("defaults customer portal draws to daily guarded low-frequency rewards", () => {
+    const settings = parseMarketingSettings({});
+    expect(settings.rewardRules.spinPrizeLabels).toEqual([
+      "₹10",
+      "₹20",
+      "₹50",
+      "Chocolate",
+      "Better luck",
+      "Try again",
+      "VIP treat",
+      "₹100",
+    ]);
+    expect(settings.rewardRules.scratchChancePercent).toBe(2);
+  });
 });

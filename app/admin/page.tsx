@@ -298,7 +298,9 @@ type MarketingRewardRules = {
   birthdayRewardPoints: number;
   spinChancePercent: number;
   spinRewardPoints: number;
+  spinPrizeLabels: string[];
   scratchEveryVisits: number;
+  scratchChancePercent: number;
   scratchRewardPoints: number;
   happyHoursRewardPoints: number;
   happyHoursDaysOfWeek: number[];
@@ -326,7 +328,9 @@ const defaultMarketingRewardRules = (): MarketingRewardRules => ({
   birthdayRewardPoints: 75,
   spinChancePercent: 12,
   spinRewardPoints: 15,
+  spinPrizeLabels: ["₹10", "₹20", "₹50", "Chocolate", "Better luck", "Try again", "VIP treat", "₹100"],
   scratchEveryVisits: 5,
+  scratchChancePercent: 2,
   scratchRewardPoints: 20,
   happyHoursRewardPoints: 10,
   happyHoursDaysOfWeek: [1, 2, 3, 4, 5],
@@ -369,8 +373,8 @@ const marketingProgramBlueprints: Array<Omit<MarketingProgramSetting, "enabled">
   { id: "stampCards", label: "Digital Stamp Cards", description: "₹1,000+ bills earn stamps; every 5 stamps unlocks reward credit for 50% off a service up to ₹1,000.", phase: "live" },
   { id: "referrals", label: "Referral Rewards", description: "Referral-source customers trigger welcome and referrer points on the first paid invoice.", phase: "live" },
   { id: "birthday", label: "Birthday Offers", description: "Birthday-tagged customers receive a once-per-year reward when their paid visit lands on the birthday date.", phase: "live" },
-  { id: "spinWin", label: "Spin & Win", description: "Server-side deterministic prize draw with chance, budget and daily reward guardrails.", phase: "live" },
-  { id: "scratchWin", label: "Scratch & Win", description: "Paid-visit milestone scratch rewards are locked in the ledger and protected from duplicate billing.", phase: "live" },
+  { id: "spinWin", label: "Spin & Win", description: "First-invoice unlocked wheel draw with one safe attempt per customer per day.", phase: "live" },
+  { id: "scratchWin", label: "Scratch & Win", description: "First-invoice unlocked scratch draw with low winner chance and daily duplicate protection.", phase: "live" },
   { id: "festival", label: "Festival Campaigns", description: "Seasonal reward windows can run offers during Diwali, wedding season, New Year and more.", phase: "live" },
   { id: "happyHours", label: "Happy Hours", description: "Day/time based reward rules let slow-hour visits receive an automatic bonus.", phase: "live" },
 ];
@@ -391,6 +395,9 @@ const normalizeMarketingRewardRules = (value: unknown): MarketingRewardRules => 
   const daysOfWeek = Array.isArray(source.happyHoursDaysOfWeek)
     ? [...new Set(source.happyHoursDaysOfWeek.map((day) => Number(day)).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))]
     : defaults.happyHoursDaysOfWeek;
+  const spinPrizeLabels = Array.isArray(source.spinPrizeLabels)
+    ? source.spinPrizeLabels.map((label) => String(label).trim()).filter(Boolean).slice(0, 12)
+    : defaults.spinPrizeLabels;
   return {
     stampEveryVisits: clamp(source.stampEveryVisits, defaults.stampEveryVisits, 2, 50),
     stampMinInvoiceMinor: clamp(source.stampMinInvoiceMinor, defaults.stampMinInvoiceMinor, 0, 10_000_000),
@@ -402,7 +409,9 @@ const normalizeMarketingRewardRules = (value: unknown): MarketingRewardRules => 
     birthdayRewardPoints: clamp(source.birthdayRewardPoints, defaults.birthdayRewardPoints, 0, 100000),
     spinChancePercent: clamp(source.spinChancePercent, defaults.spinChancePercent, 1, 100),
     spinRewardPoints: clamp(source.spinRewardPoints, defaults.spinRewardPoints, 0, 100000),
+    spinPrizeLabels: spinPrizeLabels.length >= 2 ? spinPrizeLabels : defaults.spinPrizeLabels,
     scratchEveryVisits: clamp(source.scratchEveryVisits, defaults.scratchEveryVisits, 2, 50),
+    scratchChancePercent: clamp(source.scratchChancePercent, defaults.scratchChancePercent, 1, 100),
     scratchRewardPoints: clamp(source.scratchRewardPoints, defaults.scratchRewardPoints, 0, 100000),
     happyHoursRewardPoints: clamp(source.happyHoursRewardPoints, defaults.happyHoursRewardPoints, 0, 100000),
     happyHoursDaysOfWeek: daysOfWeek.length ? daysOfWeek : defaults.happyHoursDaysOfWeek,
@@ -6942,7 +6951,9 @@ function Marketing({
           <label>Birthday points<input type="number" min="0" value={settings.rewardRules.birthdayRewardPoints} onChange={(event) => updateRewardRule("birthdayRewardPoints", Number(event.target.value || 0))} /></label>
           <label>Spin win chance %<input type="number" min="1" max="100" value={settings.rewardRules.spinChancePercent} onChange={(event) => updateRewardRule("spinChancePercent", Number(event.target.value || 1))} /></label>
           <label>Spin reward points<input type="number" min="0" value={settings.rewardRules.spinRewardPoints} onChange={(event) => updateRewardRule("spinRewardPoints", Number(event.target.value || 0))} /></label>
+          <label>Spin wheel labels<input value={settings.rewardRules.spinPrizeLabels.join(", ")} onChange={(event) => updateRewardRule("spinPrizeLabels", event.target.value.split(",").map((label) => label.trim()).filter(Boolean))} /></label>
           <label>Scratch every visits<input type="number" min="2" max="50" value={settings.rewardRules.scratchEveryVisits} onChange={(event) => updateRewardRule("scratchEveryVisits", Number(event.target.value || 3))} /></label>
+          <label>Scratch win chance %<input type="number" min="1" max="100" value={settings.rewardRules.scratchChancePercent} onChange={(event) => updateRewardRule("scratchChancePercent", Number(event.target.value || 2))} /></label>
           <label>Scratch points<input type="number" min="0" value={settings.rewardRules.scratchRewardPoints} onChange={(event) => updateRewardRule("scratchRewardPoints", Number(event.target.value || 0))} /></label>
           <label>Happy-hour points<input type="number" min="0" value={settings.rewardRules.happyHoursRewardPoints} onChange={(event) => updateRewardRule("happyHoursRewardPoints", Number(event.target.value || 0))} /></label>
           <label>Happy-hour start<input type="number" min="0" max="23" value={settings.rewardRules.happyHoursStartHour} onChange={(event) => updateRewardRule("happyHoursStartHour", Number(event.target.value || 0))} /></label>

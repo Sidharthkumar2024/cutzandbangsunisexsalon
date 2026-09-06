@@ -8,7 +8,7 @@ import { backendApi, type CustomerPortalOverview, type CustomerRewardDrawResult 
 const money = (minor: number) =>
   `₹${Math.round(minor / 100).toLocaleString("en-IN")}`;
 const CUSTOMER_TOKEN_KEY = "cutz.customer.token";
-const rewardSlices = ["₹25", "Better luck", "Free add-on", "₹50", "Glow perk", "Try again", "VIP treat", "₹100"];
+const defaultRewardSlices = ["₹10", "₹20", "₹50", "Chocolate", "Better luck", "Try again", "VIP treat", "₹100"];
 const wait = (durationMs: number) => new Promise((resolve) => window.setTimeout(resolve, durationMs));
 type RewardKind = "spin" | "scratch";
 type RewardModalState = {
@@ -45,6 +45,17 @@ const playSpinTicks = (durationMs = 2400) => {
     window.clearInterval(interval);
     window.setTimeout(() => void audio.close().catch(() => undefined), 250);
   }, durationMs);
+};
+
+const rewardErrorText = (cause: unknown) => {
+  const raw = cause instanceof Error ? cause.message : "Reward could not be opened.";
+  if (raw === "reward_locked_until_first_paid_invoice") {
+    return "First paid invoice ke baad Spin & Scratch unlock hoga.";
+  }
+  if (raw.includes("disabled")) {
+    return "Yeh reward abhi salon settings mein off hai.";
+  }
+  return raw.replaceAll("_", " ");
 };
 
 export default function CustomerPortal() {
@@ -130,6 +141,10 @@ export default function CustomerPortal() {
 
   const openReward = (kind: RewardKind) => {
     if (!token || activeReward !== null || busy) return;
+    if (!data?.invoices.some((invoice) => invoice.status === "PAID")) {
+      setMessage("First paid invoice ke baad Spin & Scratch unlock hoga.");
+      return;
+    }
     setRewardModal({ kind });
     setMessage("");
   };
@@ -151,7 +166,7 @@ export default function CustomerPortal() {
       setMessage(result.message);
       setData(await backendApi.customerOverview(token));
     } catch (cause) {
-      const error = cause instanceof Error ? cause.message.replaceAll("_", " ") : "Reward could not be opened.";
+      const error = rewardErrorText(cause);
       setRewardModal({ kind, error });
       setMessage(error);
     } finally {
@@ -235,8 +250,13 @@ export default function CustomerPortal() {
   const qualifyingInvoiceCount = data.invoices.filter((invoice) => invoice.status === "PAID" && invoice.totalMinor >= stampMinInvoiceMinor).length;
   const stampProgress = qualifyingInvoiceCount % stampEveryVisits || (qualifyingInvoiceCount > 0 ? stampEveryVisits : 0);
   const nextStampCount = stampEveryVisits - (stampProgress === stampEveryVisits ? 0 : stampProgress);
-  const spinWin = data.loyaltyLedger.find((entry) => entry.reason.toLowerCase().includes("spin"));
-  const scratchWin = data.loyaltyLedger.find((entry) => entry.reason.toLowerCase().includes("scratch"));
+  const hasPaidInvoice = data.invoices.some((invoice) => invoice.status === "PAID");
+  const rewardButtonsDisabled = activeReward !== null || busy || !hasPaidInvoice;
+  const configuredRewardSlices = (stampRules?.spinPrizeLabels ?? defaultRewardSlices)
+    .map((label) => String(label).trim())
+    .filter(Boolean)
+    .slice(0, 12);
+  const rewardSlices = configuredRewardSlices.length >= 2 ? configuredRewardSlices : defaultRewardSlices;
   const rewardModalResult = rewardModal?.result;
   const rewardModalLoading = rewardModal ? activeReward === rewardModal.kind && !rewardModal.result && !rewardModal.error : false;
   const rewardModalTitle = rewardModal?.error
@@ -419,23 +439,23 @@ export default function CustomerPortal() {
           </article>
           <article className="portal-draw-card">
             <p className="eyebrow">Spin & scratch rewards</p>
-            <h2>{spinWin || scratchWin || drawResults.spin?.won || drawResults.scratch?.won ? "Prize unlocked" : "Try your luck today"}</h2>
+            <h2>{drawResults.spin?.won || drawResults.scratch?.won ? "Prize unlocked" : hasPaidInvoice ? "Try your luck today" : "Unlock after first invoice"}</h2>
             <p>
-              Spin and scratch are open even before your first invoice. One safe try per reward is allowed each day.
+              Spin and scratch unlock after your first paid invoice. One safe try per reward is allowed each day.
             </p>
             <div className="portal-draw-actions">
-              <button disabled={activeReward !== null || busy} onClick={() => openReward("spin")}>
+              <button disabled={rewardButtonsDisabled} onClick={() => openReward("spin")}>
                 <span>🎡</span>
                 Spin & Win
               </button>
-              <button disabled={activeReward !== null || busy} onClick={() => openReward("scratch")}>
+              <button disabled={rewardButtonsDisabled} onClick={() => openReward("scratch")}>
                 <span>🎁</span>
                 Scratch Card
               </button>
             </div>
             <div className="portal-draw-status">
-              <span>{drawResults.spin ? drawResults.spin.message : spinWin ? `Spin won +${spinWin.deltaPoints}` : "Spin: ready today"}</span>
-              <span>{drawResults.scratch ? drawResults.scratch.message : scratchWin ? `Scratch won +${scratchWin.deltaPoints}` : "Scratch: ready today"}</span>
+              <span>{!hasPaidInvoice ? "Spin: first invoice ke baad unlock" : drawResults.spin ? drawResults.spin.message : "Spin: ready today"}</span>
+              <span>{!hasPaidInvoice ? "Scratch: first invoice ke baad unlock" : drawResults.scratch ? drawResults.scratch.message : "Scratch: ready today"}</span>
             </div>
           </article>
         </section>
@@ -564,7 +584,7 @@ export default function CustomerPortal() {
                       ? "Tick tick tick… the wheel is choosing your prize."
                       : "Scratch animation is revealing your lucky card…"
                     : rewardModalResult?.won
-                      ? `Boom! ${rewardModalResult.points} loyalty points are added to your salon wallet.`
+                      ? `Boom! ${rewardModalResult.prizeLabel ?? `${rewardModalResult.points} loyalty points`} added to your salon wallet.`
                       : rewardModalResult
                         ? "No prize this round, but your next daily try opens tomorrow."
                         : rewardModal.kind === "spin"

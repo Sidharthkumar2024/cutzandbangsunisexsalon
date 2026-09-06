@@ -873,7 +873,10 @@ export type CustomerPortalOverview = BackendCustomer & {
       stampRewardMaxServiceMinor?: number;
       stampRewardPoints?: number;
       spinChancePercent?: number;
+      spinPrizeLabels?: string[];
       scratchEveryVisits?: number;
+      scratchChancePercent?: number;
+      scratchRewardPoints?: number;
     };
   } | null;
 };
@@ -882,8 +885,10 @@ export type CustomerRewardDrawResult = {
   attempted: boolean;
   won: boolean;
   points: number;
+  prizeLabel?: string;
   balanceAfter: number;
   message: string;
+  roll: number;
   chancePercent: number;
   dateKey: string;
   nextAvailableAt: string;
