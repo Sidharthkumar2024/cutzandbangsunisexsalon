@@ -281,13 +281,59 @@ type MarketingProgramSetting = {
   phase: "live" | "foundation" | "planned";
   enabled: boolean;
 };
+type MarketingFestivalWindow = {
+  name: string;
+  start: string;
+  end: string;
+  points?: number;
+};
+type MarketingRewardRules = {
+  stampEveryVisits: number;
+  stampRewardPoints: number;
+  referralWelcomePoints: number;
+  referralReferrerPoints: number;
+  birthdayRewardPoints: number;
+  spinChancePercent: number;
+  spinRewardPoints: number;
+  scratchEveryVisits: number;
+  scratchRewardPoints: number;
+  happyHoursRewardPoints: number;
+  happyHoursDaysOfWeek: number[];
+  happyHoursStartHour: number;
+  happyHoursEndHour: number;
+  festivalRewardPoints: number;
+  festivalWindows: MarketingFestivalWindow[];
+};
 type MarketingSettings = {
   programmes: Record<MarketingProgramId, boolean>;
   monthlyBudgetMinor: number;
   maxRewardsPerDay: number;
   reviewLink: string;
+  rewardRules: MarketingRewardRules;
 };
 type CampaignCtaDraft = BackendCampaignCtaButton & { id: string };
+const defaultMarketingRewardRules = (): MarketingRewardRules => ({
+  stampEveryVisits: 5,
+  stampRewardPoints: 25,
+  referralWelcomePoints: 50,
+  referralReferrerPoints: 100,
+  birthdayRewardPoints: 75,
+  spinChancePercent: 20,
+  spinRewardPoints: 15,
+  scratchEveryVisits: 3,
+  scratchRewardPoints: 20,
+  happyHoursRewardPoints: 10,
+  happyHoursDaysOfWeek: [1, 2, 3, 4, 5],
+  happyHoursStartHour: 12,
+  happyHoursEndHour: 17,
+  festivalRewardPoints: 30,
+  festivalWindows: [
+    { name: "Diwali season", start: "10-01", end: "11-15" },
+    { name: "New Year season", start: "12-20", end: "01-05" },
+    { name: "Wedding season", start: "11-01", end: "02-28" },
+    { name: "Holi season", start: "03-01", end: "03-15" },
+  ],
+});
 const defaultMarketingSettings = (): MarketingSettings => ({
   programmes: {
     stampCards: false,
@@ -306,6 +352,7 @@ const defaultMarketingSettings = (): MarketingSettings => ({
   monthlyBudgetMinor: 10_000_00,
   maxRewardsPerDay: 50,
   reviewLink: "",
+  rewardRules: defaultMarketingRewardRules(),
 });
 const marketingProgramBlueprints: Array<Omit<MarketingProgramSetting, "enabled">> = [
   { id: "loyaltyPoints", label: "Loyalty Points", description: "Configurable points earning and POS redemption already wired into billing.", phase: "live" },
@@ -313,14 +360,49 @@ const marketingProgramBlueprints: Array<Omit<MarketingProgramSetting, "enabled">
   { id: "whatsappAutomation", label: "WhatsApp Automation", description: "Invoice/follow-up delivery through official or QR connector with pacing.", phase: "live" },
   { id: "winBack", label: "Win-back Campaigns", description: "Lapsed customer targeting through campaign segments and follow-up automation.", phase: "live" },
   { id: "membershipOffers", label: "Membership Offers", description: "Membership/package based benefits and POS membership credit matching.", phase: "live" },
-  { id: "stampCards", label: "Digital Stamp Cards", description: "Invoice-paid milestone engine grants bonus points on every 5th paid customer visit.", phase: "foundation" },
-  { id: "referrals", label: "Referral Rewards", description: "Referral-source customers trigger welcome/referrer bonus points on first paid invoice.", phase: "foundation" },
-  { id: "birthday", label: "Birthday Offers", description: "Needs DOB capture, customer segment and scheduled automation before activation.", phase: "planned" },
-  { id: "spinWin", label: "Spin & Win", description: "Server-side weighted rewards, limits and budget guardrails are planned.", phase: "planned" },
-  { id: "scratchWin", label: "Scratch & Win", description: "Server-locked scratch results with expiry and redemption states are planned.", phase: "planned" },
-  { id: "festival", label: "Festival Campaigns", description: "Seasonal template library plus monthly activation window.", phase: "planned" },
-  { id: "happyHours", label: "Happy Hours", description: "Day/time discount rules with blackout services and budget limits.", phase: "planned" },
+  { id: "stampCards", label: "Digital Stamp Cards", description: "Invoice-paid milestone engine grants bonus points on your configured paid-visit cycle.", phase: "live" },
+  { id: "referrals", label: "Referral Rewards", description: "Referral-source customers trigger welcome and referrer points on the first paid invoice.", phase: "live" },
+  { id: "birthday", label: "Birthday Offers", description: "Birthday-tagged customers receive a once-per-year reward when their paid visit lands on the birthday date.", phase: "live" },
+  { id: "spinWin", label: "Spin & Win", description: "Server-side deterministic prize draw with chance, budget and daily reward guardrails.", phase: "live" },
+  { id: "scratchWin", label: "Scratch & Win", description: "Paid-visit milestone scratch rewards are locked in the ledger and protected from duplicate billing.", phase: "live" },
+  { id: "festival", label: "Festival Campaigns", description: "Seasonal reward windows can run offers during Diwali, wedding season, New Year and more.", phase: "live" },
+  { id: "happyHours", label: "Happy Hours", description: "Day/time based reward rules let slow-hour visits receive an automatic bonus.", phase: "live" },
 ];
+const normalizeMarketingRewardRules = (value: unknown): MarketingRewardRules => {
+  const defaults = defaultMarketingRewardRules();
+  const source = (value && typeof value === "object" ? value : {}) as Partial<MarketingRewardRules>;
+  const clamp = (raw: unknown, fallback: number, min: number, max: number) => Math.min(max, Math.max(min, Math.round(Number(raw ?? fallback) || fallback)));
+  const windows = Array.isArray(source.festivalWindows)
+    ? source.festivalWindows
+        .map((window) => ({
+          name: String(window?.name ?? "").trim(),
+          start: String(window?.start ?? "").trim(),
+          end: String(window?.end ?? "").trim(),
+          points: window?.points === undefined ? undefined : clamp(window.points, defaults.festivalRewardPoints, 0, 100000),
+        }))
+        .filter((window) => window.name && /^\d{2}-\d{2}$/u.test(window.start) && /^\d{2}-\d{2}$/u.test(window.end))
+    : defaults.festivalWindows;
+  const daysOfWeek = Array.isArray(source.happyHoursDaysOfWeek)
+    ? [...new Set(source.happyHoursDaysOfWeek.map((day) => Number(day)).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))]
+    : defaults.happyHoursDaysOfWeek;
+  return {
+    stampEveryVisits: clamp(source.stampEveryVisits, defaults.stampEveryVisits, 2, 50),
+    stampRewardPoints: clamp(source.stampRewardPoints, defaults.stampRewardPoints, 0, 100000),
+    referralWelcomePoints: clamp(source.referralWelcomePoints, defaults.referralWelcomePoints, 0, 100000),
+    referralReferrerPoints: clamp(source.referralReferrerPoints, defaults.referralReferrerPoints, 0, 100000),
+    birthdayRewardPoints: clamp(source.birthdayRewardPoints, defaults.birthdayRewardPoints, 0, 100000),
+    spinChancePercent: clamp(source.spinChancePercent, defaults.spinChancePercent, 1, 100),
+    spinRewardPoints: clamp(source.spinRewardPoints, defaults.spinRewardPoints, 0, 100000),
+    scratchEveryVisits: clamp(source.scratchEveryVisits, defaults.scratchEveryVisits, 2, 50),
+    scratchRewardPoints: clamp(source.scratchRewardPoints, defaults.scratchRewardPoints, 0, 100000),
+    happyHoursRewardPoints: clamp(source.happyHoursRewardPoints, defaults.happyHoursRewardPoints, 0, 100000),
+    happyHoursDaysOfWeek: daysOfWeek.length ? daysOfWeek : defaults.happyHoursDaysOfWeek,
+    happyHoursStartHour: clamp(source.happyHoursStartHour, defaults.happyHoursStartHour, 0, 23),
+    happyHoursEndHour: clamp(source.happyHoursEndHour, defaults.happyHoursEndHour, 1, 24),
+    festivalRewardPoints: clamp(source.festivalRewardPoints, defaults.festivalRewardPoints, 0, 100000),
+    festivalWindows: windows.length ? windows : defaults.festivalWindows,
+  };
+};
 const normalizeMarketingSettings = (value: unknown): MarketingSettings => {
   const defaults = defaultMarketingSettings();
   const source = (value && typeof value === "object" ? value : {}) as Partial<MarketingSettings> & { programmes?: Partial<Record<MarketingProgramId, unknown>> };
@@ -334,6 +416,7 @@ const normalizeMarketingSettings = (value: unknown): MarketingSettings => {
     monthlyBudgetMinor: Number(source.monthlyBudgetMinor ?? defaults.monthlyBudgetMinor),
     maxRewardsPerDay: Number(source.maxRewardsPerDay ?? defaults.maxRewardsPerDay),
     reviewLink: String(source.reviewLink ?? defaults.reviewLink),
+    rewardRules: normalizeMarketingRewardRules(source.rewardRules),
   };
 };
 const campaignWeekdays = [
@@ -6742,12 +6825,29 @@ function Marketing({
     };
     await saveMarketing(next, id);
   };
+  const updateRewardRule = <Key extends keyof MarketingRewardRules>(key: Key, value: MarketingRewardRules[Key]) => {
+    setSettings((current) => ({
+      ...current,
+      rewardRules: { ...current.rewardRules, [key]: value },
+    }));
+  };
+  const toggleHappyHourDay = (day: number) => {
+    const currentDays = settings.rewardRules.happyHoursDaysOfWeek;
+    updateRewardRule(
+      "happyHoursDaysOfWeek",
+      currentDays.includes(day)
+        ? currentDays.filter((currentDay) => currentDay !== day)
+        : [...currentDays, day].sort((left, right) => left - right),
+    );
+  };
   const saveBudget = async () => {
+    const rewardRules = normalizeMarketingRewardRules(settings.rewardRules);
     await saveMarketing({
       ...settings,
       monthlyBudgetMinor: Math.max(0, Math.round(settings.monthlyBudgetMinor)),
       maxRewardsPerDay: Math.max(1, Math.round(settings.maxRewardsPerDay || 1)),
       reviewLink: settings.reviewLink.trim(),
+      rewardRules,
     }, "budget");
   };
   return (
@@ -6777,7 +6877,7 @@ function Marketing({
             <div>
               <p className="eyebrow">Programme switches</p>
               <h2>Monthly marketing controls</h2>
-              <p>Switch programmes by month without losing old customer progress. Live programmes are already wired; foundation/planned switches prepare the admin workflow for the next engine phase.</p>
+              <p>Switch programmes by month without losing old customer progress. Live programmes are wired into billing, campaign delivery or membership logic.</p>
             </div>
             <span className="integration-badge connected">Multi-tenant setting</span>
           </div>
@@ -6805,13 +6905,71 @@ function Marketing({
         <aside className="admin-card marketing-guardrails">
           <p className="eyebrow">Loss protection</p>
           <h2>Reward budget guardrails</h2>
-          <p>These numbers are saved now and will be consumed by stamp/spin/scratch reward processors as they are rolled out.</p>
+          <p>These limits are consumed by automatic stamp, referral, birthday, spin, scratch, happy-hour and festival rewards.</p>
           <label>Monthly reward budget<input type="number" min="0" value={Math.round(settings.monthlyBudgetMinor / 100)} onChange={(event) => setSettings((current) => ({ ...current, monthlyBudgetMinor: Math.round(Number(event.target.value || 0) * 100) }))} /></label>
           <label>Max rewards per day<input type="number" min="1" value={settings.maxRewardsPerDay} onChange={(event) => setSettings((current) => ({ ...current, maxRewardsPerDay: Math.max(1, Number(event.target.value || 1)) }))} /></label>
           <label>Google review link<input value={settings.reviewLink} onChange={(event) => setSettings((current) => ({ ...current, reviewLink: event.target.value }))} placeholder="https://g.page/r/..." /></label>
-          <button className="button admin-primary" disabled={!token || Boolean(busyKey)} onClick={() => void saveBudget()}>{busyKey === "budget" ? "Saving…" : "Save guardrails"}</button>
+          <button className="button admin-primary" disabled={!token || Boolean(busyKey)} onClick={() => void saveBudget()}>{busyKey === "budget" ? "Saving…" : "Save guardrails & reward rules"}</button>
           <small>Review requests stay separate from rewards; no points or discounts are awarded for positive reviews.</small>
         </aside>
+      </section>
+      <section className="admin-card marketing-reward-rules">
+        <div className="card-head">
+          <div>
+            <p className="eyebrow">Reward engine rules</p>
+            <h2>Stamp, birthday, spin, scratch, happy hours & festival controls</h2>
+            <p>These settings run only when the matching programme switch is ON. Rewards are posted once through the loyalty ledger, so refreshes and duplicate payment callbacks do not double-count them.</p>
+          </div>
+          <span className="integration-badge connected">Server guarded</span>
+        </div>
+        <div className="reward-rule-grid">
+          <label>Stamp every visits<input type="number" min="2" max="50" value={settings.rewardRules.stampEveryVisits} onChange={(event) => updateRewardRule("stampEveryVisits", Number(event.target.value || 5))} /></label>
+          <label>Stamp points<input type="number" min="0" value={settings.rewardRules.stampRewardPoints} onChange={(event) => updateRewardRule("stampRewardPoints", Number(event.target.value || 0))} /></label>
+          <label>Referral welcome points<input type="number" min="0" value={settings.rewardRules.referralWelcomePoints} onChange={(event) => updateRewardRule("referralWelcomePoints", Number(event.target.value || 0))} /></label>
+          <label>Referrer points<input type="number" min="0" value={settings.rewardRules.referralReferrerPoints} onChange={(event) => updateRewardRule("referralReferrerPoints", Number(event.target.value || 0))} /></label>
+          <label>Birthday points<input type="number" min="0" value={settings.rewardRules.birthdayRewardPoints} onChange={(event) => updateRewardRule("birthdayRewardPoints", Number(event.target.value || 0))} /></label>
+          <label>Spin win chance %<input type="number" min="1" max="100" value={settings.rewardRules.spinChancePercent} onChange={(event) => updateRewardRule("spinChancePercent", Number(event.target.value || 1))} /></label>
+          <label>Spin reward points<input type="number" min="0" value={settings.rewardRules.spinRewardPoints} onChange={(event) => updateRewardRule("spinRewardPoints", Number(event.target.value || 0))} /></label>
+          <label>Scratch every visits<input type="number" min="2" max="50" value={settings.rewardRules.scratchEveryVisits} onChange={(event) => updateRewardRule("scratchEveryVisits", Number(event.target.value || 3))} /></label>
+          <label>Scratch points<input type="number" min="0" value={settings.rewardRules.scratchRewardPoints} onChange={(event) => updateRewardRule("scratchRewardPoints", Number(event.target.value || 0))} /></label>
+          <label>Happy-hour points<input type="number" min="0" value={settings.rewardRules.happyHoursRewardPoints} onChange={(event) => updateRewardRule("happyHoursRewardPoints", Number(event.target.value || 0))} /></label>
+          <label>Happy-hour start<input type="number" min="0" max="23" value={settings.rewardRules.happyHoursStartHour} onChange={(event) => updateRewardRule("happyHoursStartHour", Number(event.target.value || 0))} /></label>
+          <label>Happy-hour end<input type="number" min="1" max="24" value={settings.rewardRules.happyHoursEndHour} onChange={(event) => updateRewardRule("happyHoursEndHour", Number(event.target.value || 1))} /></label>
+        </div>
+        <div className="happy-hour-days">
+          {campaignWeekdays.map(([value, label]) => {
+            const day = Number(value);
+            return (
+              <button key={value} type="button" className={settings.rewardRules.happyHoursDaysOfWeek.includes(day) ? "selected" : ""} onClick={() => toggleHappyHourDay(day)}>
+                {label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="festival-window-list">
+          <div className="festival-window-head">
+            <strong>Festival campaign reward windows</strong>
+            <small>Format: MM-DD. Windows can cross year end, e.g. 12-20 to 01-05.</small>
+          </div>
+          {settings.rewardRules.festivalWindows.map((window, index) => (
+            <div key={`${window.name}-${index}`} className="festival-window-row">
+              <input aria-label="Festival name" value={window.name} onChange={(event) => updateRewardRule("festivalWindows", settings.rewardRules.festivalWindows.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item))} />
+              <input aria-label="Start date" value={window.start} onChange={(event) => updateRewardRule("festivalWindows", settings.rewardRules.festivalWindows.map((item, itemIndex) => itemIndex === index ? { ...item, start: event.target.value } : item))} />
+              <input aria-label="End date" value={window.end} onChange={(event) => updateRewardRule("festivalWindows", settings.rewardRules.festivalWindows.map((item, itemIndex) => itemIndex === index ? { ...item, end: event.target.value } : item))} />
+              <input aria-label="Festival points" type="number" min="0" value={window.points ?? settings.rewardRules.festivalRewardPoints} onChange={(event) => updateRewardRule("festivalWindows", settings.rewardRules.festivalWindows.map((item, itemIndex) => itemIndex === index ? { ...item, points: Number(event.target.value || 0) } : item))} />
+            </div>
+          ))}
+          <button
+            type="button"
+            className="button"
+            onClick={() => updateRewardRule("festivalWindows", [...settings.rewardRules.festivalWindows, { name: "Custom festival", start: "01-01", end: "01-07" }])}
+          >
+            + Add festival window
+          </button>
+          <button className="button admin-primary" disabled={!token || Boolean(busyKey)} onClick={() => void saveBudget()}>
+            {busyKey === "budget" ? "Saving…" : "Save reward engine rules"}
+          </button>
+        </div>
       </section>
       <section className="admin-card marketing-roadmap">
         <div className="card-head">
@@ -6825,9 +6983,9 @@ function Marketing({
           {[
             ["Phase 1", "Audit + customer date fix", "Done: customer_since model, UI defaults, historical date preservation and VPS deployment."],
             ["Phase 2", "Control center + campaign builder", "Done here: programme toggles, budget guardrails, CTA/CSV/repeat campaign workflow is available."],
-            ["Phase 3", "Reward engines", "Live foundation: invoice-paid stamp/referral bonuses post to the loyalty ledger once per invoice. Next SaaS phase: normalized spin/scratch reward tables and redemption wallet."],
-            ["Phase 4", "Customer wallet", "Next: secure /r/{token} rewards page with points, stamp progress, coupons and book-now CTA."],
-            ["Phase 5", "Analytics + regression", "Next: campaign ROI, reward liability, redemption cost and end-to-end tests for abuse/race conditions."],
+            ["Phase 3", "Reward engines", "Done: stamp, referral, birthday, spin, scratch, happy-hours and festival rewards post to the ledger with budget limits."],
+            ["Phase 4", "Customer wallet", "Active base: customer points/coupons are ledger-backed. Next SaaS polish is the public /r/{token} wallet page."],
+            ["Phase 5", "Analytics + regression", "Active base: liabilities, campaign reach and redemption KPIs are visible. Next SaaS polish is deeper ROI attribution."],
           ].map(([phase, title, body]) => (
             <article key={phase}>
               <span>{phase}</span>
