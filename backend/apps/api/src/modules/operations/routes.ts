@@ -282,14 +282,7 @@ export default async function operationsRoutes(app: FastifyInstance) {
       return reply.code(409).send({ error: "cash_count_mismatch", countedMinor, declaredMinor: body.closingCashMinor });
     }
     const totals = await cashTotals(session);
-    if (body.closingCashMinor !== totals.expectedCashMinor) {
-      return reply.code(409).send({
-        error: "cash_drawer_mismatch",
-        expectedCashMinor: totals.expectedCashMinor,
-        countedCashMinor: body.closingCashMinor,
-        varianceMinor: body.closingCashMinor - totals.expectedCashMinor,
-      });
-    }
+    const varianceMinor = body.closingCashMinor - totals.expectedCashMinor;
     const updated = await prisma.cashSession.update({
       where: { id },
       data: {
@@ -297,7 +290,7 @@ export default async function operationsRoutes(app: FastifyInstance) {
         closingBreakdown: body.closingBreakdown ?? { manualAmountMinor: body.closingCashMinor, mode: "manual_total" },
         closingNote: body.closingNote,
         expectedCashMinor: totals.expectedCashMinor,
-        varianceMinor: 0,
+        varianceMinor,
         closedByUserId: req.user!.id,
         closedAt: new Date(),
         status: "CLOSED",
@@ -306,7 +299,7 @@ export default async function operationsRoutes(app: FastifyInstance) {
     await audit("cash_session.close", "CashSession", id, {
       actorUserId: req.user?.id,
       before: { status: session.status },
-      after: { ...body, ...totals, varianceMinor: 0 },
+      after: { ...body, ...totals, varianceMinor },
       ip: req.ip,
     });
     return { ...updated, ...totals };
