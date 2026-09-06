@@ -972,12 +972,12 @@ const emptySnapshot: BackendSnapshot = {
 async function request<T>(
   path: string,
   options: RequestInit = {},
-  _token?: string,
+  token?: string,
 ): Promise<T> {
-  void _token; // Kept in the public method signatures while auth lives in an HttpOnly cookie.
   const headers = new Headers(options.headers);
   if (options.body && !headers.has("content-type"))
     headers.set("content-type", "application/json");
+  if (token && token !== "cookie-session") headers.set("authorization", `Bearer ${token}`);
   const response = await fetch(`/api/backend${path}`, {
     ...options,
     headers,

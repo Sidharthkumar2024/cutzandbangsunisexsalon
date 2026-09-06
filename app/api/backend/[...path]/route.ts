@@ -83,8 +83,13 @@ async function forward(request: Request, context: { params: Promise<{ path: stri
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
+  const explicitAuthorization = request.headers.get('authorization');
   const sessionToken = readCookie(request, sessionCookieName);
-  if (sessionToken) headers.set('authorization', `Bearer ${sessionToken}`);
+  if (explicitAuthorization?.startsWith('Bearer ')) {
+    headers.set('authorization', explicitAuthorization);
+  } else if (sessionToken) {
+    headers.set('authorization', `Bearer ${sessionToken}`);
+  }
 
   try {
     const response = await fetch(`${base}${backendPath}${incoming.search}`, {
