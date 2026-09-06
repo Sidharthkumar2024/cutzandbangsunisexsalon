@@ -868,6 +868,9 @@ export type CustomerPortalOverview = BackendCustomer & {
   marketingSettings?: {
     rewardRules?: {
       stampEveryVisits?: number;
+      stampMinInvoiceMinor?: number;
+      stampRewardDiscountPercent?: number;
+      stampRewardMaxServiceMinor?: number;
       stampRewardPoints?: number;
       spinChancePercent?: number;
       scratchEveryVisits?: number;

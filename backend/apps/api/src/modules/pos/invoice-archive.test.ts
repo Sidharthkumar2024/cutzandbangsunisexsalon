@@ -307,7 +307,7 @@ describe("invoice archive", () => {
     expect(mocks.storageSignedUrl).not.toHaveBeenCalled();
     expect(mocks.whatsappSend).toHaveBeenCalledWith({
       to: "+919876543210",
-      body: "Thank you for visiting Cutz & Bangs. Invoice CB-2026-000001",
+      body: "Thank you for visiting Cutz & Bangs.\nInvoice CB-2026-000001 · ₹1,180.00",
       mediaUrl: undefined,
       mediaData: pdf.toString("base64"),
       mediaMimeType: "application/pdf",

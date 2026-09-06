@@ -289,6 +289,9 @@ type MarketingFestivalWindow = {
 };
 type MarketingRewardRules = {
   stampEveryVisits: number;
+  stampMinInvoiceMinor: number;
+  stampRewardDiscountPercent: number;
+  stampRewardMaxServiceMinor: number;
   stampRewardPoints: number;
   referralWelcomePoints: number;
   referralReferrerPoints: number;
@@ -314,7 +317,10 @@ type MarketingSettings = {
 type CampaignCtaDraft = BackendCampaignCtaButton & { id: string };
 const defaultMarketingRewardRules = (): MarketingRewardRules => ({
   stampEveryVisits: 5,
-  stampRewardPoints: 25,
+  stampMinInvoiceMinor: 100_000,
+  stampRewardDiscountPercent: 50,
+  stampRewardMaxServiceMinor: 100_000,
+  stampRewardPoints: 500,
   referralWelcomePoints: 50,
   referralReferrerPoints: 100,
   birthdayRewardPoints: 75,
@@ -360,7 +366,7 @@ const marketingProgramBlueprints: Array<Omit<MarketingProgramSetting, "enabled">
   { id: "whatsappAutomation", label: "WhatsApp Automation", description: "Invoice/follow-up delivery through official or QR connector with pacing.", phase: "live" },
   { id: "winBack", label: "Win-back Campaigns", description: "Lapsed customer targeting through campaign segments and follow-up automation.", phase: "live" },
   { id: "membershipOffers", label: "Membership Offers", description: "Membership/package based benefits and POS membership credit matching.", phase: "live" },
-  { id: "stampCards", label: "Digital Stamp Cards", description: "Invoice-paid milestone engine grants bonus points on your configured paid-visit cycle.", phase: "live" },
+  { id: "stampCards", label: "Digital Stamp Cards", description: "₹1,000+ bills earn stamps; every 5 stamps unlocks reward credit for 50% off a service up to ₹1,000.", phase: "live" },
   { id: "referrals", label: "Referral Rewards", description: "Referral-source customers trigger welcome and referrer points on the first paid invoice.", phase: "live" },
   { id: "birthday", label: "Birthday Offers", description: "Birthday-tagged customers receive a once-per-year reward when their paid visit lands on the birthday date.", phase: "live" },
   { id: "spinWin", label: "Spin & Win", description: "Server-side deterministic prize draw with chance, budget and daily reward guardrails.", phase: "live" },
@@ -387,6 +393,9 @@ const normalizeMarketingRewardRules = (value: unknown): MarketingRewardRules => 
     : defaults.happyHoursDaysOfWeek;
   return {
     stampEveryVisits: clamp(source.stampEveryVisits, defaults.stampEveryVisits, 2, 50),
+    stampMinInvoiceMinor: clamp(source.stampMinInvoiceMinor, defaults.stampMinInvoiceMinor, 0, 10_000_000),
+    stampRewardDiscountPercent: clamp(source.stampRewardDiscountPercent, defaults.stampRewardDiscountPercent, 1, 100),
+    stampRewardMaxServiceMinor: clamp(source.stampRewardMaxServiceMinor, defaults.stampRewardMaxServiceMinor, 0, 10_000_000),
     stampRewardPoints: clamp(source.stampRewardPoints, defaults.stampRewardPoints, 0, 100000),
     referralWelcomePoints: clamp(source.referralWelcomePoints, defaults.referralWelcomePoints, 0, 100000),
     referralReferrerPoints: clamp(source.referralReferrerPoints, defaults.referralReferrerPoints, 0, 100000),
@@ -6923,8 +6932,11 @@ function Marketing({
           <span className="integration-badge connected">Server guarded</span>
         </div>
         <div className="reward-rule-grid">
-          <label>Stamp every visits<input type="number" min="2" max="50" value={settings.rewardRules.stampEveryVisits} onChange={(event) => updateRewardRule("stampEveryVisits", Number(event.target.value || 5))} /></label>
-          <label>Stamp points<input type="number" min="0" value={settings.rewardRules.stampRewardPoints} onChange={(event) => updateRewardRule("stampRewardPoints", Number(event.target.value || 0))} /></label>
+          <label>Stamp every qualifying bills<input type="number" min="2" max="50" value={settings.rewardRules.stampEveryVisits} onChange={(event) => updateRewardRule("stampEveryVisits", Number(event.target.value || 5))} /></label>
+          <label>Minimum bill for stamp (₹)<input type="number" min="0" value={Math.round(settings.rewardRules.stampMinInvoiceMinor / 100)} onChange={(event) => updateRewardRule("stampMinInvoiceMinor", Math.round(Number(event.target.value || 0) * 100))} /></label>
+          <label>Stamp reward discount %<input type="number" min="1" max="100" value={settings.rewardRules.stampRewardDiscountPercent} onChange={(event) => updateRewardRule("stampRewardDiscountPercent", Number(event.target.value || 50))} /></label>
+          <label>Max service value (₹)<input type="number" min="0" value={Math.round(settings.rewardRules.stampRewardMaxServiceMinor / 100)} onChange={(event) => updateRewardRule("stampRewardMaxServiceMinor", Math.round(Number(event.target.value || 0) * 100))} /></label>
+          <label>Stamp reward points<input type="number" min="0" value={settings.rewardRules.stampRewardPoints} onChange={(event) => updateRewardRule("stampRewardPoints", Number(event.target.value || 0))} /></label>
           <label>Referral welcome points<input type="number" min="0" value={settings.rewardRules.referralWelcomePoints} onChange={(event) => updateRewardRule("referralWelcomePoints", Number(event.target.value || 0))} /></label>
           <label>Referrer points<input type="number" min="0" value={settings.rewardRules.referralReferrerPoints} onChange={(event) => updateRewardRule("referralReferrerPoints", Number(event.target.value || 0))} /></label>
           <label>Birthday points<input type="number" min="0" value={settings.rewardRules.birthdayRewardPoints} onChange={(event) => updateRewardRule("birthdayRewardPoints", Number(event.target.value || 0))} /></label>

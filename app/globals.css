@@ -2006,22 +2006,22 @@ html,body{max-width:100%;overflow-x:hidden}
 .portal-draw-actions button:disabled{cursor:not-allowed;opacity:.62}
 .portal-draw-status{grid-template-columns:1fr}
 .reward-modal-backdrop{position:fixed;inset:0;z-index:90;display:grid;place-items:center;padding:20px;background:radial-gradient(circle at 50% 20%,rgb(255 245 210 / 52%),rgb(33 13 19 / 72));backdrop-filter:blur(8px);animation:rewardBackdropIn .2s ease-out}
-.reward-modal{position:relative;width:min(460px,calc(100vw - 32px));max-height:calc(100svh - 32px);overflow:hidden auto;display:grid;gap:14px;padding:22px;border-radius:28px;background:linear-gradient(145deg,#fffaf2,#fff 45%,#ffe9d5);box-shadow:0 35px 90px rgb(42 14 22 / 35%);text-align:center}
+.reward-modal{position:relative;width:min(430px,calc(100vw - 32px));max-height:calc(100svh - 32px);overflow:hidden auto;display:grid;gap:13px;padding:20px;border-radius:28px;background:linear-gradient(145deg,#fffaf2,#fff 45%,#ffe9d5);box-shadow:0 35px 90px rgb(42 14 22 / 35%);text-align:center}
 .reward-modal.spin-mode{background:radial-gradient(circle at top,#ffed7a 0 9%,transparent 28%),repeating-conic-gradient(from -12deg,#d80b15 0 12deg,#b40813 12deg 24deg),linear-gradient(135deg,#e91522,#8b020b);color:white}
 .reward-modal.scratch-mode{width:min(540px,calc(100vw - 32px));background:linear-gradient(145deg,#260064,#5f098e 45%,#ff9c00);color:white}
 .reward-modal-close{position:absolute;top:14px;right:14px;z-index:3;width:36px;height:36px;border:0;border-radius:50%;background:rgb(255 255 255 / 90%);color:#6b3335;font-size:24px;font-weight:900;line-height:1;cursor:pointer}
 .reward-modal-copy{position:relative;z-index:2;display:grid;gap:4px}
 .reward-modal-copy .eyebrow{margin:0;color:inherit;opacity:.86}
-.reward-modal-copy h2{margin:0;font:900 clamp(29px,5.7vw,50px)/.92 system-ui,sans-serif;text-transform:uppercase;letter-spacing:-.045em;text-shadow:0 4px 18px rgb(0 0 0 / 18%)}
-.spin-mode .reward-modal-copy h2{font-size:clamp(29px,5vw,46px)}
+.reward-modal-copy h2{margin:0;font:900 clamp(28px,5.2vw,46px)/.92 system-ui,sans-serif;text-transform:uppercase;letter-spacing:-.045em;text-shadow:0 4px 18px rgb(0 0 0 / 18%)}
+.spin-mode .reward-modal-copy h2{font-size:clamp(27px,4.4vw,40px)}
 .reward-modal-copy p{max-width:360px;margin:4px auto 0;color:inherit;opacity:.9;line-height:1.42}
-.spin-wheel-stage{position:relative;z-index:2;display:grid;place-items:center;min-height:262px}
+.spin-wheel-stage{position:relative;z-index:2;display:grid;place-items:center;min-height:232px}
 .spin-pointer{position:absolute;top:7px;z-index:3;width:0;height:0;border-left:19px solid transparent;border-right:19px solid transparent;border-top:0;border-bottom:34px solid #ffd534;filter:drop-shadow(0 6px 8px rgb(0 0 0 / 28%))}
-.spin-wheel{position:relative;width:min(252px,66vw);aspect-ratio:1;overflow:hidden;border:11px solid #7a090f;border-radius:50%;background:conic-gradient(#f04444 0 45deg,#ea2aa0 45deg 90deg,#ffec20 90deg 135deg,#ff8b2c 135deg 180deg,#5147a4 180deg 225deg,#0facd6 225deg 270deg,#b90918 270deg 315deg,#f04444 315deg 360deg);box-shadow:inset 0 0 0 5px #ffe0aa,inset 0 0 0 9px #133b35,0 0 0 10px rgb(255 255 255 / 14%),0 20px 35px rgb(20 0 10 / 40%);transition:transform 1.4s cubic-bezier(.14,.78,.24,1)}
+.spin-wheel{position:relative;width:min(218px,62vw);aspect-ratio:1;overflow:hidden;border:10px solid #7a090f;border-radius:50%;background:conic-gradient(#f04444 0 45deg,#ea2aa0 45deg 90deg,#ffec20 90deg 135deg,#ff8b2c 135deg 180deg,#5147a4 180deg 225deg,#0facd6 225deg 270deg,#b90918 270deg 315deg,#f04444 315deg 360deg);box-shadow:inset 0 0 0 4px #ffe0aa,inset 0 0 0 8px #133b35,0 0 0 8px rgb(255 255 255 / 14%),0 18px 28px rgb(20 0 10 / 34%);transition:transform 1.4s cubic-bezier(.14,.78,.24,1)}
 .spin-wheel.is-spinning{animation:spinWheel .72s linear infinite}
 .spin-wheel::before{content:"";position:absolute;inset:8px;border-radius:50%;background:repeating-conic-gradient(from 0deg,#fff 0 5deg,transparent 5deg 30deg);mask:radial-gradient(circle,transparent 0 77%,#000 78%);opacity:.94}
-.spin-wheel b{position:absolute;inset:50%;translate:-50% -50%;width:96px;height:96px;display:grid;place-items:center;border-radius:50%;background:#8d0710;border:5px solid #fff;color:#fff;font:950 21px/.88 system-ui,sans-serif;text-shadow:0 2px 6px rgb(0 0 0 / 25%)}
-.spin-wheel span{position:absolute;left:50%;top:50%;transform-origin:0 0;width:74px;margin-left:-37px;color:white;font-size:9px;font-weight:950;text-transform:uppercase;text-shadow:0 2px 4px rgb(0 0 0 / 36%)}
+.spin-wheel b{position:absolute;inset:50%;translate:-50% -50%;width:82px;height:82px;display:grid;place-items:center;border-radius:50%;background:#8d0710;border:4px solid #fff;color:#fff;font:950 18px/.88 system-ui,sans-serif;text-shadow:0 2px 6px rgb(0 0 0 / 25%)}
+.spin-wheel span{position:absolute;left:50%;top:50%;transform-origin:0 0;width:64px;margin-left:-32px;color:white;font-size:8px;font-weight:950;text-transform:uppercase;text-shadow:0 2px 4px rgb(0 0 0 / 36%)}
 .scratch-prize-card{position:relative;z-index:2;display:grid;grid-template-columns:.85fr 1.15fr;gap:12px;align-items:stretch;min-height:178px;padding:12px;border:3px solid #ffcf32;border-radius:22px;background:linear-gradient(135deg,#47008a,#6f00a8);box-shadow:0 0 0 5px rgb(255 255 255 / 10%),0 18px 34px rgb(31 0 58 / 34%)}
 .scratch-prize-card>div{display:grid;place-items:center;align-content:center;gap:14px;border-right:1px dashed rgb(255 255 255 / 34%)}
 .scratch-prize-card strong{font:950 clamp(27px,7vw,44px)/.9 system-ui,sans-serif;color:#fff;text-shadow:0 4px 14px rgb(0 0 0 / 25%)}
@@ -2059,8 +2059,8 @@ html,body{max-width:100%;overflow-x:hidden}
   .reward-modal-backdrop{padding:12px}
   .reward-modal{padding:18px 14px;border-radius:22px;gap:12px}
   .reward-modal-copy h2{font-size:clamp(28px,11vw,42px)}
-  .spin-wheel-stage{min-height:238px}
-  .spin-wheel{width:min(230px,72vw)}
+  .spin-wheel-stage{min-height:212px}
+  .spin-wheel{width:min(200px,68vw)}
   .scratch-prize-card{grid-template-columns:1fr;min-height:252px}
   .scratch-prize-card>div{border-right:0;border-bottom:1px dashed rgb(255 255 255 / 34%);padding-bottom:12px}
 }

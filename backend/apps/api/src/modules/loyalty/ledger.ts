@@ -38,7 +38,10 @@ const seasonalWindowSchema = z.object({
 
 const marketingRewardRulesSchema = z.object({
   stampEveryVisits: z.number().int().min(2).max(50).default(5),
-  stampRewardPoints: z.number().int().min(0).max(100_000).default(25),
+  stampMinInvoiceMinor: z.number().int().min(0).max(10_000_000).default(100_000),
+  stampRewardDiscountPercent: z.number().int().min(1).max(100).default(50),
+  stampRewardMaxServiceMinor: z.number().int().min(0).max(10_000_000).default(100_000),
+  stampRewardPoints: z.number().int().min(0).max(100_000).default(500),
   referralWelcomePoints: z.number().int().min(0).max(100_000).default(50),
   referralReferrerPoints: z.number().int().min(0).max(100_000).default(100),
   birthdayRewardPoints: z.number().int().min(0).max(100_000).default(75),
@@ -68,6 +71,18 @@ export const marketingSettingsSchema = z.object({
 
 export type MarketingSettings = z.infer<typeof marketingSettingsSchema>;
 export const DEFAULT_MARKETING_SETTINGS: MarketingSettings = marketingSettingsSchema.parse({});
+
+export function calculateStampRewardPoints(
+  rewardRules: MarketingSettings["rewardRules"],
+  loyaltyRules: LoyaltyRules,
+): number {
+  const configuredPoints = Math.max(0, Math.round(rewardRules.stampRewardPoints));
+  const rewardValueMinor = Math.round((rewardRules.stampRewardMaxServiceMinor * rewardRules.stampRewardDiscountPercent) / 100);
+  const pointsForDiscountValue = loyaltyRules.redeemMinorPerPoint > 0
+    ? Math.ceil(rewardValueMinor / loyaltyRules.redeemMinorPerPoint)
+    : 0;
+  return Math.max(configuredPoints, pointsForDiscountValue);
+}
 
 export function parseLoyaltyRules(value: unknown): LoyaltyRules {
   const parsed = loyaltyRulesSchema.safeParse(value);
@@ -213,12 +228,17 @@ export async function applyMarketingRewardBonuses(
 
   if (programmes.stampCards) {
     const paidVisits = await tx.invoice.count({
-      where: { branchId: input.branchId, customerId: input.customerId, status: "PAID" },
+      where: {
+        branchId: input.branchId,
+        customerId: input.customerId,
+        status: "PAID",
+        totalMinor: { gte: rewardRules.stampMinInvoiceMinor },
+      },
     });
     if (paidVisits > 0 && paidVisits % rewardRules.stampEveryVisits === 0) {
       enqueueReward(
-        `Marketing reward: digital stamp card milestone ${paidVisits}/${rewardRules.stampEveryVisits}`,
-        rewardRules.stampRewardPoints,
+        `Marketing reward: digital stamp card ${rewardRules.stampRewardDiscountPercent}% off up to ₹${Math.round(rewardRules.stampRewardMaxServiceMinor / 100).toLocaleString("en-IN")} after ${paidVisits} qualifying bills`,
+        calculateStampRewardPoints(rewardRules, loyaltyRules),
       );
     }
   }

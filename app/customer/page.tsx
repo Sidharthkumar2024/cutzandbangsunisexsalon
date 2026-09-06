@@ -226,9 +226,14 @@ export default function CustomerPortal() {
     .sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))[0];
   const membership = data.memberships[0];
   const servicePackages = data.servicePackages ?? [];
-  const stampEveryVisits = Math.max(2, Math.min(50, Number(data.marketingSettings?.rewardRules?.stampEveryVisits ?? 5)));
-  const paidInvoiceCount = data.invoices.filter((invoice) => invoice.status === "PAID").length;
-  const stampProgress = paidInvoiceCount % stampEveryVisits || (paidInvoiceCount > 0 ? stampEveryVisits : 0);
+  const stampRules = data.marketingSettings?.rewardRules;
+  const stampEveryVisits = Math.max(2, Math.min(50, Number(stampRules?.stampEveryVisits ?? 5)));
+  const stampMinInvoiceMinor = Math.max(0, Number(stampRules?.stampMinInvoiceMinor ?? 100_000));
+  const stampRewardMaxServiceMinor = Math.max(0, Number(stampRules?.stampRewardMaxServiceMinor ?? 100_000));
+  const stampRewardDiscountPercent = Math.max(1, Math.min(100, Number(stampRules?.stampRewardDiscountPercent ?? 50)));
+  const stampRewardValueMinor = Math.round((stampRewardMaxServiceMinor * stampRewardDiscountPercent) / 100);
+  const qualifyingInvoiceCount = data.invoices.filter((invoice) => invoice.status === "PAID" && invoice.totalMinor >= stampMinInvoiceMinor).length;
+  const stampProgress = qualifyingInvoiceCount % stampEveryVisits || (qualifyingInvoiceCount > 0 ? stampEveryVisits : 0);
   const nextStampCount = stampEveryVisits - (stampProgress === stampEveryVisits ? 0 : stampProgress);
   const spinWin = data.loyaltyLedger.find((entry) => entry.reason.toLowerCase().includes("spin"));
   const scratchWin = data.loyaltyLedger.find((entry) => entry.reason.toLowerCase().includes("scratch"));
@@ -401,9 +406,9 @@ export default function CustomerPortal() {
               <p className="eyebrow">Digital stamp card</p>
               <h2>{stampProgress}/{stampEveryVisits}</h2>
               <p>
-                Every paid invoice adds a stamp. {nextStampCount === 0
-                  ? "Milestone reached—reward is added from the POS rules."
-                  : `${nextStampCount} more paid visit${nextStampCount === 1 ? "" : "s"} for the next stamp reward.`}
+                Bills of {money(stampMinInvoiceMinor)} or above add a stamp. {nextStampCount === 0
+                  ? `${stampRewardDiscountPercent}% reward unlocked for any service up to ${money(stampRewardMaxServiceMinor)}. The next paid bill starts a fresh card.`
+                  : `${nextStampCount} more qualifying bill${nextStampCount === 1 ? "" : "s"} to unlock ${money(stampRewardValueMinor)} reward value.`}
               </p>
             </div>
             <div className="stamp-row" aria-label={`${stampProgress} of ${stampEveryVisits} stamps`}>
@@ -577,7 +582,7 @@ export default function CustomerPortal() {
                   {rewardSlices.map((slice, index) => (
                     <span
                       key={slice}
-                      style={{ transform: `rotate(${index * (360 / rewardSlices.length)}deg) translateY(-82px) rotate(90deg)` }}
+                      style={{ transform: `rotate(${index * (360 / rewardSlices.length)}deg) translateY(-70px) rotate(90deg)` }}
                     >
                       {slice}
                     </span>
