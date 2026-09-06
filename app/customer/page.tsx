@@ -8,6 +8,13 @@ import { backendApi, type CustomerPortalOverview, type CustomerRewardDrawResult 
 const money = (minor: number) =>
   `₹${Math.round(minor / 100).toLocaleString("en-IN")}`;
 const CUSTOMER_TOKEN_KEY = "cutz.customer.token";
+const rewardSlices = ["₹25", "Better luck", "Free add-on", "₹50", "Glow perk", "Try again", "VIP treat", "₹100"];
+type RewardKind = "spin" | "scratch";
+type RewardModalState = {
+  kind: RewardKind;
+  result?: CustomerRewardDrawResult;
+  error?: string;
+};
 
 export default function CustomerPortal() {
   const [phone, setPhone] = useState("");
@@ -17,8 +24,9 @@ export default function CustomerPortal() {
   const [token, setToken] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  const [activeReward, setActiveReward] = useState<"spin" | "scratch" | null>(null);
-  const [drawResults, setDrawResults] = useState<Partial<Record<"spin" | "scratch", CustomerRewardDrawResult>>>({});
+  const [activeReward, setActiveReward] = useState<RewardKind | null>(null);
+  const [drawResults, setDrawResults] = useState<Partial<Record<RewardKind, CustomerRewardDrawResult>>>({});
+  const [rewardModal, setRewardModal] = useState<RewardModalState | null>(null);
 
   useEffect(() => {
     const savedToken = window.localStorage.getItem(CUSTOMER_TOKEN_KEY);
@@ -89,17 +97,21 @@ export default function CustomerPortal() {
     }
   };
 
-  const playReward = async (kind: "spin" | "scratch") => {
+  const playReward = async (kind: RewardKind) => {
     if (!token) return;
     setActiveReward(kind);
+    setRewardModal({ kind });
     setMessage("");
     try {
       const result = await backendApi.playCustomerReward(token, kind);
       setDrawResults((current) => ({ ...current, [kind]: result }));
+      setRewardModal({ kind, result });
       setMessage(result.message);
       setData(await backendApi.customerOverview(token));
     } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message.replaceAll("_", " ") : "Reward could not be opened.");
+      const error = cause instanceof Error ? cause.message.replaceAll("_", " ") : "Reward could not be opened.";
+      setRewardModal({ kind, error });
+      setMessage(error);
     } finally {
       setActiveReward(null);
     }
@@ -178,6 +190,17 @@ export default function CustomerPortal() {
   const nextStampCount = stampEveryVisits - (stampProgress === stampEveryVisits ? 0 : stampProgress);
   const spinWin = data.loyaltyLedger.find((entry) => entry.reason.toLowerCase().includes("spin"));
   const scratchWin = data.loyaltyLedger.find((entry) => entry.reason.toLowerCase().includes("scratch"));
+  const rewardModalResult = rewardModal?.result;
+  const rewardModalLoading = rewardModal ? activeReward === rewardModal.kind && !rewardModal.result && !rewardModal.error : false;
+  const rewardModalTitle = rewardModal?.error
+    ? "Reward could not open"
+    : rewardModalResult?.won
+      ? "You’re a lucky winner!"
+      : rewardModalResult
+        ? "Better luck next time!"
+        : rewardModal?.kind === "spin"
+          ? "Spin & win"
+          : "Scratch & win";
   return (
     <main className="portal-shell customer-portal">
       <header className="portal-header">
@@ -351,10 +374,12 @@ export default function CustomerPortal() {
             </p>
             <div className="portal-draw-actions">
               <button disabled={activeReward !== null || busy} onClick={() => void playReward("spin")}>
-                {activeReward === "spin" ? "Spinning…" : "🎡 Spin now"}
+                <span>🎡</span>
+                {activeReward === "spin" ? "Spinning…" : "Spin & Win"}
               </button>
               <button disabled={activeReward !== null || busy} onClick={() => void playReward("scratch")}>
-                {activeReward === "scratch" ? "Opening…" : "🎁 Scratch card"}
+                <span>🎁</span>
+                {activeReward === "scratch" ? "Opening…" : "Scratch Card"}
               </button>
             </div>
             <div className="portal-draw-status">
@@ -461,6 +486,87 @@ export default function CustomerPortal() {
           </div>
         </section>
       </div>
+      {rewardModal && (
+        <div className={`reward-modal-backdrop ${rewardModalResult?.won ? "is-win" : rewardModalResult ? "is-miss" : ""}`} role="dialog" aria-modal="true" aria-live="polite">
+          <div className={`reward-modal ${rewardModal.kind === "scratch" ? "scratch-mode" : "spin-mode"}`}>
+            <button className="reward-modal-close" type="button" aria-label="Close reward popup" onClick={() => setRewardModal(null)}>
+              ×
+            </button>
+            <div className="reward-party" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+              <i />
+              <i />
+              <i />
+              <i />
+              <i />
+            </div>
+            <div className="reward-modal-copy">
+              <p className="eyebrow">{rewardModal.kind === "spin" ? "Welcome to" : "Scratch your"}</p>
+              <h2>{rewardModalTitle}</h2>
+              <p>
+                {rewardModal.error
+                  ? rewardModal.error
+                  : rewardModalLoading
+                    ? rewardModal.kind === "spin"
+                      ? "The wheel is spinning…"
+                      : "Opening your lucky card…"
+                    : rewardModalResult?.won
+                      ? `Boom! ${rewardModalResult.points} loyalty points are added to your salon wallet.`
+                      : "No prize this round, but your next daily try opens tomorrow."}
+              </p>
+            </div>
+            {rewardModal.kind === "spin" ? (
+              <div className="spin-wheel-stage">
+                <div className="spin-pointer" aria-hidden="true" />
+                <div
+                  className={`spin-wheel ${rewardModalLoading ? "is-spinning" : ""}`}
+                  style={rewardModalResult ? { transform: `rotate(${720 + ((rewardModalResult.roll * 37) % 360)}deg)` } : undefined}
+                >
+                  {rewardSlices.map((slice, index) => (
+                    <span
+                      key={slice}
+                      style={{ transform: `rotate(${index * (360 / rewardSlices.length)}deg) translateY(-96px) rotate(90deg)` }}
+                    >
+                      {slice}
+                    </span>
+                  ))}
+                  <b>SPIN<br />WIN</b>
+                </div>
+              </div>
+            ) : (
+              <div className={`scratch-prize-card ${rewardModalResult || rewardModal.error ? "is-revealed" : ""}`}>
+                <div>
+                  <strong>SCRATCH<br />& WIN</strong>
+                  <span>Good luck!</span>
+                </div>
+                <section>
+                  <i>🎁</i>
+                  <b>
+                    {rewardModalLoading
+                      ? "Scratch here"
+                      : rewardModalResult?.won
+                        ? `Winner +${rewardModalResult.points}`
+                        : "Better luck"}
+                  </b>
+                  <small>{rewardModalResult?.won ? "Points added" : rewardModalResult ? "Try again tomorrow" : "Revealing…"}</small>
+                </section>
+              </div>
+            )}
+            <div className="reward-modal-actions">
+              <button className="button admin-primary" type="button" onClick={() => setRewardModal(null)}>
+                {rewardModalResult || rewardModal.error ? "Done" : "Please wait…"}
+              </button>
+              {rewardModalResult && (
+                <small>
+                  Daily attempt saved · balance {rewardModalResult.balanceAfter.toLocaleString("en-IN")} points
+                </small>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       <nav className="portal-mobile-nav">
         <a className="active" href="#overview">
           Home

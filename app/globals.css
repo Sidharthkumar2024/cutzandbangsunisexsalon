@@ -1999,10 +1999,45 @@ html,body{max-width:100%;overflow-x:hidden}
 @media (max-width:760px){.campaign-cta-row{grid-template-columns:1fr}.campaign-cta-row button{width:100%}.campaign-cta-builder>.button{width:100%}}
 
 .portal-draw-actions{grid-template-columns:1fr 1fr}
-.portal-draw-actions button{min-height:42px;border:0;border-radius:12px;background:var(--wine);color:white;font-weight:900;cursor:pointer}
-.portal-draw-actions button:nth-child(2){background:#e87761}
+.portal-draw-actions button{min-height:48px;border:0;border-radius:14px;background:linear-gradient(135deg,#8e1719,#db3325);color:white;font-weight:950;cursor:pointer;box-shadow:0 14px 26px rgb(142 23 25 / 20%);transition:transform .18s ease,box-shadow .18s ease}
+.portal-draw-actions button span{display:inline-grid;place-items:center;margin-right:7px;width:27px;height:27px;border-radius:50%;background:rgb(255 255 255 / 18%)}
+.portal-draw-actions button:nth-child(2){background:linear-gradient(135deg,#57228e,#f5a400);box-shadow:0 14px 26px rgb(87 34 142 / 20%)}
+.portal-draw-actions button:hover:not(:disabled),.portal-draw-actions button:focus-visible{transform:translateY(-2px);box-shadow:0 18px 30px rgb(92 34 34 / 24%)}
 .portal-draw-actions button:disabled{cursor:not-allowed;opacity:.62}
 .portal-draw-status{grid-template-columns:1fr}
+.reward-modal-backdrop{position:fixed;inset:0;z-index:90;display:grid;place-items:center;padding:20px;background:radial-gradient(circle at 50% 20%,rgb(255 245 210 / 52%),rgb(33 13 19 / 72));backdrop-filter:blur(8px);animation:rewardBackdropIn .2s ease-out}
+.reward-modal{position:relative;width:min(520px,100%);overflow:hidden;display:grid;gap:18px;padding:24px;border-radius:28px;background:linear-gradient(145deg,#fffaf2,#fff 45%,#ffe9d5);box-shadow:0 35px 90px rgb(42 14 22 / 35%);text-align:center}
+.reward-modal.spin-mode{background:radial-gradient(circle at top,#ffed7a 0 9%,transparent 28%),repeating-conic-gradient(from -12deg,#d80b15 0 12deg,#b40813 12deg 24deg),linear-gradient(135deg,#e91522,#8b020b);color:white}
+.reward-modal.scratch-mode{background:linear-gradient(145deg,#260064,#5f098e 45%,#ff9c00);color:white}
+.reward-modal-close{position:absolute;top:14px;right:14px;z-index:3;width:36px;height:36px;border:0;border-radius:50%;background:rgb(255 255 255 / 90%);color:#6b3335;font-size:24px;font-weight:900;line-height:1;cursor:pointer}
+.reward-modal-copy{position:relative;z-index:2;display:grid;gap:4px}
+.reward-modal-copy .eyebrow{margin:0;color:inherit;opacity:.86}
+.reward-modal-copy h2{margin:0;font:900 clamp(34px,8vw,64px)/.9 system-ui,sans-serif;text-transform:uppercase;letter-spacing:-.04em;text-shadow:0 4px 18px rgb(0 0 0 / 18%)}
+.reward-modal-copy p{max-width:370px;margin:4px auto 0;color:inherit;opacity:.9;line-height:1.45}
+.spin-wheel-stage{position:relative;z-index:2;display:grid;place-items:center;min-height:310px}
+.spin-pointer{position:absolute;top:4px;z-index:3;width:0;height:0;border-left:22px solid transparent;border-right:22px solid transparent;border-top:0;border-bottom:40px solid #ffd534;filter:drop-shadow(0 6px 8px rgb(0 0 0 / 28%))}
+.spin-wheel{position:relative;width:min(292px,76vw);aspect-ratio:1;border:13px solid #7a090f;border-radius:50%;background:conic-gradient(#f04444 0 45deg,#ea2aa0 45deg 90deg,#ffec20 90deg 135deg,#ff8b2c 135deg 180deg,#5147a4 180deg 225deg,#0facd6 225deg 270deg,#b90918 270deg 315deg,#f04444 315deg 360deg);box-shadow:inset 0 0 0 5px #ffe0aa,inset 0 0 0 9px #133b35,0 0 0 10px rgb(255 255 255 / 18%),0 20px 35px rgb(20 0 10 / 40%);transition:transform 1.4s cubic-bezier(.14,.78,.24,1)}
+.spin-wheel.is-spinning{animation:spinWheel 1s linear infinite}
+.spin-wheel::before{content:"";position:absolute;inset:-19px;border-radius:50%;background:repeating-conic-gradient(from 0deg,#fff 0 5deg,transparent 5deg 30deg);mask:radial-gradient(circle,transparent 0 80%,#000 81%);opacity:.9}
+.spin-wheel b{position:absolute;inset:50%;translate:-50% -50%;width:112px;height:112px;display:grid;place-items:center;border-radius:50%;background:#8d0710;border:5px solid #fff;color:#fff;font:950 23px/.9 system-ui,sans-serif;text-shadow:0 2px 6px rgb(0 0 0 / 25%)}
+.spin-wheel span{position:absolute;left:50%;top:50%;transform-origin:0 0;width:86px;margin-left:-43px;color:white;font-size:10px;font-weight:950;text-transform:uppercase;text-shadow:0 2px 4px rgb(0 0 0 / 36%)}
+.scratch-prize-card{position:relative;z-index:2;display:grid;grid-template-columns:.85fr 1.15fr;gap:12px;align-items:stretch;min-height:185px;padding:12px;border:3px solid #ffcf32;border-radius:22px;background:linear-gradient(135deg,#47008a,#6f00a8);box-shadow:0 0 0 5px rgb(255 255 255 / 10%),0 18px 34px rgb(31 0 58 / 34%)}
+.scratch-prize-card>div{display:grid;place-items:center;align-content:center;gap:14px;border-right:1px dashed rgb(255 255 255 / 34%)}
+.scratch-prize-card strong{font:950 clamp(27px,7vw,44px)/.9 system-ui,sans-serif;color:#fff;text-shadow:0 4px 14px rgb(0 0 0 / 25%)}
+.scratch-prize-card>div span{display:inline-flex;padding:9px 20px;border-radius:99px;background:linear-gradient(180deg,#ffe66f,#ffad00);color:#4b226d;font-weight:950;box-shadow:0 6px 0 #ca6800}
+.scratch-prize-card section{position:relative;overflow:hidden;display:grid;place-items:center;align-content:center;gap:8px;border-radius:17px;background:linear-gradient(145deg,#eee,#cfd0d8);color:#35105f}
+.scratch-prize-card section::before{content:"";position:absolute;inset:-40%;background:linear-gradient(115deg,transparent 35%,rgb(255 255 255 / 55%) 45%,transparent 55%);animation:scratchShine 1.2s linear infinite}
+.scratch-prize-card.is-revealed section{background:radial-gradient(circle at top,#fff8bf,#fff 45%,#ffe5ee);animation:rewardPop .45s ease-out}
+.scratch-prize-card.is-revealed section::before{opacity:0}
+.scratch-prize-card section i{font-style:normal;font-size:34px}
+.scratch-prize-card section b{font:950 clamp(22px,6vw,38px)/1 system-ui,sans-serif;text-transform:uppercase}
+.scratch-prize-card section small{font-weight:900;color:#7a3b84}
+.reward-party{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.reward-party i{position:absolute;top:-12px;width:10px;height:18px;border-radius:3px;background:#ffd93d;opacity:0;animation:confettiFall 1.9s ease-in-out infinite}
+.reward-party i:nth-child(2){left:18%;background:#4ade80;animation-delay:.15s}.reward-party i:nth-child(3){left:31%;background:#38bdf8;animation-delay:.35s}.reward-party i:nth-child(4){left:45%;background:#fb7185;animation-delay:.05s}.reward-party i:nth-child(5){left:59%;background:#f97316;animation-delay:.3s}.reward-party i:nth-child(6){left:73%;background:#c084fc;animation-delay:.55s}.reward-party i:nth-child(7){left:86%;background:#fff;animation-delay:.2s}.reward-party i:nth-child(8){left:10%;background:#facc15;animation-delay:.65s}
+.reward-modal-backdrop.is-win .reward-party i{opacity:1}.reward-modal-backdrop.is-win .reward-modal{animation:rewardPop .38s ease-out}
+.reward-modal-actions{position:relative;z-index:2;display:grid;gap:8px;justify-items:center}.reward-modal-actions .button{min-width:160px}.reward-modal-actions small{color:inherit;opacity:.82;font-weight:800}
+@keyframes spinWheel{to{transform:rotate(360deg)}}@keyframes rewardBackdropIn{from{opacity:0}to{opacity:1}}@keyframes rewardPop{0%{transform:scale(.9)}70%{transform:scale(1.035)}100%{transform:scale(1)}}@keyframes scratchShine{to{transform:translateX(35%)}}@keyframes confettiFall{0%{opacity:0;transform:translateY(-20px) rotate(0deg)}15%{opacity:1}100%{opacity:0;transform:translateY(430px) rotate(380deg)}}
 
 @media (max-width:780px){
   .topbar{grid-template-columns:minmax(0,1fr) auto auto}
@@ -2013,4 +2048,9 @@ html,body{max-width:100%;overflow-x:hidden}
 @media (max-width:520px){
   .portal-reward-grid,.portal-stamp-card{grid-template-columns:1fr}
   .portal-draw-actions{grid-template-columns:1fr}
+  .reward-modal-backdrop{padding:12px}
+  .reward-modal{padding:20px 14px;border-radius:22px}
+  .spin-wheel-stage{min-height:270px}
+  .scratch-prize-card{grid-template-columns:1fr;min-height:260px}
+  .scratch-prize-card>div{border-right:0;border-bottom:1px dashed rgb(255 255 255 / 34%);padding-bottom:12px}
 }
