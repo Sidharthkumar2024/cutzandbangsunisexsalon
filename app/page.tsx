@@ -47,6 +47,7 @@ export default async function Home() {
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData).replace(/</g, '\\u003c') }} />
       <nav className="topbar" aria-label="Main navigation">
         <a className="wordmark brand-image-link" href="#top" aria-label="Cutz and Bangs home"><BrandLogo priority /></a>
+        <a className="mobile-login-pill" href="/customer">Login</a>
         <div className="nav-links"><a href="#services">Services</a><a href="#studio">Our studio</a><a href="#membership">Membership</a><a href="#visit">Visit</a><a href="/contact">Contact</a></div>
         <div className="nav-actions"><a className="staff-login" href="/customer">Sign in</a><a className="staff-login" href="/admin/login">Team login</a><a className="button button-dark nav-book" href="/book">Book a visit</a></div>
       </nav>

@@ -874,6 +874,17 @@ export type CustomerPortalOverview = BackendCustomer & {
     };
   } | null;
 };
+export type CustomerRewardDrawResult = {
+  kind: "spin" | "scratch";
+  attempted: boolean;
+  won: boolean;
+  points: number;
+  balanceAfter: number;
+  message: string;
+  chancePercent: number;
+  dateKey: string;
+  nextAvailableAt: string;
+};
 export type StaffPortalDay = {
   staff: BackendStaff & { commissionRate: number };
   appointments: BackendAppointment[];
@@ -1762,6 +1773,12 @@ export const backendApi = {
     ),
   customerOverview: (token: string) =>
     request<CustomerPortalOverview>("/portal/customer/overview", {}, token),
+  playCustomerReward: (token: string, kind: "spin" | "scratch") =>
+    request<CustomerRewardDrawResult>(
+      `/portal/customer/rewards/${encodeURIComponent(kind)}/play`,
+      { method: "POST", body: "{}" },
+      token,
+    ),
   requestCustomerReschedule: (token: string, appointmentId: string, note?: string) =>
     request<{ requested: boolean; eventId: string }>(
       `/portal/customer/appointments/${encodeURIComponent(appointmentId)}/reschedule-request`,

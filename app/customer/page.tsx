@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import BrandLogo from "../components/BrandLogo";
-import { backendApi, type CustomerPortalOverview } from "../../lib/backend-api";
+import { backendApi, type CustomerPortalOverview, type CustomerRewardDrawResult } from "../../lib/backend-api";
 
 const money = (minor: number) =>
   `₹${Math.round(minor / 100).toLocaleString("en-IN")}`;
@@ -17,6 +17,8 @@ export default function CustomerPortal() {
   const [token, setToken] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [activeReward, setActiveReward] = useState<"spin" | "scratch" | null>(null);
+  const [drawResults, setDrawResults] = useState<Partial<Record<"spin" | "scratch", CustomerRewardDrawResult>>>({});
 
   useEffect(() => {
     const savedToken = window.localStorage.getItem(CUSTOMER_TOKEN_KEY);
@@ -84,6 +86,22 @@ export default function CustomerPortal() {
       setMessage(cause instanceof Error ? cause.message.replaceAll("_", " ") : "Request could not be sent.");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const playReward = async (kind: "spin" | "scratch") => {
+    if (!token) return;
+    setActiveReward(kind);
+    setMessage("");
+    try {
+      const result = await backendApi.playCustomerReward(token, kind);
+      setDrawResults((current) => ({ ...current, [kind]: result }));
+      setMessage(result.message);
+      setData(await backendApi.customerOverview(token));
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message.replaceAll("_", " ") : "Reward could not be opened.");
+    } finally {
+      setActiveReward(null);
     }
   };
   if (!data)
@@ -186,7 +204,7 @@ export default function CustomerPortal() {
             <strong>{data.name.split(" ")[0]}</strong>
             <small>Secure account</small>
           </div>
-          <button onClick={() => { if (token) void backendApi.logout(token).catch(() => undefined); setData(null); setToken(""); }}>Sign out</button>
+          <button onClick={() => { if (token) void backendApi.logout(token).catch(() => undefined); setData(null); setToken(""); setDrawResults({}); }}>Sign out</button>
         </div>
       </header>
       <div className="portal-content" id="overview">
@@ -327,13 +345,21 @@ export default function CustomerPortal() {
           </article>
           <article className="portal-draw-card">
             <p className="eyebrow">Spin & scratch rewards</p>
-            <h2>{spinWin || scratchWin ? "Prize unlocked" : "Better luck next visit"}</h2>
+            <h2>{spinWin || scratchWin || drawResults.spin?.won || drawResults.scratch?.won ? "Prize unlocked" : "Try your luck today"}</h2>
             <p>
-              Rewards are controlled by salon rules after invoice payment, so only selected visits win.
+              Spin and scratch are open even before your first invoice. One safe try per reward is allowed each day.
             </p>
-            <div>
-              <span>{spinWin ? `Spin won +${spinWin.deltaPoints}` : "Spin: no active win yet"}</span>
-              <span>{scratchWin ? `Scratch won +${scratchWin.deltaPoints}` : "Scratch: waiting for milestone"}</span>
+            <div className="portal-draw-actions">
+              <button disabled={activeReward !== null || busy} onClick={() => void playReward("spin")}>
+                {activeReward === "spin" ? "Spinning…" : "🎡 Spin now"}
+              </button>
+              <button disabled={activeReward !== null || busy} onClick={() => void playReward("scratch")}>
+                {activeReward === "scratch" ? "Opening…" : "🎁 Scratch card"}
+              </button>
+            </div>
+            <div className="portal-draw-status">
+              <span>{drawResults.spin ? drawResults.spin.message : spinWin ? `Spin won +${spinWin.deltaPoints}` : "Spin: ready today"}</span>
+              <span>{drawResults.scratch ? drawResults.scratch.message : scratchWin ? `Scratch won +${scratchWin.deltaPoints}` : "Scratch: ready today"}</span>
             </div>
           </article>
         </section>

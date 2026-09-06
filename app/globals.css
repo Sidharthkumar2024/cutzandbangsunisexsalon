@@ -149,6 +149,7 @@ a { color: inherit; text-decoration: none; }
 /* Public site */
 .nav-actions { justify-self: end; display: flex; align-items: center; gap: 22px; }
 .staff-login { color: #756966; font-size: 12px; font-weight: 700; }
+.mobile-login-pill { display: none; align-items: center; justify-content: center; min-height: 38px; padding: 0 14px; border: 1px solid #eadbd4; border-radius: 999px; background: #fffaf4; color: var(--wine); font-size: 12px; font-weight: 900; }
 .mini-label { display: inline-block; margin-bottom: 10px; color: var(--coral); font-size: 9px; font-weight: 800; letter-spacing: .15em; text-transform: uppercase; }
 .studio-section { display: grid; grid-template-columns: .9fr 1.1fr; min-height: 680px; }
 .studio-art { min-height: 620px; display: grid; place-items: center; position: relative; overflow: hidden; background: #b7c4ae; }
@@ -1996,3 +1997,20 @@ html,body{max-width:100%;overflow-x:hidden}
 .campaign-cta-builder{grid-column:1/-1;display:grid;gap:12px;padding:16px;border:1px solid var(--line);border-radius:14px;background:#fffaf6}.campaign-cta-builder h3{margin:2px 0 4px;font-size:16px}.campaign-cta-builder>div:first-child small{color:var(--muted)}.campaign-cta-row{display:grid;grid-template-columns:150px minmax(150px,.7fr) minmax(220px,1fr) auto;gap:10px;align-items:end;padding:12px;border:1px solid #eadfd8;border-radius:12px;background:white}.campaign-cta-row label{display:grid;gap:6px;color:#655f59;font-size:11px;font-weight:800}.campaign-cta-row input,.campaign-cta-row select{height:42px;border:1px solid #ded6cf;border-radius:10px;padding:0 12px;background:#fff;color:var(--ink)}.campaign-cta-row button{min-height:42px;border:1px solid #e4c7c1;border-radius:10px;background:#fff3f0;color:#8d403a;font-weight:800;cursor:pointer}.campaign-cta-preview{display:flex;gap:8px;flex-wrap:wrap}.campaign-cta-preview span{display:inline-flex;align-items:center;gap:6px;min-height:34px;padding:0 12px;border-radius:999px;background:#e8f0e4;color:#557150;font-size:12px;font-weight:800}
 
 @media (max-width:760px){.campaign-cta-row{grid-template-columns:1fr}.campaign-cta-row button{width:100%}.campaign-cta-builder>.button{width:100%}}
+
+.portal-draw-actions{grid-template-columns:1fr 1fr}
+.portal-draw-actions button{min-height:42px;border:0;border-radius:12px;background:var(--wine);color:white;font-weight:900;cursor:pointer}
+.portal-draw-actions button:nth-child(2){background:#e87761}
+.portal-draw-actions button:disabled{cursor:not-allowed;opacity:.62}
+.portal-draw-status{grid-template-columns:1fr}
+
+@media (max-width:780px){
+  .topbar{grid-template-columns:minmax(0,1fr) auto auto}
+  .mobile-login-pill{display:inline-flex}
+  .nav-actions{gap:10px}
+}
+
+@media (max-width:520px){
+  .portal-reward-grid,.portal-stamp-card{grid-template-columns:1fr}
+  .portal-draw-actions{grid-template-columns:1fr}
+}

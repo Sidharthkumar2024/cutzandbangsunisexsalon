@@ -1,11 +1,43 @@
 import { FastifyInstance } from "fastify";
+import { randomInt } from "node:crypto";
 import { z } from "zod";
 import { prisma } from "@cutz/db";
 import { authorize } from "../../plugins/auth.js";
 import { audit } from "../../lib/audit.js";
-import { getLoyaltyRules, postLoyaltyEntry } from "./ledger.js";
+import { getLoyaltyRules, parseMarketingSettings, postLoyaltyEntry } from "./ledger.js";
 
 const STAFF = ["OWNER", "ADMIN", "MANAGER", "RECEPTION", "STAFF"] as const;
+const rewardKindSchema = z.object({ kind: z.enum(["spin", "scratch"]) });
+const rewardAttemptSchema = z.object({
+  kind: z.enum(["spin", "scratch"]),
+  attempted: z.boolean(),
+  won: z.boolean(),
+  points: z.number().int(),
+  balanceAfter: z.number().int(),
+  message: z.string(),
+  roll: z.number().int().min(1).max(100),
+  chancePercent: z.number().int().min(1).max(100),
+  dateKey: z.string(),
+  nextAvailableAt: z.string(),
+  createdAt: z.string(),
+});
+
+function branchDateKey(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const pick = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${pick("year")}-${pick("month")}-${pick("day")}`;
+}
+
+function nextBranchDayIso(dateKey: string) {
+  const next = new Date(`${dateKey}T18:30:00.000Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  return next.toISOString();
+}
 
 export default async function loyaltyRoutes(app: FastifyInstance) {
   app.get("/loyalty/rules", { preHandler: authorize(...STAFF, "CUSTOMER") }, async (req, reply) => {
@@ -19,6 +51,98 @@ export default async function loyaltyRoutes(app: FastifyInstance) {
     }
     return getLoyaltyRules(prisma, branchId);
   });
+
+  app.post(
+    "/portal/customer/rewards/:kind/play",
+    { preHandler: authorize("CUSTOMER") },
+    async (req, reply) => {
+      const parsedParams = rewardKindSchema.safeParse(req.params);
+      if (!parsedParams.success) {
+        return reply.code(400).send({ error: "invalid_reward_kind" });
+      }
+
+      const customer = await prisma.customer.findFirst({
+        where: { userId: req.user!.id, deletedAt: null },
+        select: {
+          id: true,
+          branchId: true,
+          loyaltyPoints: true,
+          branch: { select: { timezone: true } },
+        },
+      });
+      if (!customer) return reply.code(404).send({ error: "customer_profile_not_found" });
+
+      const settingsRow = await prisma.setting.findUnique({ where: { key: `branch:${customer.branchId}:marketing` } });
+      const settings = parseMarketingSettings(settingsRow?.value);
+      const kind = parsedParams.data.kind;
+      const enabled = kind === "spin"
+        ? settings.programmes.spinWin !== false
+        : settings.programmes.scratchWin !== false;
+      if (!enabled) return reply.code(409).send({ error: `${kind}_disabled` });
+
+      const dateKey = branchDateKey(new Date(), customer.branch.timezone ?? "Asia/Kolkata");
+      const attemptKey = `customer:${customer.id}:reward:${kind}:${dateKey}`;
+      const existing = await prisma.setting.findUnique({ where: { key: attemptKey } });
+      const parsedExisting = rewardAttemptSchema.safeParse(existing?.value);
+      if (parsedExisting.success) return parsedExisting.data;
+
+      const chancePercent = kind === "spin"
+        ? settings.rewardRules.spinChancePercent
+        : Math.max(5, Math.min(30, Math.round(100 / settings.rewardRules.scratchEveryVisits)));
+      const points = kind === "spin"
+        ? settings.rewardRules.spinRewardPoints
+        : settings.rewardRules.scratchRewardPoints;
+      const roll = randomInt(1, 101);
+      const won = points > 0 && roll <= chancePercent;
+
+      try {
+        const result = await prisma.$transaction(async (tx) => {
+          const concurrent = await tx.setting.findUnique({ where: { key: attemptKey } });
+          const parsedConcurrent = rewardAttemptSchema.safeParse(concurrent?.value);
+          if (parsedConcurrent.success) return parsedConcurrent.data;
+
+          let balanceAfter = customer.loyaltyPoints;
+          if (won) {
+            const posted = await postLoyaltyEntry(tx, {
+              customerId: customer.id,
+              type: "ADJUST",
+              deltaPoints: points,
+              reason: `Marketing reward: customer portal ${kind} draw ${dateKey}`,
+              actorUserId: req.user?.id,
+            });
+            balanceAfter = posted.balanceAfter;
+          }
+
+          const payload = {
+            kind,
+            attempted: true,
+            won,
+            points: won ? points : 0,
+            balanceAfter,
+            message: won
+              ? `Congratulations! You won ${points} loyalty points.`
+              : "Better luck next time.",
+            roll,
+            chancePercent,
+            dateKey,
+            nextAvailableAt: nextBranchDayIso(dateKey),
+            createdAt: new Date().toISOString(),
+          };
+
+          await tx.setting.upsert({
+            where: { key: attemptKey },
+            update: { value: payload },
+            create: { key: attemptKey, value: payload },
+          });
+          return payload;
+        });
+        return reply.code(201).send(result);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "reward_draw_failed";
+        return reply.code(422).send({ error: reason });
+      }
+    },
+  );
 
   app.post(
     "/customers/:id/loyalty/adjust",

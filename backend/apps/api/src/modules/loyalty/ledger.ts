@@ -59,16 +59,24 @@ const marketingRewardRulesSchema = z.object({
   ]),
 });
 
-const marketingSettingsSchema = z.object({
+export const marketingSettingsSchema = z.object({
   programmes: marketingProgrammesSchema.default({}),
   monthlyBudgetMinor: z.number().int().min(0).max(100_000_000).default(1_000_000),
   maxRewardsPerDay: z.number().int().min(1).max(500).default(50),
   rewardRules: marketingRewardRulesSchema.default({}),
 }).passthrough();
 
+export type MarketingSettings = z.infer<typeof marketingSettingsSchema>;
+export const DEFAULT_MARKETING_SETTINGS: MarketingSettings = marketingSettingsSchema.parse({});
+
 export function parseLoyaltyRules(value: unknown): LoyaltyRules {
   const parsed = loyaltyRulesSchema.safeParse(value);
   return parsed.success ? parsed.data : DEFAULT_LOYALTY_RULES;
+}
+
+export function parseMarketingSettings(value: unknown): MarketingSettings {
+  const parsed = marketingSettingsSchema.safeParse(value ?? {});
+  return parsed.success ? parsed.data : DEFAULT_MARKETING_SETTINGS;
 }
 
 export async function getLoyaltyRules(
@@ -159,8 +167,7 @@ export async function applyMarketingRewardBonuses(
 ) {
   if (input.eligibleMinor <= 0) return { points: 0, balanceAfter: null };
   const row = await tx.setting.findUnique({ where: { key: `branch:${input.branchId}:marketing` } });
-  const parsed = marketingSettingsSchema.safeParse(row?.value ?? {});
-  const settings = parsed.success ? parsed.data : marketingSettingsSchema.parse({});
+  const settings = parseMarketingSettings(row?.value);
   const programmes = settings.programmes;
   const rewardRules = settings.rewardRules;
   const rewards: Array<{ reason: string; points: number; oncePerCustomer?: boolean; customerId?: string }> = [];
