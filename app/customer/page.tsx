@@ -9,11 +9,42 @@ const money = (minor: number) =>
   `₹${Math.round(minor / 100).toLocaleString("en-IN")}`;
 const CUSTOMER_TOKEN_KEY = "cutz.customer.token";
 const rewardSlices = ["₹25", "Better luck", "Free add-on", "₹50", "Glow perk", "Try again", "VIP treat", "₹100"];
+const wait = (durationMs: number) => new Promise((resolve) => window.setTimeout(resolve, durationMs));
 type RewardKind = "spin" | "scratch";
 type RewardModalState = {
   kind: RewardKind;
   result?: CustomerRewardDrawResult;
   error?: string;
+};
+
+const playSpinTicks = (durationMs = 2400) => {
+  const AudioContextCtor =
+    window.AudioContext ??
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextCtor) return;
+  const audio = new AudioContextCtor();
+  let tick = 0;
+  const playTick = () => {
+    const now = audio.currentTime;
+    const oscillator = audio.createOscillator();
+    const gain = audio.createGain();
+    oscillator.type = "square";
+    oscillator.frequency.value = tick % 2 === 0 ? 980 : 1240;
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.055, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.07);
+    oscillator.connect(gain);
+    gain.connect(audio.destination);
+    oscillator.start(now);
+    oscillator.stop(now + 0.075);
+    tick += 1;
+  };
+  void audio.resume().then(() => playTick()).catch(() => undefined);
+  const interval = window.setInterval(playTick, 92);
+  window.setTimeout(() => {
+    window.clearInterval(interval);
+    window.setTimeout(() => void audio.close().catch(() => undefined), 250);
+  }, durationMs);
 };
 
 export default function CustomerPortal() {
@@ -97,13 +128,24 @@ export default function CustomerPortal() {
     }
   };
 
-  const playReward = async (kind: RewardKind) => {
+  const openReward = (kind: RewardKind) => {
+    if (!token || activeReward !== null || busy) return;
+    setRewardModal({ kind });
+    setMessage("");
+  };
+
+  const startReward = async (kind: RewardKind) => {
     if (!token) return;
+    if (activeReward !== null) return;
+    const minimumMs = kind === "spin" ? 2400 : 1050;
+    const startedAt = Date.now();
     setActiveReward(kind);
     setRewardModal({ kind });
     setMessage("");
+    if (kind === "spin") playSpinTicks(minimumMs);
     try {
       const result = await backendApi.playCustomerReward(token, kind);
+      await wait(Math.max(0, minimumMs - (Date.now() - startedAt)));
       setDrawResults((current) => ({ ...current, [kind]: result }));
       setRewardModal({ kind, result });
       setMessage(result.message);
@@ -194,12 +236,16 @@ export default function CustomerPortal() {
   const rewardModalLoading = rewardModal ? activeReward === rewardModal.kind && !rewardModal.result && !rewardModal.error : false;
   const rewardModalTitle = rewardModal?.error
     ? "Reward could not open"
+    : rewardModalLoading
+      ? rewardModal.kind === "spin"
+        ? "Spinning now!"
+        : "Scratching now!"
     : rewardModalResult?.won
       ? "You’re a lucky winner!"
       : rewardModalResult
         ? "Better luck next time!"
         : rewardModal?.kind === "spin"
-          ? "Spin & win"
+          ? "Tap to spin!"
           : "Scratch & win";
   return (
     <main className="portal-shell customer-portal">
@@ -373,13 +419,13 @@ export default function CustomerPortal() {
               Spin and scratch are open even before your first invoice. One safe try per reward is allowed each day.
             </p>
             <div className="portal-draw-actions">
-              <button disabled={activeReward !== null || busy} onClick={() => void playReward("spin")}>
+              <button disabled={activeReward !== null || busy} onClick={() => openReward("spin")}>
                 <span>🎡</span>
-                {activeReward === "spin" ? "Spinning…" : "Spin & Win"}
+                Spin & Win
               </button>
-              <button disabled={activeReward !== null || busy} onClick={() => void playReward("scratch")}>
+              <button disabled={activeReward !== null || busy} onClick={() => openReward("scratch")}>
                 <span>🎁</span>
-                {activeReward === "scratch" ? "Opening…" : "Scratch Card"}
+                Scratch Card
               </button>
             </div>
             <div className="portal-draw-status">
@@ -510,11 +556,15 @@ export default function CustomerPortal() {
                   ? rewardModal.error
                   : rewardModalLoading
                     ? rewardModal.kind === "spin"
-                      ? "The wheel is spinning…"
-                      : "Opening your lucky card…"
+                      ? "Tick tick tick… the wheel is choosing your prize."
+                      : "Scratch animation is revealing your lucky card…"
                     : rewardModalResult?.won
                       ? `Boom! ${rewardModalResult.points} loyalty points are added to your salon wallet.`
-                      : "No prize this round, but your next daily try opens tomorrow."}
+                      : rewardModalResult
+                        ? "No prize this round, but your next daily try opens tomorrow."
+                        : rewardModal.kind === "spin"
+                          ? "Tap spin now and watch the wheel rotate."
+                          : "Tap or swipe the silver panel to scratch and reveal."}
               </p>
             </div>
             {rewardModal.kind === "spin" ? (
@@ -527,7 +577,7 @@ export default function CustomerPortal() {
                   {rewardSlices.map((slice, index) => (
                     <span
                       key={slice}
-                      style={{ transform: `rotate(${index * (360 / rewardSlices.length)}deg) translateY(-96px) rotate(90deg)` }}
+                      style={{ transform: `rotate(${index * (360 / rewardSlices.length)}deg) translateY(-82px) rotate(90deg)` }}
                     >
                       {slice}
                     </span>
@@ -541,11 +591,25 @@ export default function CustomerPortal() {
                   <strong>SCRATCH<br />& WIN</strong>
                   <span>Good luck!</span>
                 </div>
-                <section>
+                <section
+                  role="button"
+                  tabIndex={rewardModalResult || rewardModal.error || rewardModalLoading ? -1 : 0}
+                  aria-label="Scratch card to reveal reward"
+                  onPointerDown={() => {
+                    if (!rewardModalResult && !rewardModal.error && !rewardModalLoading) void startReward("scratch");
+                  }}
+                  onKeyDown={(event) => {
+                    if ((event.key === "Enter" || event.key === " ") && !rewardModalResult && !rewardModal.error && !rewardModalLoading) {
+                      event.preventDefault();
+                      void startReward("scratch");
+                    }
+                  }}
+                >
+                  {!rewardModalResult && !rewardModal.error && <span className={`scratch-cover ${rewardModalLoading ? "is-scratching" : ""}`}>Scratch here</span>}
                   <i>🎁</i>
                   <b>
                     {rewardModalLoading
-                      ? "Scratch here"
+                      ? "Scratching…"
                       : rewardModalResult?.won
                         ? `Winner +${rewardModalResult.points}`
                         : "Better luck"}
@@ -555,8 +619,23 @@ export default function CustomerPortal() {
               </div>
             )}
             <div className="reward-modal-actions">
-              <button className="button admin-primary" type="button" onClick={() => setRewardModal(null)}>
-                {rewardModalResult || rewardModal.error ? "Done" : "Please wait…"}
+              <button
+                className="button admin-primary"
+                type="button"
+                disabled={rewardModalLoading}
+                onClick={() => {
+                  if (!rewardModalResult && !rewardModal.error) {
+                    void startReward(rewardModal.kind);
+                    return;
+                  }
+                  setRewardModal(null);
+                }}
+              >
+                {rewardModalResult || rewardModal.error
+                  ? "Done"
+                  : rewardModalLoading
+                    ? rewardModal.kind === "spin" ? "Spinning…" : "Scratching…"
+                    : rewardModal.kind === "spin" ? "Spin now" : "Scratch now"}
               </button>
               {rewardModalResult && (
                 <small>
