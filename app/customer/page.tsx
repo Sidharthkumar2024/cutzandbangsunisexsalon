@@ -1,49 +1,73 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import BrandLogo from "../components/BrandLogo";
 import { backendApi, type CustomerPortalOverview } from "../../lib/backend-api";
 
 const money = (minor: number) =>
   `₹${Math.round(minor / 100).toLocaleString("en-IN")}`;
+const CUSTOMER_TOKEN_KEY = "cutz.customer.token";
 
 export default function CustomerPortal() {
-  const [mode, setMode] = useState<"login" | "register">("login");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [otp, setOtp] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
   const [data, setData] = useState<CustomerPortalOverview | null>(null);
   const [token, setToken] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  const authenticate = async () => {
+
+  useEffect(() => {
+    const savedToken = window.localStorage.getItem(CUSTOMER_TOKEN_KEY);
+    const linkedPhone = new URLSearchParams(window.location.search).get("phone");
+    if (linkedPhone) setPhone(linkedPhone);
+    if (!savedToken) return;
+    setBusy(true);
+    backendApi
+      .customerOverview(savedToken)
+      .then((overview) => {
+        setData(overview);
+        setToken(savedToken);
+      })
+      .catch(() => {
+        window.localStorage.removeItem(CUSTOMER_TOKEN_KEY);
+      })
+      .finally(() => setBusy(false));
+  }, []);
+
+  const requestOtp = async () => {
     setBusy(true);
     setMessage("");
     try {
-      const session =
-        mode === "login"
-          ? await backendApi.login(email, password)
-          : await backendApi.registerCustomer({
-              name,
-              email,
-              phone: phone || undefined,
-              password,
-              branchId: "main",
-            });
-      if ("twoFactorRequired" in session && session.twoFactorRequired)
-        throw new Error("two_factor_verification_required");
-      if (session.user.role !== "CUSTOMER")
-        throw new Error("customer_account_required");
-      setData(await backendApi.customerOverview(session.token));
-      setToken(session.token);
-      setPassword("");
+      await backendApi.requestCustomerOtp(phone, "main");
+      setOtpSent(true);
+      setMessage("OTP sent on WhatsApp if this number is registered with the salon.");
     } catch (cause) {
       setMessage(
         cause instanceof Error
           ? cause.message.replaceAll("_", " ")
-          : "Sign in failed.",
+          : "OTP could not be sent.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const verifyOtp = async () => {
+    setBusy(true);
+    setMessage("");
+    try {
+      const session = await backendApi.verifyCustomerOtp(phone, otp, "main");
+      setData(await backendApi.customerOverview(session.token));
+      setToken(session.token);
+      window.localStorage.setItem(CUSTOMER_TOKEN_KEY, session.token);
+      setOtp("");
+    } catch (cause) {
+      setMessage(
+        cause instanceof Error
+          ? cause.message.replaceAll("_", " ")
+          : "OTP verification failed.",
       );
     } finally {
       setBusy(false);
@@ -76,81 +100,47 @@ export default function CustomerPortal() {
             <em>kept together.</em>
           </h1>
           <p>
-            Bookings, invoices and membership balance are protected by your
-            account.
+            Enter your registered mobile number. We’ll send a one-time login
+            code on WhatsApp so you can see invoices, loyalty points and stamp
+            rewards.
           </p>
-          <div className="portal-auth-tabs">
-            <button
-              className={mode === "login" ? "active" : ""}
-              onClick={() => setMode("login")}
-            >
-              Sign in
-            </button>
-            <button
-              className={mode === "register" ? "active" : ""}
-              onClick={() => setMode("register")}
-            >
-              Create account
-            </button>
-          </div>
-          {mode === "register" && (
-            <>
-              <label>
-                Name
-                <input
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder="Your name"
-                />
-              </label>
-              <label>
-                Phone
-                <input
-                  value={phone}
-                  onChange={(event) => setPhone(event.target.value)}
-                  placeholder="+91…"
-                />
-              </label>
-            </>
+          <label>
+            Mobile number
+            <input
+              inputMode="tel"
+              value={phone}
+              onChange={(event) => setPhone(event.target.value)}
+              placeholder="75100 20067"
+            />
+          </label>
+          {otpSent && (
+            <label>
+              WhatsApp OTP
+              <input
+                inputMode="numeric"
+                maxLength={6}
+                value={otp}
+                onChange={(event) => setOtp(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                placeholder="6 digit code"
+              />
+            </label>
           )}
-          <label>
-            Email
-            <input
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="you@example.com"
-            />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder={
-                mode === "register" ? "At least 8 characters" : "Your password"
-              }
-            />
-          </label>
-          {mode === "login" && <Link className="auth-mode-link" href="/forgot-password">Forgot password?</Link>}
+          <p className="portal-auth-help">
+            New customer? Ask the salon desk to add your number first, then login here.
+          </p>
           {message && <span className="portal-auth-error">{message}</span>}
           <button
             className="button admin-primary"
-            disabled={
-              busy ||
-              !email ||
-              !password ||
-              (mode === "register" && (!name || password.length < 8))
-            }
-            onClick={() => void authenticate()}
+            disabled={busy || phone.replace(/\D/g, "").length < 10 || (otpSent && otp.length !== 6)}
+            onClick={() => void (otpSent ? verifyOtp() : requestOtp())}
           >
-            {busy
-              ? "Opening portal…"
-              : mode === "login"
-                ? "Sign in"
-                : "Create account"}
+            {busy ? "Please wait…" : otpSent ? "Verify OTP & open portal" : "Send WhatsApp OTP"}
           </button>
+          {otpSent && (
+            <button className="auth-mode-link" disabled={busy} onClick={() => void requestOtp()}>
+              Resend OTP
+            </button>
+          )}
         </section>
       </main>
     );
@@ -164,6 +154,12 @@ export default function CustomerPortal() {
     .sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))[0];
   const membership = data.memberships[0];
   const servicePackages = data.servicePackages ?? [];
+  const stampEveryVisits = Math.max(2, Math.min(50, Number(data.marketingSettings?.rewardRules?.stampEveryVisits ?? 5)));
+  const paidInvoiceCount = data.invoices.filter((invoice) => invoice.status === "PAID").length;
+  const stampProgress = paidInvoiceCount % stampEveryVisits || (paidInvoiceCount > 0 ? stampEveryVisits : 0);
+  const nextStampCount = stampEveryVisits - (stampProgress === stampEveryVisits ? 0 : stampProgress);
+  const spinWin = data.loyaltyLedger.find((entry) => entry.reason.toLowerCase().includes("spin"));
+  const scratchWin = data.loyaltyLedger.find((entry) => entry.reason.toLowerCase().includes("scratch"));
   return (
     <main className="portal-shell customer-portal">
       <header className="portal-header">
@@ -311,6 +307,35 @@ export default function CustomerPortal() {
             ))}
             {!data.loyaltyLedger?.length && <small>Your points activity will appear here.</small>}
           </div>
+        </section>
+        <section className="portal-reward-grid">
+          <article className="portal-stamp-card">
+            <div>
+              <p className="eyebrow">Digital stamp card</p>
+              <h2>{stampProgress}/{stampEveryVisits}</h2>
+              <p>
+                Every paid invoice adds a stamp. {nextStampCount === 0
+                  ? "Milestone reached—reward is added from the POS rules."
+                  : `${nextStampCount} more paid visit${nextStampCount === 1 ? "" : "s"} for the next stamp reward.`}
+              </p>
+            </div>
+            <div className="stamp-row" aria-label={`${stampProgress} of ${stampEveryVisits} stamps`}>
+              {Array.from({ length: stampEveryVisits }).map((_, index) => (
+                <span className={index < stampProgress ? "filled" : ""} key={index}>✦</span>
+              ))}
+            </div>
+          </article>
+          <article className="portal-draw-card">
+            <p className="eyebrow">Spin & scratch rewards</p>
+            <h2>{spinWin || scratchWin ? "Prize unlocked" : "Better luck next visit"}</h2>
+            <p>
+              Rewards are controlled by salon rules after invoice payment, so only selected visits win.
+            </p>
+            <div>
+              <span>{spinWin ? `Spin won +${spinWin.deltaPoints}` : "Spin: no active win yet"}</span>
+              <span>{scratchWin ? `Scratch won +${scratchWin.deltaPoints}` : "Scratch: waiting for milestone"}</span>
+            </div>
+          </article>
         </section>
         {servicePackages.length > 0 && (
           <section className="portal-packages">

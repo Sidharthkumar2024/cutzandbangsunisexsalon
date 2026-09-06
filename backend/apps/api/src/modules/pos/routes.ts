@@ -27,6 +27,33 @@ const paymentSchema = z.object({
 const moneyText = (minor: number) => `₹${(minor / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const invoicePdfPrefix = "invoices/v2/";
 
+function customerPortalUrl(phone?: string | null) {
+  const base = process.env.PUBLIC_APP_URL?.replace(/\/$/u, "");
+  if (!base) return undefined;
+  const query = phone ? `?phone=${encodeURIComponent(phone)}` : "";
+  return `${base}/customer${query}`;
+}
+
+function invoiceWhatsAppBody(input: {
+  customerPhone?: string | null;
+  invoiceNumber: string;
+  totalMinor: number;
+  earnedPoints?: number;
+  marketingRewardPoints?: number;
+  balanceAfter?: number | null;
+}) {
+  const earned = (input.earnedPoints ?? 0) + (input.marketingRewardPoints ?? 0);
+  const lines = [
+    `Thank you for visiting Cutz & Bangs.`,
+    `Invoice ${input.invoiceNumber} · ${moneyText(input.totalMinor)}`,
+  ];
+  if (earned > 0) lines.push(`Loyalty earned: +${earned} points`);
+  if (typeof input.balanceAfter === "number") lines.push(`Current loyalty balance: ${input.balanceAfter} points`);
+  const portal = customerPortalUrl(input.customerPhone);
+  if (portal) lines.push(`View invoices, stamp card and rewards: ${portal}`);
+  return lines.join("\n");
+}
+
 function inlineInvoicePdfError(bytes: Buffer) {
   if (bytes.length > WAHA_INLINE_MEDIA_MAX_BYTES) return "invoice_pdf_too_large_for_inline_whatsapp";
   if (bytes.length < 5 || bytes.subarray(0, 5).toString("ascii") !== "%PDF-") return "invoice_pdf_invalid";
@@ -678,6 +705,17 @@ export default async function posRoutes(app: FastifyInstance) {
             invoiceNumber: result.invoice.number,
             total: moneyText(result.invoice.totalMinor),
           };
+          const loyaltySummary = [
+            result.loyalty.earnedPoints + result.loyalty.marketingRewardPoints > 0
+              ? `Loyalty earned: +${result.loyalty.earnedPoints + result.loyalty.marketingRewardPoints} points`
+              : undefined,
+            typeof result.loyalty.balanceAfter === "number"
+              ? `Current loyalty balance: ${result.loyalty.balanceAfter} points`
+              : undefined,
+            customerPortalUrl(customer.phone)
+              ? `Customer rewards portal: ${customerPortalUrl(customer.phone)}`
+              : undefined,
+          ].filter(Boolean).join("\n");
           const receiptPdf = async () => {
             if (!automation.invoiceAttachPdf) return undefined;
             archivedPdf ??= await buildAndStorePdf(result.invoice.id);
@@ -691,7 +729,10 @@ export default async function posRoutes(app: FastifyInstance) {
                 branchId: body.branchId,
                 to: customer.email,
                 subject: fillAutomationTemplate(automation.invoiceEmailSubject, templateValues),
-                html: plainTextEmailHtml(fillAutomationTemplate(automation.invoiceEmailBody, templateValues)),
+                html: plainTextEmailHtml([
+                  fillAutomationTemplate(automation.invoiceEmailBody, templateValues),
+                  loyaltySummary,
+                ].filter(Boolean).join("\n\n")),
                 attachments: pdf
                   ? [{ filename: `${result.invoice.number}.pdf`, storageKey: pdf.key }]
                   : undefined,
@@ -728,7 +769,10 @@ export default async function posRoutes(app: FastifyInstance) {
                 }
                 const sendResult = await messaging.send({
                   to: customer.phone,
-                  body: fillAutomationTemplate(automation.invoiceWhatsappBody, templateValues),
+                  body: [
+                    fillAutomationTemplate(automation.invoiceWhatsappBody, templateValues),
+                    loyaltySummary,
+                  ].filter(Boolean).join("\n\n"),
                   mediaUrl,
                   mediaData,
                   mediaMimeType: mediaData ? "application/pdf" : undefined,
@@ -1101,7 +1145,12 @@ export default async function posRoutes(app: FastifyInstance) {
       }
       const result = await messaging.send({
         to: phone,
-        body: `Thank you for visiting Cutz & Bangs. Invoice ${inv.number}`,
+        body: invoiceWhatsAppBody({
+          customerPhone: inv.customer?.phone,
+          invoiceNumber: inv.number,
+          totalMinor: inv.totalMinor,
+          balanceAfter: inv.customer?.loyaltyPoints,
+        }),
         mediaUrl,
         mediaData,
         mediaMimeType: mediaData ? "application/pdf" : undefined,

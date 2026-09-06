@@ -12,6 +12,10 @@ export type BackendUser = {
 export type BackendLoginResult =
   | { token: string; user: BackendUser; twoFactorRequired?: false }
   | { twoFactorRequired: true };
+export type BackendCustomerOtpResult = {
+  accepted: true;
+  expiresInSeconds: number;
+};
 export type BackendTwoFactorStatus = {
   enabled: boolean;
   enabledAt?: string | null;
@@ -861,6 +865,14 @@ export type CustomerPortalOverview = BackendCustomer & {
   }>;
   loyaltyLedger: BackendLoyaltyEntry[];
   loyaltyRules: BackendLoyaltyRules;
+  marketingSettings?: {
+    rewardRules?: {
+      stampEveryVisits?: number;
+      stampRewardPoints?: number;
+      spinChancePercent?: number;
+      scratchEveryVisits?: number;
+    };
+  } | null;
 };
 export type StaffPortalDay = {
   staff: BackendStaff & { commissionRate: number };
@@ -1011,6 +1023,16 @@ export const backendApi = {
     request<BackendLoginResult>("/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password, ...secondFactor }),
+    }),
+  requestCustomerOtp: (phone: string, branchId = "main") =>
+    request<BackendCustomerOtpResult>("/auth/customer/otp/request", {
+      method: "POST",
+      body: JSON.stringify({ phone, branchId }),
+    }),
+  verifyCustomerOtp: (phone: string, otp: string, branchId = "main") =>
+    request<{ token: string; user: BackendUser }>("/auth/customer/otp/verify", {
+      method: "POST",
+      body: JSON.stringify({ phone, otp, branchId }),
     }),
   requestPasswordReset: (email: string) => request<{ accepted: true }>("/auth/password/forgot", { method: "POST", body: JSON.stringify({ email }) }),
   resetPassword: (token: string, password: string) => request<unknown>("/auth/password/reset", { method: "POST", body: JSON.stringify({ token, password }) }),

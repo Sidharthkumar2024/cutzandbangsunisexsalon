@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomInt } from "node:crypto";
 import QRCode from "qrcode";
 import { prisma } from "@cutz/db";
 import { decryptSecret, encryptSecret, passwordResetEmail } from "@cutz/providers";
@@ -9,6 +9,7 @@ import { hashPassword, verifyPassword } from "../../lib/password.js";
 import { audit } from "../../lib/audit.js";
 import { authorize, hashToken } from "../../plugins/auth.js";
 import { getLoyaltyRules, postLoyaltyEntry } from "../loyalty/ledger.js";
+import { applyProviderSettings } from "../provider-config/config.js";
 import {
   buildOtpAuthUri,
   findRecoveryCodeHash,
@@ -19,10 +20,53 @@ import {
 } from "./two-factor.js";
 
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_HOURS ?? 168) * 3600_000;
+const CUSTOMER_OTP_TTL_MS = 5 * 60_000;
+const CUSTOMER_OTP_MAX_ATTEMPTS = 5;
 
 function issueToken() {
   const token = randomBytes(32).toString("base64url");
   return { token, tokenHash: hashToken(token) };
+}
+
+const phoneDigits = (value: string) => value.replace(/\D/gu, "");
+const phoneLookupKey = (value: string) => {
+  const digits = phoneDigits(value);
+  return digits.length >= 10 ? digits.slice(-10) : digits;
+};
+
+function customerOtpKey(branchId: string, lookupKey: string) {
+  return `customer-otp:${branchId}:${lookupKey}`;
+}
+
+function customerOtpDigest(lookupKey: string, otp: string, nonce: string) {
+  return createHash("sha256").update(`${lookupKey}:${otp}:${nonce}`).digest("hex");
+}
+
+async function sendCustomerLoginOtp(input: { branchId: string; phone: string; name: string; otp: string }) {
+  const context = await applyProviderSettings(input.branchId);
+  const body = [
+    `Cutz & Bangs login OTP: ${input.otp}`,
+    "Valid for 5 minutes.",
+    "If you did not request this, ignore this message.",
+  ].join("\n");
+  const channels = ["WHATSAPP_UNOFFICIAL", "WHATSAPP_OFFICIAL"] as const;
+  let lastError = "whatsapp_otp_unavailable";
+  for (const channel of channels) {
+    const provider = context.whatsapp(channel);
+    const health = await provider.health?.().catch((error) => ({
+      configured: true,
+      connected: false,
+      detail: error instanceof Error ? error.message : "provider_unavailable",
+    }));
+    if (health?.configured === false || health?.connected === false) {
+      lastError = health.detail ?? `${channel.toLowerCase()}_not_connected`;
+      continue;
+    }
+    const result = await provider.send({ to: input.phone, body });
+    if (result.status !== "failed") return { channel, status: result.status, externalId: result.externalId };
+    lastError = [result.error, result.detail].filter(Boolean).join(": ") || "whatsapp_otp_failed";
+  }
+  throw new Error(lastError);
 }
 
 function twoFactorCredential(input: { code?: string; recoveryCode?: string }) {
@@ -40,6 +84,179 @@ async function resolveActiveTenantId(user: { activeTenantId: string | null; bran
 }
 
 export default async function authRoutes(app: FastifyInstance) {
+  app.post("/auth/customer/otp/request", { config: { rateLimit: { max: 5, timeWindow: "15 minutes" } } }, async (req, reply) => {
+    const { phone: rawPhone, branchId = "main" } = z
+      .object({
+        phone: z.string().min(8).max(30),
+        branchId: z.string().trim().min(1).default("main"),
+      })
+      .parse(req.body);
+    const lookupKey = phoneLookupKey(rawPhone);
+    if (lookupKey.length < 10) return reply.code(400).send({ error: "valid_mobile_required" });
+    const phone = phoneDigits(rawPhone);
+    const customer = await prisma.customer.findFirst({
+      where: {
+        branchId,
+        deletedAt: null,
+        OR: [{ phone }, { phone: { endsWith: lookupKey } }],
+      },
+      select: { id: true, name: true, phone: true, branchId: true },
+    });
+    // Keep the response generic so random people cannot test which numbers
+    // are in the salon CRM.
+    if (!customer?.phone) return reply.code(202).send({ accepted: true, expiresInSeconds: Math.floor(CUSTOMER_OTP_TTL_MS / 1000) });
+
+    const otp = String(randomInt(100000, 1000000));
+    const nonce = randomBytes(16).toString("base64url");
+    const expiresAt = new Date(Date.now() + CUSTOMER_OTP_TTL_MS).toISOString();
+    await prisma.setting.upsert({
+      where: { key: customerOtpKey(branchId, lookupKey) },
+      create: {
+        key: customerOtpKey(branchId, lookupKey),
+        value: {
+          branchId,
+          customerId: customer.id,
+          otpHash: customerOtpDigest(lookupKey, otp, nonce),
+          nonce,
+          expiresAt,
+          attempts: 0,
+        },
+      },
+      update: {
+        value: {
+          branchId,
+          customerId: customer.id,
+          otpHash: customerOtpDigest(lookupKey, otp, nonce),
+          nonce,
+          expiresAt,
+          attempts: 0,
+        },
+      },
+    });
+
+    try {
+      const delivery = await sendCustomerLoginOtp({
+        branchId,
+        phone: customer.phone,
+        name: customer.name,
+        otp,
+      });
+      await audit("auth.customer_otp.sent", "Customer", customer.id, {
+        after: { channel: delivery.channel, status: delivery.status, externalId: delivery.externalId },
+        ip: req.ip,
+      });
+      return reply.code(202).send({ accepted: true, expiresInSeconds: Math.floor(CUSTOMER_OTP_TTL_MS / 1000) });
+    } catch (error) {
+      app.log.warn({ err: error, customerId: customer.id, branchId }, "customer OTP WhatsApp delivery failed");
+      return reply.code(503).send({ error: "customer_otp_delivery_failed", detail: error instanceof Error ? error.message : "WhatsApp unavailable" });
+    }
+  });
+
+  app.post("/auth/customer/otp/verify", { config: { rateLimit: { max: 10, timeWindow: "15 minutes" } } }, async (req, reply) => {
+    const { phone: rawPhone, otp, branchId = "main" } = z
+      .object({
+        phone: z.string().min(8).max(30),
+        otp: z.string().regex(/^\d{6}$/u),
+        branchId: z.string().trim().min(1).default("main"),
+      })
+      .parse(req.body);
+    const lookupKey = phoneLookupKey(rawPhone);
+    if (lookupKey.length < 10) return reply.code(400).send({ error: "valid_mobile_required" });
+    const key = customerOtpKey(branchId, lookupKey);
+    const row = await prisma.setting.findUnique({ where: { key } });
+    const stored = (row?.value ?? {}) as {
+      branchId?: string;
+      customerId?: string;
+      otpHash?: string;
+      nonce?: string;
+      expiresAt?: string;
+      attempts?: number;
+    };
+    if (!stored.customerId || !stored.otpHash || !stored.nonce || !stored.expiresAt) {
+      return reply.code(400).send({ error: "invalid_or_expired_otp" });
+    }
+    if (new Date(stored.expiresAt) <= new Date()) {
+      await prisma.setting.delete({ where: { key } }).catch(() => undefined);
+      return reply.code(400).send({ error: "invalid_or_expired_otp" });
+    }
+    const attempts = stored.attempts ?? 0;
+    if (attempts >= CUSTOMER_OTP_MAX_ATTEMPTS) {
+      await prisma.setting.delete({ where: { key } }).catch(() => undefined);
+      return reply.code(429).send({ error: "too_many_otp_attempts" });
+    }
+    const suppliedHash = customerOtpDigest(lookupKey, otp, stored.nonce);
+    if (suppliedHash !== stored.otpHash) {
+      await prisma.setting.update({
+        where: { key },
+        data: { value: { ...stored, attempts: attempts + 1 } },
+      });
+      return reply.code(400).send({ error: "invalid_or_expired_otp" });
+    }
+
+    const customer = await prisma.customer.findFirst({
+      where: { id: stored.customerId, branchId, deletedAt: null },
+      include: { user: true, branch: { select: { tenantId: true } } },
+    });
+    if (!customer) return reply.code(404).send({ error: "customer_profile_not_found" });
+    const normalizedPhone = phoneDigits(customer.phone ?? rawPhone);
+    const user = await prisma.$transaction(async (tx) => {
+      let linked = customer.user;
+      if (!linked) {
+        const existingByPhone = normalizedPhone
+          ? await tx.user.findUnique({ where: { phone: normalizedPhone }, include: { customer: true } }).catch(() => null)
+          : null;
+        if (existingByPhone?.role === "CUSTOMER" && !existingByPhone.customer) {
+          linked = await tx.user.update({
+            where: { id: existingByPhone.id },
+            data: { isActive: true, branchId, activeTenantId: customer.branch.tenantId },
+          });
+        } else {
+          linked = await tx.user.create({
+            data: {
+              role: "CUSTOMER",
+              phone: existingByPhone ? undefined : normalizedPhone || undefined,
+              branchId,
+              activeTenantId: customer.branch.tenantId,
+            },
+          });
+        }
+        await tx.customer.update({ where: { id: customer.id }, data: { userId: linked.id } });
+      } else if (!linked.isActive) {
+        linked = await tx.user.update({ where: { id: linked.id }, data: { isActive: true } });
+      }
+      await tx.setting.delete({ where: { key } }).catch(() => undefined);
+      return linked;
+    });
+    const activeTenantId = await resolveActiveTenantId(user);
+    const { token, tokenHash } = issueToken();
+    await prisma.session.create({
+      data: {
+        userId: user.id,
+        activeTenantId,
+        tokenHash,
+        expiresAt: new Date(Date.now() + SESSION_TTL_MS),
+        ip: req.ip,
+        userAgent: req.headers["user-agent"],
+      },
+    });
+    await audit("auth.customer_otp.verify", "Customer", customer.id, {
+      actorUserId: user.id,
+      after: { sessionIssued: true },
+      ip: req.ip,
+    });
+    return {
+      token,
+      user: {
+        id: user.id,
+        email: user.email ?? "",
+        role: user.role,
+        activeTenantId,
+        branchId: user.branchId,
+        permissionKeys: user.permissionKeys,
+      },
+    };
+  });
+
   app.post("/auth/login", { config: { rateLimit: { max: 10, timeWindow: "15 minutes" } } }, async (req, reply) => {
     const { email: rawEmail, password, code, recoveryCode } = z
       .object({
