@@ -560,7 +560,7 @@ export default function CustomerPortal() {
               </button>
               {rewardModalResult && (
                 <small>
-                  Daily attempt saved · balance {rewardModalResult.balanceAfter.toLocaleString("en-IN")} points
+                  Daily attempt saved · balance {Math.max(data.loyaltyPoints, rewardModalResult.balanceAfter).toLocaleString("en-IN")} points
                 </small>
               )}
             </div>
