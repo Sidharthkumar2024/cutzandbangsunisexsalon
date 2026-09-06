@@ -106,7 +106,9 @@ async function forward(request: Request, context: { params: Promise<{ path: stri
       'referrer-policy': 'no-referrer',
     });
     const isSessionIssue = request.method === 'POST' && (
-      backendPath === '/api/v1/auth/login' || backendPath === '/api/v1/auth/register'
+      backendPath === '/api/v1/auth/login' ||
+      backendPath === '/api/v1/auth/register' ||
+      backendPath === '/api/v1/auth/customer/otp/verify'
     );
     const body = await response.arrayBuffer();
 

@@ -200,12 +200,15 @@ export default async function authRoutes(app: FastifyInstance) {
     if (!customer) return reply.code(404).send({ error: "customer_profile_not_found" });
     const normalizedPhone = phoneDigits(customer.phone ?? rawPhone);
     const user = await prisma.$transaction(async (tx) => {
-      let linked = customer.user;
+      let linked = customer.user?.role === "CUSTOMER" ? customer.user : null;
       if (!linked) {
         const existingByPhone = normalizedPhone
-          ? await tx.user.findUnique({ where: { phone: normalizedPhone }, include: { customer: true } }).catch(() => null)
+          ? await tx.user.findUnique({ where: { phone: normalizedPhone }, include: { customer: { select: { id: true } } } }).catch(() => null)
           : null;
-        if (existingByPhone?.role === "CUSTOMER" && !existingByPhone.customer) {
+        if (
+          existingByPhone?.role === "CUSTOMER" &&
+          (!existingByPhone.customer || existingByPhone.customer.id === customer.id)
+        ) {
           linked = await tx.user.update({
             where: { id: existingByPhone.id },
             data: { isActive: true, branchId },
