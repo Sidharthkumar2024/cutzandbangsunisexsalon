@@ -478,7 +478,9 @@ const sanitizeCampaignRecurrence = (value: BackendCampaignRecurrence): BackendCa
 const campaignRecurrenceSummary = (value?: BackendCampaignRecurrence | null) => {
   if (!value?.enabled) return "One-time campaign";
   if (value.frequency === "WEEKLY") {
-    const selected = (value.daysOfWeek ?? []).map((day) => campaignWeekdays.find(([id]) => Number(id) === day)?.[1]).filter(Boolean).join(", ");
+    const selectedDays = [...new Set(value.daysOfWeek ?? [])].filter((day) => day >= 0 && day <= 6);
+    if (selectedDays.length === 7) return `Repeats every day at ${value.time}${value.endDate ? ` until ${value.endDate}` : ""}`;
+    const selected = selectedDays.map((day) => campaignWeekdays.find(([id]) => Number(id) === day)?.[1]).filter(Boolean).join(", ");
     return `Repeats weekly ${selected ? `on ${selected}` : ""} at ${value.time}${value.endDate ? ` until ${value.endDate}` : ""}`;
   }
   const selected = (value.daysOfMonth ?? []).join(", ");
@@ -489,7 +491,7 @@ const defaultCampaignRecurrence = (): BackendCampaignRecurrence => {
   return {
     enabled: false,
     frequency: "WEEKLY",
-    daysOfWeek: [now.getDay()],
+    daysOfWeek: campaignWeekdays.map(([id]) => Number(id)),
     daysOfMonth: [now.getDate()],
     time: `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
   };
@@ -7205,7 +7207,11 @@ function Campaigns({
     try {
       const existingRule = campaign.recurrenceRule && sanitizeCampaignRecurrence(campaign.recurrenceRule);
       const nextRule = enabled
-        ? { ...(existingRule?.enabled ? existingRule : defaultCampaignRecurrence()), enabled: true }
+        ? {
+            ...(existingRule?.enabled ? existingRule : defaultCampaignRecurrence()),
+            enabled: true,
+            daysOfWeek: campaignWeekdays.map(([id]) => Number(id)),
+          }
         : undefined;
       const result = await backendApi.updateCampaignRecurrence(token, campaign.id, {
         enabled,
@@ -7346,7 +7352,7 @@ function Campaigns({
           <div>
             <p className="eyebrow">Automatic campaign</p>
             <h3>Repeat this campaign</h3>
-            <small>Turn this on for offers that should keep running, for example every Friday. The same selected audience is reused campaign-only; CSV numbers are not added to Customers.</small>
+            <small>Turn this on for offers that should keep running every day by default. The same selected audience is reused campaign-only; CSV numbers are not added to Customers.</small>
           </div>
           <label className="campaign-repeat-toggle">
             <input

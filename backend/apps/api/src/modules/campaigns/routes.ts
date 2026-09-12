@@ -11,6 +11,7 @@ import { applyProviderSettings, publicProviderSettings } from "../provider-confi
 const ADMIN = ["OWNER", "ADMIN", "MANAGER"] as const;
 const CAMPAIGN_CTA_TYPES = ["CALL", "WEBSITE", "LOCATION"] as const;
 const CAMPAIGN_RECURRENCE_FREQUENCIES = ["WEEKLY", "MONTHLY"] as const;
+const ALL_WEEKDAYS = [0, 1, 2, 3, 4, 5, 6];
 const phoneDigits = (value: string) => {
   const digits = value.replace(/\D/g, "");
   if (digits.length === 12 && digits.startsWith("91") && /^[6-9]\d{9}$/.test(digits.slice(2))) return digits.slice(2);
@@ -116,17 +117,15 @@ function defaultWeeklyRecurrence(after: Date, timeZone: string): CampaignRecurre
     timeZone,
     hour: "2-digit",
     minute: "2-digit",
-    weekday: "short",
     hourCycle: "h23",
   }).formatToParts(after);
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
-  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(get("weekday"));
   const hour = get("hour") || "11";
   const minute = get("minute") || "00";
   return {
     enabled: true,
     frequency: "WEEKLY",
-    daysOfWeek: [weekday >= 0 ? weekday : 5],
+    daysOfWeek: ALL_WEEKDAYS,
     daysOfMonth: [1],
     time: `${hour}:${minute}`,
   };
@@ -574,7 +573,11 @@ export default async function campaignRoutes(app: FastifyInstance) {
       : parsedExisting.success && parsedExisting.data.enabled
         ? parsedExisting.data
         : defaultWeeklyRecurrence(new Date(), timeZone);
-    const enabledRule: CampaignRecurrenceRule = { ...rule, enabled: true };
+    const enabledRule: CampaignRecurrenceRule = {
+      ...rule,
+      enabled: true,
+      ...(rule.frequency === "WEEKLY" ? { daysOfWeek: ALL_WEEKDAYS } : {}),
+    };
     const recurrenceNextAt = nextRecurringAt(enabledRule, new Date(), timeZone);
     if (!recurrenceNextAt) return reply.code(400).send({ error: "recurrence_has_no_future_run" });
     const campaign = await prisma.campaign.update({

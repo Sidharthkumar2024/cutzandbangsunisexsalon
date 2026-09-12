@@ -749,51 +749,53 @@ export default async function posRoutes(app: FastifyInstance) {
           }
           if (automation.autoInvoiceWhatsapp && customer.phone && customer.waConsent) {
             try {
-              const channel = await prisma.channel.findFirst({
-                where: { type: automation.invoiceWhatsappChannel, isActive: true },
-              });
-              if (channel) {
-                const providerContext = await applyProviderSettings(body.branchId);
-                const messaging = providerContext.whatsapp(automation.invoiceWhatsappChannel);
-                const pdf = await receiptPdf();
-                let mediaUrl: string | undefined;
-                let mediaData: string | undefined;
-                if (pdf && automation.invoiceWhatsappChannel === "WHATSAPP_UNOFFICIAL") {
-                  const pdfError = inlineInvoicePdfError(pdf.buf);
-                  if (pdfError) throw new Error(pdfError);
-                  mediaData = pdf.buf.toString("base64");
-                } else if (pdf) {
-                  mediaUrl = await providers.storage().signedUrl(pdf.key, 3_600);
-                  const mediaError = invoiceWhatsAppMediaError(automation.invoiceWhatsappChannel, mediaUrl);
-                  if (mediaError) throw new Error(mediaError);
-                }
-                const sendResult = await messaging.send({
-                  to: customer.phone,
-                  body: [
-                    fillAutomationTemplate(automation.invoiceWhatsappBody, templateValues),
-                    loyaltySummary,
-                  ].filter(Boolean).join("\n\n"),
-                  mediaUrl,
-                  mediaData,
-                  mediaMimeType: mediaData ? "application/pdf" : undefined,
-                  mediaFilename: pdf ? `${result.invoice.number}.pdf` : undefined,
-                  mediaType: mediaUrl || mediaData ? "document" : undefined,
-                });
-                if (sendResult.status === "failed") {
-                  throw new Error([sendResult.error ?? "whatsapp_send_failed", sendResult.detail].filter(Boolean).join(": "));
-                }
-                await audit("invoice.send", "Invoice", result.invoice.id, {
-                  actorUserId: req.user?.id,
-                  after: {
-                    channel: automation.invoiceWhatsappChannel,
-                    recipient: customer.phone,
-                    status: sendResult.status,
-                    externalId: sendResult.externalId,
-                    automatic: true,
-                  },
-                  ip: req.ip,
-                });
+              const providerContext = await applyProviderSettings(body.branchId);
+              const messaging = providerContext.whatsapp(automation.invoiceWhatsappChannel);
+              const providerHealth = await messaging.health?.();
+              if (providerHealth?.configured === false) {
+                throw new Error(`${automation.invoiceWhatsappChannel === "WHATSAPP_OFFICIAL" ? "wa_official_not_configured" : "wa_unofficial_not_configured"}: ${providerHealth.detail ?? "Provider is not configured"}`);
               }
+              if (providerHealth?.configured && providerHealth.connected === false) {
+                throw new Error(`${automation.invoiceWhatsappChannel === "WHATSAPP_OFFICIAL" ? "wa_official_not_connected" : "wa_unofficial_not_connected"}: ${providerHealth.detail ?? providerHealth.status ?? "Provider is not connected"}`);
+              }
+              const pdf = await receiptPdf();
+              let mediaUrl: string | undefined;
+              let mediaData: string | undefined;
+              if (pdf && automation.invoiceWhatsappChannel === "WHATSAPP_UNOFFICIAL") {
+                const pdfError = inlineInvoicePdfError(pdf.buf);
+                if (pdfError) throw new Error(pdfError);
+                mediaData = pdf.buf.toString("base64");
+              } else if (pdf) {
+                mediaUrl = await providers.storage().signedUrl(pdf.key, 3_600);
+                const mediaError = invoiceWhatsAppMediaError(automation.invoiceWhatsappChannel, mediaUrl);
+                if (mediaError) throw new Error(mediaError);
+              }
+              const sendResult = await messaging.send({
+                to: customer.phone,
+                body: [
+                  fillAutomationTemplate(automation.invoiceWhatsappBody, templateValues),
+                  loyaltySummary,
+                ].filter(Boolean).join("\n\n"),
+                mediaUrl,
+                mediaData,
+                mediaMimeType: mediaData ? "application/pdf" : undefined,
+                mediaFilename: pdf ? `${result.invoice.number}.pdf` : undefined,
+                mediaType: mediaUrl || mediaData ? "document" : undefined,
+              });
+              if (sendResult.status === "failed") {
+                throw new Error([sendResult.error ?? "whatsapp_send_failed", sendResult.detail].filter(Boolean).join(": "));
+              }
+              await audit("invoice.send", "Invoice", result.invoice.id, {
+                actorUserId: req.user?.id,
+                after: {
+                  channel: automation.invoiceWhatsappChannel,
+                  recipient: customer.phone,
+                  status: sendResult.status,
+                  externalId: sendResult.externalId,
+                  automatic: true,
+                },
+                ip: req.ip,
+              });
             } catch (error) {
               app.log.warn({ err: error, invoiceId: result.invoice.id }, "automatic WhatsApp receipt was skipped");
             }

@@ -16,7 +16,7 @@ export type ReceiptAutomationSettings = {
 
 export const DEFAULT_RECEIPT_AUTOMATION_SETTINGS: ReceiptAutomationSettings = {
   autoInvoiceEmail: true,
-  autoInvoiceWhatsapp: false,
+  autoInvoiceWhatsapp: true,
   invoiceWhatsappChannel: "WHATSAPP_UNOFFICIAL",
   invoiceAttachPdf: true,
   invoiceEmailSubject: "Your Cutz & Bangs invoice {{invoiceNumber}}",
