@@ -456,24 +456,37 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
     } else {
       // Evolution exposes restart and logout (rather than WAHA's start/stop).
       const route = isLogout ? "logout" : "restart";
-      await this.json(`/instance/${route}/${encodeURIComponent(this.session)}`, { method: isLogout ? "DELETE" : "POST", body: "{}" });
+      try {
+        await this.json(`/instance/${route}/${encodeURIComponent(this.session)}`, { method: isLogout ? "DELETE" : "POST", body: "{}" });
+      } catch (error) {
+        // Some Evolution builds intentionally omit the restart endpoint.  A
+        // connected instance is already usable, so do not prevent webhook
+        // repair (or show an opaque 404) merely because a restart is absent.
+        if (isLogout || !(error instanceof Error) || !/^evolution_404\b/.test(error.message)) throw error;
+      }
     }
     // Evolution does not inherit an application callback simply because an
     // instance is connected. Configure the per-instance webhook whenever the
     // session is created or restarted so inbound WhatsApp replies reach the
     // salon inbox as well as outbound sends.
     if (!isLogout && this.callbackUrl && this.webhookSecret) {
-      await this.json(`/event/webhook/set/${encodeURIComponent(this.session)}`, {
-        method: "POST",
-        body: JSON.stringify({
-          enabled: true,
-          url: this.callbackUrl,
-          webhookByEvents: false,
-          webhookBase64: false,
-          events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "SEND_MESSAGE", "CONNECTION_UPDATE"],
-          headers: { "x-internal-secret": this.webhookSecret },
-        }),
+      const payload = JSON.stringify({
+        enabled: true,
+        url: this.callbackUrl,
+        webhookByEvents: false,
+        webhookBase64: false,
+        events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "SEND_MESSAGE", "CONNECTION_UPDATE"],
+        headers: { "x-internal-secret": this.webhookSecret },
       });
+      try {
+        await this.json(`/event/webhook/set/${encodeURIComponent(this.session)}`, { method: "POST", body: payload });
+      } catch (error) {
+        // Evolution v1 mounts webhooks at /webhook while v2 mounts them at
+        // /event/webhook.  Support both so an image upgrade does not break
+        // inbox delivery or the Settings restart action.
+        if (!(error instanceof Error) || !/^evolution_404\b/.test(error.message)) throw error;
+        await this.json(`/webhook/set/${encodeURIComponent(this.session)}`, { method: "POST", body: payload });
+      }
     }
     return this.health();
   }
