@@ -494,7 +494,7 @@ export default async function inboxRoutes(app: FastifyInstance) {
     const externalId = String(payload.id ?? envelope.externalId ?? "");
     const messageBody = String(payload.body ?? envelope.body ?? "");
     const timestamp = Number(payload.timestamp ?? envelope.timestamp ?? 0) || undefined;
-    if (!from || !externalId) return reply.code(400).send({ error: "invalid_waha_message" });
+    if (!from || !externalId) return reply.code(400).send({ error: "invalid_evolution_message" });
     await ensureChannels();
     const channel = await prisma.channel.findFirstOrThrow({ where: { type: "WHATSAPP_UNOFFICIAL" } });
     const displayName = typeof payload.pushName === "string" ? payload.pushName : typeof payload.notifyName === "string" ? payload.notifyName : undefined;

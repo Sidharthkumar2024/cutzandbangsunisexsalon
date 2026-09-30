@@ -7200,7 +7200,7 @@ function Campaigns({
       onRefresh();
     } catch (cause) {
       const error = cause instanceof Error ? prettyStatus(cause.message) : "Approval failed.";
-      setRowMessage(`Approval failed: ${error}. Check eligible recipients, consent, and WAHA connection.`);
+      setRowMessage(`Approval failed: ${error}. Check eligible recipients, consent, and Evolution API connection.`);
       setMessage(`Approval failed: ${error}`);
     } finally {
       setApprovingId("");
@@ -7246,7 +7246,7 @@ function Campaigns({
       onRefresh();
     } catch (cause) {
       const error = cause instanceof Error ? prettyStatus(cause.message) : "Retry failed.";
-      setRowMessage(`Retry failed: ${error}. Reconnect WAHA, then try again.`);
+      setRowMessage(`Retry failed: ${error}. Reconnect Evolution API, then try again.`);
     } finally {
       setRetryingId("");
     }
@@ -7259,8 +7259,8 @@ function Campaigns({
       const result = await backendApi.verifyCampaignPhones(token, { branchId: "main", phones: manualStats.uniquePhones });
       setVerification(result);
       setMessage(result.providerConnected
-        ? `Verification complete: ${result.registered} matched in WAHA contacts, ${result.unknown} unknown.`
-        : `WAHA verification unavailable: ${result.valid} valid numbers, ${result.unknown} unknown.`);
+        ? `Verification complete: ${result.registered} matched in Evolution contacts, ${result.unknown} unknown.`
+        : `Evolution verification unavailable: ${result.valid} valid numbers, ${result.unknown} unknown.`);
     } catch (cause) {
       setMessage(cause instanceof Error ? prettyStatus(cause.message) : "WhatsApp number verification failed.");
     } finally {
@@ -7306,7 +7306,7 @@ function Campaigns({
       </div>
       <div className={`campaign-connection-strip ${waStatus?.connected ? "connected" : "disconnected"}`}>
         <span aria-hidden="true" />
-        <div><strong>Unofficial WhatsApp</strong><small>{waStatus?.connected ? `Connected${waStatus.accountNumber ? ` · ${waStatus.accountNumber}` : ""}` : waStatus?.detail ?? "Checking WAHA connection…"}</small></div>
+        <div><strong>Evolution API WhatsApp</strong><small>{waStatus?.connected ? `Connected${waStatus.accountNumber ? ` · ${waStatus.accountNumber}` : ""}` : waStatus?.detail ?? "Checking Evolution API connection…"}</small></div>
         <b>{waStatus?.connected ? "READY" : "ACTION NEEDED"}</b>
       </div>
       <section className="campaign-safety-grid">
@@ -7318,20 +7318,20 @@ function Campaigns({
           <div className="campaign-audience-stats">
             <span><strong>{manualStats.total}</strong><small>Numbers found</small></span>
             <span><strong>{manualStats.valid}</strong><small>Valid format</small></span>
-            <span><strong>{verification?.registered ?? knownWhatsAppReady}</strong><small>{verification ? "WAHA matched" : "Known opted-in CRM"}</small></span>
+            <span><strong>{verification?.registered ?? knownWhatsAppReady}</strong><small>{verification ? "Evolution matched" : "Known opted-in CRM"}</small></span>
             <span><strong>{manualStats.duplicates}</strong><small>Duplicates</small></span>
           </div>
           <button className="button campaign-verify-button" disabled={!token || busy || !manualStats.valid} onClick={() => void verifyManualNumbers()}>
             {busy ? "Checking…" : "Verify WhatsApp numbers"}
           </button>
           {lastImportSummary && <small>{lastImportSummary}</small>}
-          <small>{verification ? verification.detail : "WAHA verification checks known WhatsApp contacts when connected; delivery report still remains the final truth."}</small>
+          <small>{verification ? verification.detail : "Evolution API connection is required for QR WhatsApp delivery; delivery reports remain the final truth."}</small>
         </article>
         <article className={`admin-card campaign-risk-card risk-${waRisk?.label ?? "high"}`}>
           <p className="eyebrow">Unofficial WhatsApp risk</p>
-          <div><strong>{waRisk?.score ?? "—"}/100</strong><span>{waRisk ? prettyStatus(waRisk.label) : "Awaiting WAHA status"}</span></div>
+          <div><strong>{waRisk?.score ?? "—"}/100</strong><span>{waRisk ? prettyStatus(waRisk.label) : "Awaiting Evolution API status"}</span></div>
           <progress max="100" value={waRisk?.score ?? 100} />
-          <p>{waRisk ? `${waRisk.safeguards.intervalSeconds}s spacing · ${waRisk.safeguards.dailyCap}/day · ${waRisk.safeguards.deliveryWindow}` : "Connect WAHA to calculate the current operational signal."}</p>
+          <p>{waRisk ? `${waRisk.safeguards.intervalSeconds}s spacing · ${waRisk.safeguards.dailyCap}/day · ${waRisk.safeguards.deliveryWindow}` : "Connect Evolution API to calculate the current operational signal."}</p>
           <small>This is a conservative heuristic, not a ban probability or guarantee. Unofficial access always retains meaningful account risk.</small>
         </article>
       </section>
@@ -8812,10 +8812,10 @@ function Settings({
     try {
       const next = await backendApi.controlWahaSession(token, action);
       setStatus((current) => current ? { ...current, unofficial: { ...current.unofficial, ...next } } : current);
-      setMessage(action === "create" ? "WAHA session created. Scan the QR below; it refreshes automatically." : `WAHA session ${action} complete.`);
+      setMessage(action === "create" ? "Evolution instance created. Scan the QR below; it refreshes automatically." : `Evolution instance ${action} complete.`);
       await loadIntegrations();
     } catch (cause) {
-      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "WAHA session action failed.");
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Evolution instance action failed.");
     } finally {
       setBusy(false);
     }
@@ -8827,9 +8827,9 @@ function Settings({
     try {
       const next = await backendApi.whatsappStatus(token);
       setStatus(next);
-      setMessage(next.unofficial.connected ? "WAHA is connected; QR stays hidden." : next.unofficial.qrDataUrl ? "Fresh QR loaded. Scan it in WhatsApp → Linked devices." : `WAHA status: ${prettyStatus(next.unofficial.status ?? "unavailable")}.`);
+      setMessage(next.unofficial.connected ? "Evolution API is connected; QR stays hidden." : next.unofficial.qrDataUrl ? "Fresh QR loaded. Scan it in WhatsApp → Linked devices." : `Evolution status: ${prettyStatus(next.unofficial.status ?? "unavailable")}.`);
     } catch (cause) {
-      const detail = cause instanceof Error ? prettyStatus(cause.message) : "WAHA status could not be loaded.";
+      const detail = cause instanceof Error ? prettyStatus(cause.message) : "Evolution status could not be loaded.";
       setIntegrationError(detail);
       setMessage(detail);
     } finally {
@@ -8842,10 +8842,10 @@ function Settings({
     setMessage("");
     try {
       const result = await backendApi.syncWahaContacts(token);
-      setMessage(`${result.fetched} WAHA contacts read, ${result.valid ?? Math.max(0, result.fetched - result.skipped)} usable numbers found. Nothing was added to Customers/CRM.`);
+      setMessage(`${result.fetched} Evolution contacts read, ${result.valid ?? Math.max(0, result.fetched - result.skipped)} usable numbers found. Nothing was added to Customers/CRM.`);
       onRefresh();
     } catch (cause) {
-      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "WAHA contact sync failed.");
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Evolution contact sync failed.");
     } finally {
       setBusy(false);
     }
@@ -9071,12 +9071,12 @@ function Settings({
             <small className="webhook-hint">Webhook endpoint: <code>/api/v1/webhooks/whatsapp</code></small>
           </section>
           <section>
-            <header><div><strong>WAHA · self-hosted unofficial API</strong><small>Free/open-source connector on an isolated private service</small></div><button type="button" className={`toggle ${providerConfig.whatsappUnofficial.enabled ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, enabled: !current.whatsappUnofficial.enabled } }))}><i /></button></header>
+            <header><div><strong>Evolution API · QR WhatsApp</strong><small>Self-hosted connector on an isolated private service</small></div><button type="button" className={`toggle ${providerConfig.whatsappUnofficial.enabled ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, enabled: !current.whatsappUnofficial.enabled } }))}><i /></button></header>
             <div className="provider-config-form">
-              <label>WAHA base URL<input value={providerConfig.whatsappUnofficial.baseUrl} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, baseUrl: event.target.value } }))} placeholder="http://waha:3000" /></label>
+              <label>Evolution API URL<input value={providerConfig.whatsappUnofficial.baseUrl} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, baseUrl: event.target.value } }))} placeholder="http://evolution:8080" /></label>
               <label>Backend webhook URL<input value={providerConfig.whatsappUnofficial.callbackUrl} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, callbackUrl: event.target.value } }))} placeholder="https://salon.example.com/api/v1/webhooks/whatsapp/unofficial" /></label>
               <label>Session name<input value={providerConfig.whatsappUnofficial.session} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, session: event.target.value } }))} placeholder="cutz-bangs-main" /></label>
-              <label>WAHA API key<input type="password" value={wahaApiKey} onChange={(event) => setWahaApiKey(event.target.value)} placeholder={providerConfig.whatsappUnofficial.hasApiKey ? "Saved · enter only to replace" : "At least 24 characters"} /></label>
+              <label>Evolution API key<input type="password" value={wahaApiKey} onChange={(event) => setWahaApiKey(event.target.value)} placeholder={providerConfig.whatsappUnofficial.hasApiKey ? "Saved · enter only to replace" : "At least 24 characters"} /></label>
               <label>Webhook secret<input type="password" value={wahaWebhookSecret} onChange={(event) => setWahaWebhookSecret(event.target.value)} placeholder={providerConfig.whatsappUnofficial.hasWebhookSecret ? "Saved · enter only to replace" : "Separate 24+ character secret"} /></label>
               <label>Seconds between messages<select value={providerConfig.whatsappUnofficial.intervalSeconds} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, intervalSeconds: Number(event.target.value) } }))}><option value="60">60 seconds</option><option value="90">90 seconds · recommended</option><option value="120">120 seconds</option><option value="180">180 seconds</option></select></label>
               <label>Daily recipient cap<input type="number" min="5" max="75" value={Math.min(75, providerConfig.whatsappUnofficial.dailyCap)} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, dailyCap: Math.min(75, Math.max(5, Number(event.target.value || 75))) } }))} /></label>
@@ -9102,7 +9102,7 @@ function Settings({
                 {key === "unofficial" && item?.connected && (
                   <div className="waha-connected"><b>✓ Connected</b><span>{item.accountName || "WhatsApp account"}{item.accountNumber ? ` · +${item.accountNumber}` : ""}</span><small>QR is hidden while the session is working.</small></div>
                 )}
-                {key === "unofficial" && !item?.connected && item?.qrDataUrl && <Image key={item.qrDataUrl.slice(-24)} src={item.qrDataUrl} alt="Scan to link the WAHA WhatsApp session" width={240} height={240} unoptimized />}
+                {key === "unofficial" && !item?.connected && item?.qrDataUrl && <Image key={item.qrDataUrl.slice(-24)} src={item.qrDataUrl} alt="Scan to link the Evolution API WhatsApp instance" width={240} height={240} unoptimized />}
                 {key === "unofficial" && item?.risk && (
                   <div className={`wa-risk wa-risk-${item.risk.label}`}>
                     <div><strong>{item.risk.score}/100</strong><span>{prettyStatus(item.risk.label)} account-risk signal</span></div>

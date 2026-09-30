@@ -1,11 +1,16 @@
 -- Production-safe operational reset for Cutz & Bangs.
--- Preserves identities/customers/staff, services, invoices and required tenant/provider configuration.
+-- Preserves identities/customers/staff, service catalog and required tenant/provider configuration.
+-- Invoices are deliberately removed at the owner's request.
 -- Run only after a full pg_dump backup.
 
 BEGIN;
 
--- Invoices are retained, but appointments are reset.
-UPDATE "Invoice" SET "appointmentId" = NULL WHERE "appointmentId" IS NOT NULL;
+-- Remove invoice-linked records before invoices (financial history is not retained).
+DELETE FROM "InvoiceRefundItem";
+DELETE FROM "InvoiceRefund";
+DELETE FROM "Payment";
+DELETE FROM "CouponRedemption";
+DELETE FROM "Invoice";
 
 -- Marketing, messaging and automation history.
 DELETE FROM "Campaign";

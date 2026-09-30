@@ -49,8 +49,8 @@ if [ ! -f "$ENV_FILE" ]; then
   secrets_key="$(openssl rand -base64 32 | tr -d '\n')"
   maintenance_token="$(openssl rand -hex 32)"
   admin_pass="$(openssl rand -base64 18 | tr -d '\n' | tr '/+' '_-')"
-  waha_key="$(openssl rand -hex 32)"
-  waha_pass="$(openssl rand -base64 18 | tr -d '\n' | tr '/+' '_-')"
+  evolution_key="$(openssl rand -hex 32)"
+  evolution_db_pass="$(openssl rand -base64 32 | tr -d '\n' | tr '/+' '_-')"
   wa_webhook_token="$(openssl rand -hex 24)"
   wa_webhook_secret="$(openssl rand -hex 32)"
 
@@ -99,13 +99,17 @@ WA_OFFICIAL_WABA_ID=
 WA_APP_SECRET=
 WA_WEBHOOK_VERIFY_TOKEN=$wa_webhook_token
 WA_UNOFFICIAL_ENABLED=false
-WA_UNOFFICIAL_URL=http://waha:3000
-WAHA_ALLOWED_ORIGINS=http://waha:3000
-WAHA_API_KEY=$waha_key
-WAHA_DASHBOARD_USERNAME=admin
-WAHA_DASHBOARD_PASSWORD=$waha_pass
-WAHA_SESSION=cutz-bangs-main
+EVOLUTION_API_URL=http://evolution:8080
+EVOLUTION_ALLOWED_ORIGINS=http://evolution:8080
+EVOLUTION_API_KEY=$evolution_key
+EVOLUTION_DB_PASSWORD=$evolution_db_pass
+EVOLUTION_INSTANCE=cutz-bangs-main
 WA_UNOFFICIAL_WEBHOOK_SECRET=$wa_webhook_secret
+WA_UNOFFICIAL_CALLBACK_URL=http://api:4000/api/v1/webhooks/whatsapp/unofficial
+WA_UNOFFICIAL_INTERVAL_SECONDS=720
+WA_UNOFFICIAL_DAILY_CAP=60
+WA_UNOFFICIAL_WINDOW_START_HOUR=10
+WA_UNOFFICIAL_WINDOW_END_HOUR=22
 AI_PROVIDER=anthropic
 AI_MODEL=claude-sonnet-5
 ANTHROPIC_API_KEY=
@@ -125,7 +129,7 @@ EOF
 fi
 
 if grep -Eq '^WA_UNOFFICIAL_ENABLED=(1|true|yes|on)$' "$ENV_FILE"; then
-  docker compose --env-file "$ENV_FILE" -f docker-compose.vps.yml --profile unofficial-wa up -d --build db redis api worker web waha proxy
+  docker compose --env-file "$ENV_FILE" -f docker-compose.vps.yml --profile unofficial-wa up -d --build db redis evolution-db evolution api worker web proxy
 else
   docker compose --env-file "$ENV_FILE" -f docker-compose.vps.yml up -d --build db redis api worker web proxy
 fi

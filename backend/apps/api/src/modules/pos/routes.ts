@@ -6,7 +6,7 @@ import { authorize } from "../../plugins/auth.js";
 import { computeLine, computeInvoiceTotals, allocateProportional } from "../../lib/money.js";
 import { redeem, InsufficientCreditError } from "../memberships/ledger.js";
 import { renderInvoicePdf } from "../../lib/invoicePdf.js";
-import { invoiceEmail, isRestrictedWahaHost, providers, WAHA_INLINE_MEDIA_MAX_BYTES } from "@cutz/providers";
+import { invoiceEmail, isRestrictedEvolutionHost, providers, EVOLUTION_INLINE_MEDIA_MAX_BYTES } from "@cutz/providers";
 import { enqueueEmail } from "@cutz/queue";
 import { audit } from "../../lib/audit.js";
 import { applyMarketingRewardBonuses, calculateRedemptionMinor, earnForPaidInvoice, getLoyaltyRules, postLoyaltyEntry } from "../loyalty/ledger.js";
@@ -55,7 +55,7 @@ function invoiceWhatsAppBody(input: {
 }
 
 function inlineInvoicePdfError(bytes: Buffer) {
-  if (bytes.length > WAHA_INLINE_MEDIA_MAX_BYTES) return "invoice_pdf_too_large_for_inline_whatsapp";
+  if (bytes.length > EVOLUTION_INLINE_MEDIA_MAX_BYTES) return "invoice_pdf_too_large_for_inline_whatsapp";
   if (bytes.length < 5 || bytes.subarray(0, 5).toString("ascii") !== "%PDF-") return "invoice_pdf_invalid";
   return null;
 }
@@ -68,9 +68,9 @@ function invoiceWhatsAppMediaError(
     const url = new URL(value);
     if (!url.hostname || !["http:", "https:"].includes(url.protocol)) return "invoice_public_url_required";
     // Meta must be able to retrieve the document over the public internet.
-    // WAHA may intentionally use a private HTTP address on the same network.
+    // Evolution may intentionally use a private HTTP address on the same network.
     if (channel === "WHATSAPP_OFFICIAL" && url.protocol !== "https:") return "invoice_https_url_required";
-    if (channel === "WHATSAPP_OFFICIAL" && isRestrictedWahaHost(url.hostname)) return "invoice_public_url_required";
+    if (channel === "WHATSAPP_OFFICIAL" && isRestrictedEvolutionHost(url.hostname)) return "invoice_public_url_required";
     return null;
   } catch {
     return "invoice_public_url_required";

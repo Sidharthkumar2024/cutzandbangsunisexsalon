@@ -101,14 +101,14 @@ export default async function providerConfigRoutes(app: FastifyInstance) {
     if (!adapter.sessionAction) return reply.code(501).send({ error: "session_control_unavailable" });
     try {
       const state = await adapter.sessionAction(body.action);
-      await audit(`waha.session.${body.action}`, "Setting", `branch:${body.branchId}:providers`, {
+      await audit(`evolution.instance.${body.action}`, "Setting", `branch:${body.branchId}:providers`, {
         actorUserId: req.user?.id,
         after: { session: state.session, status: state.status, connected: state.connected },
         ip: req.ip,
       });
       return state;
     } catch (error) {
-      return reply.code(422).send({ error: error instanceof Error ? error.message : "waha_session_action_failed" });
+      return reply.code(422).send({ error: error instanceof Error ? error.message : "evolution_instance_action_failed" });
     }
   });
 
@@ -130,14 +130,14 @@ export default async function providerConfigRoutes(app: FastifyInstance) {
         if (contact.number.length < 8 || contact.number.length > 15) { skipped += 1; continue; }
         valid += 1;
       }
-      await audit("waha.contacts.sync", "Customer", body.branchId, {
+      await audit("evolution.contacts.sync", "Customer", body.branchId, {
         actorUserId: req.user?.id,
         after: { fetched: contacts.length, valid, created: 0, updated: 0, skipped, consentImported: false, mode: "preview_only" },
         ip: req.ip,
       });
       return { fetched: contacts.length, valid, created: 0, updated: 0, skipped, consentImported: false, mode: "preview_only" };
     } catch (error) {
-      return reply.code(422).send({ error: error instanceof Error ? error.message : "waha_contact_sync_failed" });
+      return reply.code(422).send({ error: error instanceof Error ? error.message : "evolution_contact_sync_failed" });
     }
   });
 }

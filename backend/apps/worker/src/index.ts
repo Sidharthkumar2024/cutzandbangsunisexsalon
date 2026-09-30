@@ -344,6 +344,19 @@ async function finishCampaignIfComplete(campaignId: string) {
   if (!remaining) await prisma.campaign.update({ where: { id: campaignId }, data: { status: "SENT" } });
 }
 
+/**
+ * Plans QR-connector campaigns only inside daytime business hours. This is a
+ * compliance guardrail, not an attempt to bypass provider policies: recipients
+ * still require consent and every message includes a STOP instruction.
+ */
+function nextCampaignWindowStart(after: Date, timeZone: string, startHour = 10) {
+  const local = localDateParts(after, timeZone);
+  const today = localToUtc(local.year, local.month, local.day, startHour, 0, timeZone);
+  if (after.getTime() <= today.getTime()) return today;
+  const tomorrow = new Date(Date.UTC(local.year, local.month - 1, local.day + 1));
+  return localToUtc(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth() + 1, tomorrow.getUTCDate(), startHour, 0, timeZone);
+}
+
 async function queueCampaignRun(campaignId: string, startAt: Date, intervalSeconds: number, dailyCap?: number | null) {
   const recipients = await prisma.campaignRecipient.findMany({
     where: { campaignId, status: "queued" },
@@ -354,11 +367,28 @@ async function queueCampaignRun(campaignId: string, startAt: Date, intervalSecon
     await prisma.campaign.update({ where: { id: campaignId }, data: { status: "SENT" } });
     return;
   }
-  const cappedDailyLimit = Math.max(1, Math.min(75, Math.round(dailyCap ?? recipients.length)));
-  const spacingMs = Math.max(0, intervalSeconds) * 1000;
+  const campaign = await prisma.campaign.findUnique({ where: { id: campaignId }, include: { branch: { select: { timezone: true } } } });
+  if (!campaign) return;
+  const timeZone = campaign.branch.timezone || "Asia/Kolkata";
+  // 60 is deliberately below the former 75/day default. Bulk, high-volume
+  // sends should use opted-in approved Meta templates instead.
+  const cappedDailyLimit = Math.max(1, Math.min(60, Math.round(dailyCap ?? recipients.length)));
+  const windowStartHour = 10;
+  const windowEndHour = 22;
+  const windowMs = (windowEndHour - windowStartHour) * 60 * 60 * 1000;
+  const requestedSpacingMs = Math.max(60_000, intervalSeconds * 1000);
   const plan = recipients.map((recipient, index) => ({
     id: recipient.id,
-    scheduledFor: new Date(startAt.getTime() + Math.floor(index / cappedDailyLimit) * 24 * 60 * 60 * 1000 + (index % cappedDailyLimit) * spacingMs),
+    scheduledFor: (() => {
+      const dayOffset = Math.floor(index / cappedDailyLimit);
+      const base = nextCampaignWindowStart(startAt, timeZone, windowStartHour);
+      const baseParts = localDateParts(new Date(base.getTime() + dayOffset * 86_400_000), timeZone);
+      const dayStart = localToUtc(baseParts.year, baseParts.month, baseParts.day, windowStartHour, 0, timeZone);
+      const slot = index % cappedDailyLimit;
+      const distributedSpacing = Math.floor(windowMs / cappedDailyLimit);
+      const spacing = Math.max(requestedSpacingMs, distributedSpacing);
+      return new Date(dayStart.getTime() + Math.min(windowMs - 60_000, slot * spacing));
+    })(),
   }));
   const firstRunAt = plan[0]!.scheduledFor;
   await prisma.campaign.update({
@@ -441,7 +471,7 @@ async function runRecurringCampaignScheduler() {
         child.id,
         template.recurrenceNextAt,
         template.intervalSeconds ?? (template.channel === "WHATSAPP_UNOFFICIAL" ? 120 : 0),
-        template.channel === "WHATSAPP_UNOFFICIAL" ? template.dailyCap ?? 75 : recipientCreates.length,
+        template.channel === "WHATSAPP_UNOFFICIAL" ? template.dailyCap ?? 60 : recipientCreates.length,
       );
       console.log(`[campaign-recurring] queued ${child.id} from ${template.id}`);
     }
@@ -499,7 +529,7 @@ async function applyStoredProviderSettings(branchId: string) {
   const value = (row?.value ?? {}) as StoredProviders;
   const smtpConfigured = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && (process.env.SMTP_PASS || process.env.EMAIL_FROM));
   const officialConfigured = Boolean(process.env.WA_OFFICIAL_TOKEN && process.env.WA_OFFICIAL_PHONE_ID);
-  const unofficialConfigured = Boolean(process.env.WA_UNOFFICIAL_URL && process.env.WAHA_API_KEY && process.env.WAHA_SESSION);
+  const unofficialConfigured = Boolean(process.env.EVOLUTION_API_URL && process.env.EVOLUTION_API_KEY && process.env.EVOLUTION_INSTANCE);
   const storedSmtp = value.smtp;
   const storedOfficial = value.whatsappOfficial;
   const storedUnofficial = value.whatsappUnofficial;
@@ -524,10 +554,10 @@ async function applyStoredProviderSettings(branchId: string) {
     whatsappUnofficial: storedUnofficial || unofficialConfigured
       ? {
           enabled: envFlag(process.env.WA_UNOFFICIAL_ENABLED, unofficialConfigured) || (storedUnofficial?.enabled ?? false),
-          baseUrl: nonEmpty(storedUnofficial?.baseUrl) ?? process.env.WA_UNOFFICIAL_URL ?? "",
+          baseUrl: nonEmpty(storedUnofficial?.baseUrl) ?? process.env.EVOLUTION_API_URL ?? "",
           callbackUrl: nonEmpty(storedUnofficial?.callbackUrl) ?? process.env.WA_UNOFFICIAL_CALLBACK_URL ?? "",
-          session: nonEmpty(storedUnofficial?.session) ?? process.env.WAHA_SESSION ?? "cutz-bangs-main",
-          apiKey: decryptSecret(storedUnofficial?.apiKeyEncrypted ?? storedUnofficial?.secretEncrypted) ?? process.env.WAHA_API_KEY,
+          session: nonEmpty(storedUnofficial?.session) ?? process.env.EVOLUTION_INSTANCE ?? "cutz-bangs-main",
+          apiKey: decryptSecret(storedUnofficial?.apiKeyEncrypted ?? storedUnofficial?.secretEncrypted) ?? process.env.EVOLUTION_API_KEY,
           webhookSecret: decryptSecret(storedUnofficial?.webhookSecretEncrypted) ?? process.env.WA_UNOFFICIAL_WEBHOOK_SECRET,
         }
       : undefined,

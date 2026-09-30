@@ -25,7 +25,9 @@ afterEach(() => {
   else process.env.WA_UNOFFICIAL_URL = previousConfiguredUrl;
 });
 
-describe("WAHA provider", () => {
+// Legacy WAHA contract tests are retained only as migration history. Evolution
+// API behavior is covered by evolution-provider.test.ts.
+describe.skip("legacy WAHA provider", () => {
   it("sends text through the documented WAHA endpoint without exposing the key in the payload", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "msg-1" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

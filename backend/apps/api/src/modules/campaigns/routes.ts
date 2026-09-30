@@ -320,7 +320,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
         registered: 0,
         unknown: phones.length,
         providerConnected: false,
-        detail: state?.detail ?? "WAHA contact verification is not connected.",
+        detail: state?.detail ?? "Evolution API contact verification is not connected.",
       };
     }
     const contacts = await unofficialMessaging.listContacts(10_000);
@@ -341,7 +341,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
       registered,
       unknown: Math.max(0, phones.length - registered),
       providerConnected: true,
-      detail: "Matched against WAHA contact list for this session.",
+      detail: "Contact import is disabled. Keep campaign recipients separate from CRM customers.",
     };
   });
 
@@ -461,7 +461,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
     if (!recipients.length) return reply.code(409).send({ error: "campaign_has_no_eligible_recipients" });
     if (existing.channel === "WHATSAPP_UNOFFICIAL") {
       const state = await unofficialMessaging.health?.();
-      if (!state?.connected) return reply.code(409).send({ error: "waha_session_not_connected", detail: state?.detail });
+      if (!state?.connected) return reply.code(409).send({ error: "evolution_instance_not_connected", detail: state?.detail });
     }
     const unofficial = providerConfig.whatsappUnofficial;
     const intervalSeconds = existing.channel === "WHATSAPP_UNOFFICIAL" ? unofficial.intervalSeconds : 0;
@@ -544,7 +544,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
     if (existing.channel === "WHATSAPP_UNOFFICIAL") {
       const context = await applyProviderSettings(existing.branchId);
       const state = await context.whatsapp("WHATSAPP_UNOFFICIAL").health?.();
-      if (!state?.connected) return reply.code(409).send({ error: "waha_session_not_connected", detail: state?.detail });
+      if (!state?.connected) return reply.code(409).send({ error: "evolution_instance_not_connected", detail: state?.detail });
     }
     const intervalSeconds = existing.channel === "WHATSAPP_UNOFFICIAL"
       ? providerConfig.whatsappUnofficial.intervalSeconds
