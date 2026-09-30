@@ -188,23 +188,34 @@ export default async function campaignRoutes(app: FastifyInstance) {
       take: 100,
       include: {
         _count: { select: { recipients: true } },
-        recipients: { select: { status: true, deliveredAt: true, readAt: true, repliedAt: true, customerId: true, externalPhone: true } },
+        recipients: { select: { status: true, error: true, deliveredAt: true, readAt: true, repliedAt: true, customerId: true, externalPhone: true } },
       },
     });
     return rows.map(({ recipients, ...campaign }) => {
       const manualRecipientCount = recipients.filter((recipient) => recipient.externalPhone && !recipient.customerId).length;
+      const failures = new Map<string, number>();
+      for (const recipient of recipients) {
+        if (recipient.status !== "failed") continue;
+        const reason = typeof recipient.error === "string" && recipient.error
+          ? recipient.error
+          : "send_failed";
+        failures.set(reason, (failures.get(reason) ?? 0) + 1);
+      }
       return {
         ...campaign,
         audienceLabel: manualRecipientCount ? "Pasted / CSV audience" : campaign.segment ?? "All customers",
         manualRecipientCount,
         engagement: {
-        total: recipients.length,
-        sent: recipients.filter((item) => ["sent", "delivered", "read"].includes(item.status)).length,
-        delivered: recipients.filter((item) => item.deliveredAt).length,
-        read: recipients.filter((item) => item.readAt).length,
-        replied: recipients.filter((item) => item.repliedAt).length,
-        failed: recipients.filter((item) => item.status === "failed").length,
+          total: recipients.length,
+          sent: recipients.filter((item) => ["sent", "delivered", "read"].includes(item.status)).length,
+          delivered: recipients.filter((item) => item.deliveredAt).length,
+          read: recipients.filter((item) => item.readAt).length,
+          replied: recipients.filter((item) => item.repliedAt).length,
+          failed: recipients.filter((item) => item.status === "failed").length,
+          queued: recipients.filter((item) => item.status === "queued").length,
+          skipped: recipients.filter((item) => item.status === "skipped").length,
         },
+        failureReasons: [...failures.entries()].map(([reason, count]) => ({ reason, count })).slice(0, 5),
       };
     });
   });
@@ -515,6 +526,51 @@ export default async function campaignRoutes(app: FastifyInstance) {
       ip: req.ip,
     });
     return campaign;
+  });
+
+  // Requeue only failed recipients. Successful deliveries are never repeated.
+  app.post("/campaigns/:id/retry-failed", { preHandler: authorize("OWNER", "ADMIN") }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const existing = await prisma.campaign.findUnique({ where: { id } });
+    if (!existing) return reply.code(404).send({ error: "not_found" });
+    const failedRecipients = await prisma.campaignRecipient.findMany({
+      where: { campaignId: id, status: "failed" },
+      select: { id: true },
+      orderBy: { id: "asc" },
+    });
+    if (!failedRecipients.length) return reply.code(409).send({ error: "campaign_has_no_failed_recipients" });
+
+    const providerConfig = await publicProviderSettings(existing.branchId);
+    if (existing.channel === "WHATSAPP_UNOFFICIAL") {
+      const context = await applyProviderSettings(existing.branchId);
+      const state = await context.whatsapp("WHATSAPP_UNOFFICIAL").health?.();
+      if (!state?.connected) return reply.code(409).send({ error: "waha_session_not_connected", detail: state?.detail });
+    }
+    const intervalSeconds = existing.channel === "WHATSAPP_UNOFFICIAL"
+      ? providerConfig.whatsappUnofficial.intervalSeconds
+      : 0;
+    const dailyCap = existing.channel === "WHATSAPP_UNOFFICIAL"
+      ? providerConfig.whatsappUnofficial.dailyCap
+      : failedRecipients.length;
+    const startAt = new Date();
+    const plan = failedRecipients.map((recipient, index) => ({
+      id: recipient.id,
+      scheduledFor: new Date(startAt.getTime() + Math.floor(index / Math.max(1, dailyCap)) * 86_400_000 + (index % Math.max(1, dailyCap)) * intervalSeconds * 1_000),
+    }));
+    await prisma.$transaction([
+      prisma.campaign.update({ where: { id }, data: { status: "SENDING" } }),
+      ...plan.map((item) => prisma.campaignRecipient.update({
+        where: { id: item.id },
+        data: { status: "queued", error: null, sentAt: null, externalId: null, scheduledFor: item.scheduledFor },
+      })),
+    ]);
+    await Promise.all(plan.map((item) => enqueueCampaignRecipient({ campaignId: id, recipientId: item.id }, item.scheduledFor)));
+    await audit("campaign.retry_failed", "Campaign", id, {
+      actorUserId: req.user?.id,
+      after: { recipients: plan.length, intervalSeconds, dailyCap },
+      ip: req.ip,
+    });
+    return { id, status: "SENDING", requeued: plan.length, intervalSeconds, dailyCap };
   });
 
   app.patch("/campaigns/:id/recurrence", { preHandler: authorize(...ADMIN) }, async (req, reply) => {

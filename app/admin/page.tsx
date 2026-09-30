@@ -7053,12 +7053,17 @@ function Campaigns({
   const [message, setMessage] = useState("");
   const [rowMessage, setRowMessage] = useState("");
   const [approvingId, setApprovingId] = useState("");
+  const [retryingId, setRetryingId] = useState("");
   const [recurrenceBusyId, setRecurrenceBusyId] = useState("");
   const [busy, setBusy] = useState(false);
   const [waRisk, setWaRisk] = useState<BackendWhatsAppStatus["unofficial"]["risk"]>();
+  const [waStatus, setWaStatus] = useState<BackendWhatsAppStatus["unofficial"]>();
   useEffect(() => {
     if (!token) return;
-    backendApi.whatsappStatus(token).then((result) => setWaRisk(result.unofficial.risk)).catch(() => undefined);
+    backendApi.whatsappStatus(token).then((result) => {
+      setWaRisk(result.unofficial.risk);
+      setWaStatus(result.unofficial);
+    }).catch(() => undefined);
   }, [token, data.campaigns.length]);
   const attention = data.range
     ? data.range.customers.lapsed +
@@ -7116,7 +7121,9 @@ function Campaigns({
   }));
   const visibleRows = statusFilter === "ALL"
     ? campaignRows
-    : campaignRows.filter(({ campaign, cells }) => campaign.status === statusFilter || cells[3].toUpperCase().replaceAll(" ", "_") === statusFilter);
+    : campaignRows.filter(({ campaign, cells }) => statusFilter === "FAILED"
+      ? (campaign.engagement?.failed ?? 0) > 0
+      : campaign.status === statusFilter || cells[3].toUpperCase().replaceAll(" ", "_") === statusFilter);
   const draft = async () => {
     if (!token) return;
     setBusy(true);
@@ -7229,6 +7236,21 @@ function Campaigns({
       setRecurrenceBusyId("");
     }
   };
+  const retryFailedCampaign = async (campaign: BackendCampaign) => {
+    if (!token || !(campaign.engagement?.failed ?? 0)) return;
+    setRetryingId(campaign.id);
+    setRowMessage("");
+    try {
+      const result = await backendApi.retryFailedCampaign(token, campaign.id);
+      setMessage(`${result.requeued} failed recipient${result.requeued === 1 ? "" : "s"} requeued safely. Successful sends were not repeated.`);
+      onRefresh();
+    } catch (cause) {
+      const error = cause instanceof Error ? prettyStatus(cause.message) : "Retry failed.";
+      setRowMessage(`Retry failed: ${error}. Reconnect WAHA, then try again.`);
+    } finally {
+      setRetryingId("");
+    }
+  };
   const verifyManualNumbers = async () => {
     if (!token || !manualStats.valid) return;
     setBusy(true);
@@ -7281,6 +7303,11 @@ function Campaigns({
         <button className="button button-light" onClick={() => void draft()} disabled={!token || busy}>
           {busy ? "Working…" : "Draft reactivation campaign"}
         </button>
+      </div>
+      <div className={`campaign-connection-strip ${waStatus?.connected ? "connected" : "disconnected"}`}>
+        <span aria-hidden="true" />
+        <div><strong>Unofficial WhatsApp</strong><small>{waStatus?.connected ? `Connected${waStatus.accountNumber ? ` · ${waStatus.accountNumber}` : ""}` : waStatus?.detail ?? "Checking WAHA connection…"}</small></div>
+        <b>{waStatus?.connected ? "READY" : "ACTION NEEDED"}</b>
       </div>
       <section className="campaign-safety-grid">
         <article className="admin-card csv-import-card">
@@ -7475,11 +7502,17 @@ function Campaigns({
                 {recurrenceBusyId === campaign.id ? "Saving…" : campaign.recurrenceEnabled ? "Auto ON" : "Auto OFF"}
               </button>
             )}
-            {campaign.status === "PENDING_APPROVAL" && (
-              <button disabled={Boolean(approvingId)} onClick={() => void approve(campaign.id)}>{approvingId === campaign.id ? "Approving…" : "Approve"}</button>
-            )}
-            {campaign.status !== "PENDING_APPROVAL" && <span>—</span>}
+            <div className="campaign-row-actions">
+              {campaign.status === "PENDING_APPROVAL" && (
+                <button className="campaign-approve-button" disabled={Boolean(approvingId) || (campaign.channel === "WHATSAPP_UNOFFICIAL" && waStatus?.connected === false)} onClick={() => void approve(campaign.id)}>{approvingId === campaign.id ? "Starting…" : "Approve & start"}</button>
+              )}
+              {(campaign.engagement?.failed ?? 0) > 0 && (
+                <button className="campaign-retry-button" disabled={Boolean(retryingId) || (campaign.channel === "WHATSAPP_UNOFFICIAL" && waStatus?.connected === false)} onClick={() => void retryFailedCampaign(campaign)}>{retryingId === campaign.id ? "Retrying…" : `Retry ${campaign.engagement?.failed}`}</button>
+              )}
+              {campaign.status !== "PENDING_APPROVAL" && !(campaign.engagement?.failed ?? 0) && <span>—</span>}
+            </div>
             {(campaign.recurrenceEnabled || campaign.recurrenceRule) && <small className="campaign-row-note">{campaign.recurrenceEnabled ? campaignRecurrenceSummary(campaign.recurrenceRule) : "Repeat saved but OFF"}{campaign.recurrenceNextAt ? ` · Next ${new Date(campaign.recurrenceNextAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}` : ""}</small>}
+            {campaign.failureReasons?.length ? <small className="campaign-failure-note">{campaign.failureReasons.map((item) => `${item.count}× ${prettyStatus(item.reason)}`).join(" · ")}</small> : null}
           </div>
         ))}
       </article>

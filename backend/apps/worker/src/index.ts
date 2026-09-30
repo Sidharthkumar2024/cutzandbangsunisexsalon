@@ -273,7 +273,12 @@ new Worker<CampaignJob>(
         const body = campaign.channel === "WHATSAPP_UNOFFICIAL" && !/reply\s+stop|बंद/i.test(content)
           ? `${content}\n\nReply STOP to opt out.`
           : content;
-        const result = await (campaign.channel === "WHATSAPP_UNOFFICIAL" ? unofficialMessaging : officialMessaging).send({
+        const messaging = campaign.channel === "WHATSAPP_UNOFFICIAL" ? unofficialMessaging : officialMessaging;
+        const health = await messaging.health?.();
+        if (health && (!health.configured || !health.connected)) {
+          throw new Error(health.detail ?? `${campaign.channel.toLowerCase()}_not_connected`);
+        }
+        const result = await messaging.send({
           to: recipientPhone,
           body,
           mediaUrl,
@@ -287,8 +292,14 @@ new Worker<CampaignJob>(
         return;
       }
       await mark(recipient.id, "sent", undefined, externalId);
+      console.log(`[campaign] sent campaign=${campaignId} recipient=${recipient.id} channel=${campaign.channel}`);
     } catch (error) {
-      await mark(recipient.id, "failed", error instanceof Error ? error.message : "send_failed");
+      const detail = error instanceof Error ? error.message : "send_failed";
+      const attempts = Math.max(1, Number(job.opts.attempts ?? 1));
+      const finalAttempt = job.attemptsMade + 1 >= attempts;
+      console.error(`[campaign] ${finalAttempt ? "failed" : "retrying"} campaign=${campaignId} recipient=${recipient.id} attempt=${job.attemptsMade + 1}/${attempts} error=${detail}`);
+      if (!finalAttempt) throw error;
+      await mark(recipient.id, "failed", detail);
     }
     await finishCampaignIfComplete(campaignId);
   },

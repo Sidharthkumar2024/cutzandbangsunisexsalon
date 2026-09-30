@@ -364,7 +364,8 @@ export type BackendCampaign = {
   mediaType?: string | null;
   audienceLabel?: string;
   manualRecipientCount?: number;
-  engagement?: { total: number; sent: number; delivered: number; read: number; replied: number; failed: number };
+  engagement?: { total: number; sent: number; delivered: number; read: number; replied: number; failed: number; queued?: number; skipped?: number };
+  failureReasons?: Array<{ reason: string; count: number }>;
   createdAt: string;
   _count: { recipients: number };
 };
@@ -1622,6 +1623,12 @@ export const backendApi = {
   approveCampaign: (token: string, campaignId: string) =>
     request<BackendCampaign>(
       `/campaigns/${encodeURIComponent(campaignId)}/approve`,
+      { method: "POST", body: "{}" },
+      token,
+    ),
+  retryFailedCampaign: (token: string, campaignId: string) =>
+    request<{ id: string; status: string; requeued: number; intervalSeconds: number; dailyCap: number }>(
+      `/campaigns/${encodeURIComponent(campaignId)}/retry-failed`,
       { method: "POST", body: "{}" },
       token,
     ),
