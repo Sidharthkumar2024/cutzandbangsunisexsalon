@@ -1,5 +1,26 @@
 "use client";
 
+const SUCCESS_NOTICE_EVENT = "cutz-bangs:success";
+
+function successMessage(path: string, method: string) {
+  if (method === "DELETE") return "Deleted successfully.";
+  if (/\/auth\/login$/.test(path)) return "Signed in successfully.";
+  if (/\/auth\/logout$/.test(path)) return "Signed out successfully.";
+  if (/\/otp\/request$/.test(path)) return "OTP sent successfully.";
+  if (/\/approve$/.test(path)) return "Approved successfully.";
+  if (/\/retry-failed$/.test(path)) return "Failed recipients requeued successfully.";
+  if (/\/checkout$/.test(path)) return "Invoice created successfully.";
+  return "Changes saved successfully.";
+}
+
+function notifySuccess(path: string, options: RequestInit) {
+  const method = (options.method ?? "GET").toUpperCase();
+  if (method === "GET" || typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent(SUCCESS_NOTICE_EVENT, { detail: { message: successMessage(path, method) } }),
+  );
+}
+
 export type BackendUser = {
   id: string;
   email: string;
@@ -1010,6 +1031,7 @@ async function request<T>(
       (data as { error?: string }).error ??
         `Backend request failed (${response.status})`,
     );
+  notifySuccess(path, options);
   return data as T;
 }
 

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { PwaInstallPrompt } from './components/PwaInstallPrompt';
+import { SuccessNotifier } from './components/SuccessNotifier';
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://cutzandbangs.com';
 
@@ -61,6 +62,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     <html lang="en">
       <body>
         {children}
+        <SuccessNotifier />
         <PwaInstallPrompt />
       </body>
     </html>
