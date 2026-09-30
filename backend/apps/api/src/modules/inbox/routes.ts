@@ -460,7 +460,12 @@ export default async function inboxRoutes(app: FastifyInstance) {
   app.post("/webhooks/whatsapp/unofficial", async (req, reply) => {
     const untrusted = req.body as Record<string, unknown> | undefined;
     const untrustedPayload = untrusted?.payload as Record<string, unknown> | undefined;
-    const session = String(untrusted?.session ?? untrustedPayload?.session ?? "");
+    // Evolution v2 emits `instance` at the envelope level and `data` for the
+    // actual WhatsApp message. Older QR connectors used `session`/`payload`.
+    // Accept both formats so reconnecting an instance cannot silently break
+    // the shared inbox.
+    const untrustedData = untrusted?.data as Record<string, unknown> | undefined;
+    const session = String(untrusted?.session ?? untrusted?.instance ?? untrustedPayload?.session ?? untrustedPayload?.instance ?? untrustedData?.session ?? "");
     const branchId = await resolveUnofficialWebhookBranch(session);
     if (!branchId) return reply.code(401).send({ error: "provider_not_resolved" });
     const providerContext = await applyProviderSettings(branchId);
@@ -477,7 +482,7 @@ export default async function inboxRoutes(app: FastifyInstance) {
       timestamp: z.number().optional(),
       session: z.string().optional(),
     }).passthrough().parse(req.body);
-    const payload = (envelope.payload ?? envelope) as Record<string, unknown>;
+    const payload = (envelope.payload ?? untrustedData ?? envelope) as Record<string, unknown>;
     if (envelope.event === "session.status") return reply.send({ received: true });
     if (envelope.event === "message.ack") {
       const externalId = String(payload.id ?? "");
@@ -488,12 +493,20 @@ export default async function inboxRoutes(app: FastifyInstance) {
       }
       return reply.send({ received: true });
     }
-    if (envelope.event && envelope.event !== "message") return reply.send({ received: true });
-    if (Boolean(payload.fromMe)) return reply.send({ received: true });
-    const from = String(payload.from ?? envelope.from ?? "").split("@")[0].replace(/\D/g, "");
-    const externalId = String(payload.id ?? envelope.externalId ?? "");
-    const messageBody = String(payload.body ?? envelope.body ?? "");
-    const timestamp = Number(payload.timestamp ?? envelope.timestamp ?? 0) || undefined;
+    const event = String(envelope.event ?? "").toLowerCase();
+    const isEvolutionMessage = event === "messages.upsert" || event === "messages_upsert";
+    if (event && event !== "message" && !isEvolutionMessage) return reply.send({ received: true });
+    const key = payload.key as Record<string, unknown> | undefined;
+    if (Boolean(payload.fromMe ?? key?.fromMe)) return reply.send({ received: true });
+    const rawMessage = payload.message as Record<string, unknown> | undefined;
+    const extendedText = rawMessage?.extendedTextMessage as Record<string, unknown> | undefined;
+    const image = rawMessage?.imageMessage as Record<string, unknown> | undefined;
+    const video = rawMessage?.videoMessage as Record<string, unknown> | undefined;
+    const document = rawMessage?.documentMessage as Record<string, unknown> | undefined;
+    const from = String(payload.from ?? key?.remoteJid ?? key?.participant ?? envelope.from ?? "").split("@")[0].replace(/\D/g, "");
+    const externalId = String(payload.id ?? key?.id ?? envelope.externalId ?? "");
+    const messageBody = String(payload.body ?? rawMessage?.conversation ?? extendedText?.text ?? image?.caption ?? video?.caption ?? document?.caption ?? envelope.body ?? "");
+    const timestamp = Number(payload.timestamp ?? payload.messageTimestamp ?? envelope.timestamp ?? 0) || undefined;
     if (!from || !externalId) return reply.code(400).send({ error: "invalid_evolution_message" });
     await ensureChannels();
     const channel = await prisma.channel.findFirstOrThrow({ where: { type: "WHATSAPP_UNOFFICIAL" } });

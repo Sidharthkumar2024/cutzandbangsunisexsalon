@@ -440,6 +440,7 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
 
   async sessionAction(action: WhatsAppSessionAction): Promise<WhatsAppSessionState> {
     if (!this.baseUrl || !this.apiKey || !this.session) throw new Error(this.configError ?? "wa_unofficial_not_configured");
+    const isLogout = action === "logout" || action === "stop";
     if (action === "create") {
       const config: Record<string, unknown> = { instanceName: this.session, qrcode: true, integration: "WHATSAPP-BAILEYS" };
       try {
@@ -454,9 +455,25 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
       }
     } else {
       // Evolution exposes restart and logout (rather than WAHA's start/stop).
-      const isLogout = action === "logout" || action === "stop";
       const route = isLogout ? "logout" : "restart";
       await this.json(`/instance/${route}/${encodeURIComponent(this.session)}`, { method: isLogout ? "DELETE" : "POST", body: "{}" });
+    }
+    // Evolution does not inherit an application callback simply because an
+    // instance is connected. Configure the per-instance webhook whenever the
+    // session is created or restarted so inbound WhatsApp replies reach the
+    // salon inbox as well as outbound sends.
+    if (!isLogout && this.callbackUrl && this.webhookSecret) {
+      await this.json(`/event/webhook/set/${encodeURIComponent(this.session)}`, {
+        method: "POST",
+        body: JSON.stringify({
+          enabled: true,
+          url: this.callbackUrl,
+          webhookByEvents: false,
+          webhookBase64: false,
+          events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "SEND_MESSAGE", "CONNECTION_UPDATE"],
+          headers: { "x-internal-secret": this.webhookSecret },
+        }),
+      });
     }
     return this.health();
   }
