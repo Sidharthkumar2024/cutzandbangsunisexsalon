@@ -381,10 +381,16 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
         payload = { number: to, text: `${msg.body ? `${msg.body}\n` : ""}https://maps.google.com/?q=${msg.location.latitude},${msg.location.longitude}` };
       } else if ((msg.mediaUrl || msg.mediaData) && msg.mediaType) {
         endpoint = `/message/sendMedia/${encodeURIComponent(this.session)}`;
+        // Evolution v2 expects a plain base64 document body (rather than a
+        // data URI) and relies on mimetype to construct the outgoing media.
+        // A data URI is accepted by some older connectors, but v2.3 rejects
+        // it with an opaque 400 for PDF invoices.
+        const inlineMedia = msg.mediaData?.trim().replace(/^data:[^;,]+;base64,/i, "");
         payload = {
           number: to,
           mediatype: msg.mediaType,
-          media: msg.mediaData ? `data:${msg.mediaMimeType ?? "application/pdf"};base64,${msg.mediaData.trim()}` : msg.mediaUrl,
+          media: inlineMedia || msg.mediaUrl,
+          ...(msg.mediaMimeType ? { mimetype: msg.mediaMimeType } : {}),
           ...(msg.mediaType === "document" ? { fileName: safePdfFilename(msg.mediaFilename) } : {}),
           ...(msg.body ? { caption: msg.body } : {}),
         };
@@ -471,12 +477,18 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
     // salon inbox as well as outbound sends.
     if (!isLogout && this.callbackUrl && this.webhookSecret) {
       const payload = JSON.stringify({
-        enabled: true,
-        url: this.callbackUrl,
-        webhookByEvents: false,
-        webhookBase64: false,
-        events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "SEND_MESSAGE", "CONNECTION_UPDATE"],
-        headers: { "x-internal-secret": this.webhookSecret },
+        // Evolution v2 validates the webhook configuration under the
+        // `webhook` key. Sending the old flat WAHA-shaped payload results in
+        // HTTP 400 and silently leaves the unauthenticated global webhook in
+        // place, so inbox events are rejected by our API as 401.
+        webhook: {
+          enabled: true,
+          url: this.callbackUrl,
+          byEvents: false,
+          base64: false,
+          events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "SEND_MESSAGE", "CONNECTION_UPDATE"],
+          headers: { "x-internal-secret": this.webhookSecret },
+        },
       });
       try {
         await this.json(`/event/webhook/set/${encodeURIComponent(this.session)}`, { method: "POST", body: payload });
