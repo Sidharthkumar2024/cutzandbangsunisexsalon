@@ -20,6 +20,13 @@ describe("Evolution API WhatsApp provider", () => {
     await expect(new WhatsAppUnofficialProvider(config).health()).resolves.toMatchObject({ connected: false, status: "SCAN_QR_CODE", qrDataUrl: "data:image/png;base64,YWJj" });
   });
 
+  it("retrieves QR while Evolution reports connecting", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ instance: { state: "connecting" } }), { status: 200 })).mockResolvedValueOnce(new Response(JSON.stringify({ base64: "ZGVm" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(new WhatsAppUnofficialProvider(config).health()).resolves.toMatchObject({ connected: false, status: "CONNECTING", qrDataUrl: "data:image/png;base64,ZGVm" });
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe("http://evolution:8080/instance/connect/cutz-bangs-main");
+  });
+
   it("does not send oversized inline invoice media", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

@@ -402,9 +402,18 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
       };
       const status = data.instance?.state === "open" ? "WORKING" : data.instance?.state === "connecting" ? "CONNECTING" : "SCAN_QR_CODE";
       let qrDataUrl: string | undefined;
-      if (status === "SCAN_QR_CODE") {
-        const qr = (await this.json(`/instance/connect/${encodeURIComponent(this.session)}`)) as { base64?: string };
-        if (qr.base64) qrDataUrl = qr.base64.startsWith("data:") ? qr.base64 : `data:image/png;base64,${qr.base64}`;
+      // Evolution reports `connecting` for the entire QR scan window.  The
+      // previous implementation only asked for a QR after it changed to a
+      // different state, leaving the admin panel blank while it said
+      // CONNECTING.  Fetch it whenever the instance is not open.
+      if (status !== "WORKING") {
+        const qr = (await this.json(`/instance/connect/${encodeURIComponent(this.session)}`)) as {
+          base64?: string;
+          code?: string;
+          qrcode?: { base64?: string; code?: string };
+        };
+        const payload = qr.base64 ?? qr.code ?? qr.qrcode?.base64 ?? qr.qrcode?.code;
+        if (payload) qrDataUrl = payload.startsWith("data:") ? payload : `data:image/png;base64,${payload}`;
       }
       return {
         configured: true,

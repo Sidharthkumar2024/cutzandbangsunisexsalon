@@ -298,8 +298,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .confirmation-actions { display: flex; align-items: center; justify-content: center; gap: 24px; }
 
 /* Admin */
-.admin-shell { min-height: 100vh; display: grid; grid-template-columns: 240px minmax(0, 1fr); background: #f3f3f0; color: #262627; }
-.admin-sidebar { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; padding: 24px 15px 14px; border-right: 1px solid #dddcd7; background: #fafaf7; z-index: 10; }
+.admin-shell { min-height: 100vh; display: grid; grid-template-columns: 240px minmax(0, 1fr); align-items: start; background: #f3f3f0; color: #262627; }
+.admin-sidebar { position: fixed; inset: 0 auto 0 0; width: 240px; box-sizing: border-box; height: 100dvh; display: flex; flex-direction: column; padding: 24px 15px 14px; border-right: 1px solid #dddcd7; background: #fafaf7; z-index: 10; overflow: hidden; }
 .admin-brand { display: flex; align-items: center; justify-content: space-between; padding: 0 10px 20px; }
 .admin-brand .wordmark { font-size: 11px; }
 .mobile-close { display: none; border: 0; background: transparent; font-size: 22px; }
@@ -309,7 +309,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .branch-chip strong { font-size: 10px; }
 .branch-chip small { color: #8c8a84; font-size: 8px; }
 .branch-chip i { color: #8c8a84; font-style: normal; }
-.admin-sidebar nav { overflow-y: auto; }
+.admin-sidebar nav { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .admin-nav-group { margin-bottom: 17px; }
 .admin-nav-group > p { margin: 0 10px 7px; color: #aaa7a0; font-size: 8px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
 .admin-nav-group button, .sidebar-settings { width: 100%; min-height: 37px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: #6f6d67; font-size: 10px; font-weight: 650; cursor: pointer; }
@@ -322,7 +322,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .admin-user > span { width: 35px; height: 35px; display: grid; place-items: center; border-radius: 50%; background: #b9c5b0; font-size: 9px; font-weight: 800; }
 .admin-user div { display: flex; flex-direction: column; gap: 3px; }
 .admin-user strong { font-size: 9px; }.admin-user small { color: #98958e; font-size: 8px; }.admin-user i { color: #99958e; font-style: normal; font-size: 8px; }
-.admin-content { min-width: 0; }
+.admin-content { grid-column: 2; min-width: 0; }
 .admin-topbar { min-height: 83px; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 15px clamp(20px, 3vw, 42px); border-bottom: 1px solid #dddcd7; background: rgb(250 250 247 / 92%); position: sticky; top: 0; z-index: 8; backdrop-filter: blur(12px); }
 .admin-topbar > div:first-child { display: flex; align-items: center; gap: 13px; }
 .admin-topbar h1 { margin: 0; font: 600 21px/1.2 Inter, sans-serif; letter-spacing: -.025em; }
