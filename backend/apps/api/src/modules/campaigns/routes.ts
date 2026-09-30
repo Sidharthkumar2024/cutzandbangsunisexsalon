@@ -84,19 +84,6 @@ function manualRecipientCreates(values: ManualRecipientInput[]) {
   return [...unique.values()];
 }
 
-function localParts(date: Date, timeZone: string) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(date);
-  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
-  return { key: `${get("year")}-${get("month")}-${get("day")}`, hour: Number(get("hour")) };
-}
-
 function localDateParts(date: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone,
@@ -146,6 +133,37 @@ function localToUtc(year: number, month: number, day: number, hour: number, minu
   const actualAsUtc = Date.UTC(part("year"), part("month") - 1, part("day"), part("hour"), part("minute"), 0, 0);
   const wantedAsUtc = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
   return new Date(rough.getTime() + (wantedAsUtc - actualAsUtc));
+}
+
+const NIGHT_WINDOW_START_HOUR = 22;
+const NIGHT_WINDOW_MS = 8 * 60 * 60 * 1000;
+
+function nextNightWindowStart(after: Date, timeZone: string) {
+  const local = localDateParts(after, timeZone);
+  const tonight = localToUtc(local.year, local.month, local.day, NIGHT_WINDOW_START_HOUR, 0, timeZone);
+  if (after.getTime() <= tonight.getTime()) return tonight;
+  const tomorrow = new Date(Date.UTC(local.year, local.month - 1, local.day + 1));
+  return localToUtc(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth() + 1, tomorrow.getUTCDate(), NIGHT_WINDOW_START_HOUR, 0, timeZone);
+}
+
+function planUnofficialNightlyRecipients<T extends { id: string }>(recipients: T[], startAt: Date, timeZone: string, dailyCap: number, intervalSeconds: number) {
+  const cappedDailyLimit = Math.max(1, Math.min(60, Math.round(dailyCap)));
+  const spacing = Math.max(
+    60_000,
+    intervalSeconds * 1_000,
+    Math.floor(NIGHT_WINDOW_MS / cappedDailyLimit),
+  );
+  const firstWindow = nextNightWindowStart(startAt, timeZone);
+  return recipients.map((recipient, index) => {
+    const nightOffset = Math.floor(index / cappedDailyLimit);
+    const startParts = localDateParts(new Date(firstWindow.getTime() + nightOffset * 86_400_000), timeZone);
+    const nightStart = localToUtc(startParts.year, startParts.month, startParts.day, NIGHT_WINDOW_START_HOUR, 0, timeZone);
+    const slot = index % cappedDailyLimit;
+    return {
+      id: recipient.id,
+      scheduledFor: new Date(nightStart.getTime() + Math.min(NIGHT_WINDOW_MS - 60_000, slot * spacing)),
+    };
+  });
 }
 
 function nextRecurringAt(rule: CampaignRecurrenceRule | null | undefined, after: Date, timeZone: string) {
@@ -467,36 +485,9 @@ export default async function campaignRoutes(app: FastifyInstance) {
     const intervalSeconds = existing.channel === "WHATSAPP_UNOFFICIAL" ? unofficial.intervalSeconds : 0;
     const dailyCap = existing.channel === "WHATSAPP_UNOFFICIAL" ? unofficial.dailyCap : recipients.length;
     const timeZone = branch?.timezone ?? "Asia/Kolkata";
-    const existingSlots = existing.channel === "WHATSAPP_UNOFFICIAL"
-      ? await prisma.campaignRecipient.findMany({
-          where: {
-            campaign: { branchId: existing.branchId, channel: "WHATSAPP_UNOFFICIAL", id: { not: id } },
-            status: "queued",
-            scheduledFor: { gte: new Date() },
-          },
-          select: { scheduledFor: true },
-        })
-      : [];
-    const occupied = new Map<string, number>();
-    for (const slot of existingSlots) {
-      if (!slot.scheduledFor) continue;
-      const key = localParts(slot.scheduledFor, timeZone).key;
-      occupied.set(key, (occupied.get(key) ?? 0) + 1);
-    }
-    let cursor = new Date(Math.max(Date.now(), existing.scheduledAt?.getTime() ?? 0));
-    const plan: Array<{ id: string; scheduledFor: Date }> = [];
-    for (const recipient of recipients) {
-      if (existing.channel === "WHATSAPP_UNOFFICIAL") {
-        let key = localParts(cursor, timeZone).key;
-        while ((occupied.get(key) ?? 0) >= dailyCap) {
-          cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000);
-          key = localParts(cursor, timeZone).key;
-        }
-        occupied.set(key, (occupied.get(key) ?? 0) + 1);
-      }
-      plan.push({ id: recipient.id, scheduledFor: new Date(cursor) });
-      cursor = new Date(cursor.getTime() + intervalSeconds * 1000);
-    }
+    const plan = existing.channel === "WHATSAPP_UNOFFICIAL"
+      ? planUnofficialNightlyRecipients(recipients, new Date(Math.max(Date.now(), existing.scheduledAt?.getTime() ?? 0)), timeZone, dailyCap, intervalSeconds)
+      : recipients.map((recipient) => ({ id: recipient.id, scheduledFor: new Date() }));
     const risk = existing.channel === "WHATSAPP_UNOFFICIAL" ? unofficialRisk(intervalSeconds, dailyCap, recipients.length) : undefined;
     const firstRunAt = plan[0]!.scheduledFor;
     const scheduled = firstRunAt.getTime() > Date.now() + 5_000;
@@ -552,11 +543,10 @@ export default async function campaignRoutes(app: FastifyInstance) {
     const dailyCap = existing.channel === "WHATSAPP_UNOFFICIAL"
       ? providerConfig.whatsappUnofficial.dailyCap
       : failedRecipients.length;
-    const startAt = new Date();
-    const plan = failedRecipients.map((recipient, index) => ({
-      id: recipient.id,
-      scheduledFor: new Date(startAt.getTime() + Math.floor(index / Math.max(1, dailyCap)) * 86_400_000 + (index % Math.max(1, dailyCap)) * intervalSeconds * 1_000),
-    }));
+    const branch = await prisma.branch.findUnique({ where: { id: existing.branchId }, select: { timezone: true } });
+    const plan = existing.channel === "WHATSAPP_UNOFFICIAL"
+      ? planUnofficialNightlyRecipients(failedRecipients, new Date(), branch?.timezone ?? "Asia/Kolkata", dailyCap, intervalSeconds)
+      : failedRecipients.map((recipient) => ({ id: recipient.id, scheduledFor: new Date() }));
     await prisma.$transaction([
       prisma.campaign.update({ where: { id }, data: { status: "SENDING" } }),
       ...plan.map((item) => prisma.campaignRecipient.update({

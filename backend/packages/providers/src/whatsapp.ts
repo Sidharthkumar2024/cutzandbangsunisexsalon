@@ -324,9 +324,19 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const detail = typeof data === "object" && data && "message" in data
-        ? String((data as { message: unknown }).message)
-        : `evolution_${response.status}`;
+      // Evolution variants don't consistently put a failed-request reason in
+      // `message`; some return `error`, a nested response, or a plain body.
+      // Preserve a bounded, non-secret diagnostic so delivery failures can be
+      // acted on from the campaign/inbox UI instead of becoming `evolution_400`.
+      const responseData = typeof data === "object" && data ? data as Record<string, unknown> : {};
+      const nested = responseData.response && typeof responseData.response === "object"
+        ? responseData.response as Record<string, unknown>
+        : {};
+      const reason = responseData.message ?? responseData.error ?? responseData.detail
+        ?? nested.message ?? nested.error;
+      const detail = reason === undefined || reason === null || reason === ""
+        ? `evolution_${response.status}`
+        : `evolution_${response.status}:${typeof reason === "string" ? reason : JSON.stringify(reason)}`;
       throw new Error(detail.slice(0, 500));
     }
     return data;

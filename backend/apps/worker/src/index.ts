@@ -345,11 +345,10 @@ async function finishCampaignIfComplete(campaignId: string) {
 }
 
 /**
- * Plans QR-connector campaigns only inside daytime business hours. This is a
- * compliance guardrail, not an attempt to bypass provider policies: recipients
+ * Plans QR-connector campaigns for the salon's overnight window. Recipients
  * still require consent and every message includes a STOP instruction.
  */
-function nextCampaignWindowStart(after: Date, timeZone: string, startHour = 10) {
+function nextCampaignWindowStart(after: Date, timeZone: string, startHour = 22) {
   const local = localDateParts(after, timeZone);
   const today = localToUtc(local.year, local.month, local.day, startHour, 0, timeZone);
   if (after.getTime() <= today.getTime()) return today;
@@ -373,9 +372,11 @@ async function queueCampaignRun(campaignId: string, startAt: Date, intervalSecon
   // 60 is deliberately below the former 75/day default. Bulk, high-volume
   // sends should use opted-in approved Meta templates instead.
   const cappedDailyLimit = Math.max(1, Math.min(60, Math.round(dailyCap ?? recipients.length)));
-  const windowStartHour = 10;
-  const windowEndHour = 22;
-  const windowMs = (windowEndHour - windowStartHour) * 60 * 60 * 1000;
+  // Unofficial campaigns are intentionally limited to 22:00–06:00 local time.
+  // This is delivery scheduling, not a bypass of WhatsApp policy: consent,
+  // opt-out text and the capped daily volume still apply.
+  const windowStartHour = 22;
+  const windowMs = 8 * 60 * 60 * 1000;
   const requestedSpacingMs = Math.max(60_000, intervalSeconds * 1000);
   const plan = recipients.map((recipient, index) => ({
     id: recipient.id,

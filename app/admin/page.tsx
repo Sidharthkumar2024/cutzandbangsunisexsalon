@@ -9080,9 +9080,9 @@ function Settings({
               <label>Webhook secret<input type="password" value={wahaWebhookSecret} onChange={(event) => setWahaWebhookSecret(event.target.value)} placeholder={providerConfig.whatsappUnofficial.hasWebhookSecret ? "Saved · enter only to replace" : "Separate 24+ character secret"} /></label>
               <label>Seconds between messages<select value={providerConfig.whatsappUnofficial.intervalSeconds} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, intervalSeconds: Number(event.target.value) } }))}><option value="60">60 seconds</option><option value="90">90 seconds · recommended</option><option value="120">120 seconds</option><option value="180">180 seconds</option></select></label>
               <label>Daily recipient cap<input type="number" min="5" max="75" value={Math.min(75, providerConfig.whatsappUnofficial.dailyCap)} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, dailyCap: Math.min(75, Math.max(5, Number(event.target.value || 75))) } }))} /></label>
-              <label>Delivery window<input value="24 hours · all day" disabled readOnly /></label>
+              <label>Delivery window<input value="10 PM–6 AM · nightly" disabled readOnly /></label>
             </div>
-            <p className="provider-warning">Unofficial access can still be restricted or banned. Campaigns can run 24 hours, but backend pacing is capped at 75 recipients/day with spacing and opt-out safety. Only message people with recorded opt-in.</p>
+            <p className="provider-warning">Unofficial access can still be restricted or banned. Campaigns are queued only between 10 PM and 6 AM, with backend pacing capped at 60 opted-in recipients/night and STOP opt-out safety.</p>
           </section>
         </div>
         <button className="button admin-primary" disabled={busy || !token} onClick={() => void saveProviders()}>{busy ? "Saving…" : "Save & apply provider credentials"}</button>
