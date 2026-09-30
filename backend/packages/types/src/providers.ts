@@ -32,7 +32,7 @@ export interface SendResult {
   providerCode?: string;
 }
 
-export type WhatsAppSessionAction = "create" | "start" | "restart" | "stop" | "logout";
+export type WhatsAppSessionAction = "create" | "start" | "restart" | "stop" | "logout" | "reset";
 
 export interface WhatsAppContact {
   id: string;

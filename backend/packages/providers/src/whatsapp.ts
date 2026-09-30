@@ -446,31 +446,49 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
 
   async sessionAction(action: WhatsAppSessionAction): Promise<WhatsAppSessionState> {
     if (!this.baseUrl || !this.apiKey || !this.session) throw new Error(this.configError ?? "wa_unofficial_not_configured");
-    const isLogout = action === "logout" || action === "stop";
-    if (action === "create") {
-      const config: Record<string, unknown> = { instanceName: this.session, qrcode: true, integration: "WHATSAPP-BAILEYS" };
+    // A QR becomes invalid as soon as WhatsApp/Evolution rotates the pending
+    // pairing attempt.  Restarting a connecting Baileys socket does not always
+    // clear that stale attempt.  Reset explicitly removes only the connector
+    // instance (never salon data), creates it again, and then requests one
+    // freshly-issued QR.
+    if (action === "reset") {
       try {
-        await this.json("/instance/create", {
-          method: "POST",
-          body: JSON.stringify(config),
-        });
+        await this.json(`/instance/delete/${encodeURIComponent(this.session)}`, { method: "DELETE" });
       } catch (error) {
-        if (!(error instanceof Error) || !/already|exist|422/i.test(error.message)) throw error;
-        // An existing instance exposes a fresh QR through connect.
-        return this.health();
+        if (!(error instanceof Error) || !/^evolution_404\b/.test(error.message)) throw error;
       }
+      await this.json("/instance/create", {
+        method: "POST",
+        body: JSON.stringify({ instanceName: this.session, qrcode: true, integration: "WHATSAPP-BAILEYS" }),
+      });
     } else {
-      // Evolution exposes restart and logout (rather than WAHA's start/stop).
-      const route = isLogout ? "logout" : "restart";
-      try {
-        await this.json(`/instance/${route}/${encodeURIComponent(this.session)}`, { method: isLogout ? "DELETE" : "POST", body: "{}" });
-      } catch (error) {
-        // Some Evolution builds intentionally omit the restart endpoint.  A
-        // connected instance is already usable, so do not prevent webhook
-        // repair (or show an opaque 404) merely because a restart is absent.
-        if (isLogout || !(error instanceof Error) || !/^evolution_404\b/.test(error.message)) throw error;
+      const isLogout = action === "logout" || action === "stop";
+      if (action === "create") {
+        const config: Record<string, unknown> = { instanceName: this.session, qrcode: true, integration: "WHATSAPP-BAILEYS" };
+        try {
+          await this.json("/instance/create", {
+            method: "POST",
+            body: JSON.stringify(config),
+          });
+        } catch (error) {
+          if (!(error instanceof Error) || !/already|exist|422/i.test(error.message)) throw error;
+          // An existing instance exposes a fresh QR through connect.
+          return this.health();
+        }
+      } else {
+        // Evolution exposes restart and logout (rather than WAHA's start/stop).
+        const route = isLogout ? "logout" : "restart";
+        try {
+          await this.json(`/instance/${route}/${encodeURIComponent(this.session)}`, { method: isLogout ? "DELETE" : "POST", body: "{}" });
+        } catch (error) {
+          // Some Evolution builds intentionally omit the restart endpoint.  A
+          // connected instance is already usable, so do not prevent webhook
+          // repair (or show an opaque 404) merely because a restart is absent.
+          if (isLogout || !(error instanceof Error) || !/^evolution_404\b/.test(error.message)) throw error;
+        }
       }
     }
+    const isLogout = action === "logout" || action === "stop";
     // Evolution does not inherit an application callback simply because an
     // instance is connected. Configure the per-instance webhook whenever the
     // session is created or restarted so inbound WhatsApp replies reach the

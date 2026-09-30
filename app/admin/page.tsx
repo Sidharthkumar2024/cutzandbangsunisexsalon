@@ -8805,14 +8805,14 @@ function Settings({
       setBusy(false);
     }
   };
-  const controlWaha = async (action: "create" | "start" | "restart" | "stop" | "logout") => {
+  const controlWaha = async (action: "create" | "start" | "restart" | "stop" | "logout" | "reset") => {
     if (!token) return;
     setBusy(true);
     setMessage("");
     try {
       const next = await backendApi.controlWahaSession(token, action);
       setStatus((current) => current ? { ...current, unofficial: { ...current.unofficial, ...next } } : current);
-      setMessage(action === "create" ? "Evolution instance created. Scan the QR below; it refreshes automatically." : `Evolution instance ${action} complete.`);
+      setMessage(action === "create" || action === "reset" ? "Fresh Evolution QR created. Scan it immediately in WhatsApp → Linked devices." : `Evolution instance ${action} complete.`);
       await loadIntegrations();
     } catch (cause) {
       setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Evolution instance action failed.");
@@ -9114,6 +9114,7 @@ function Settings({
                   <button type="button" className={`toggle ${item?.active ? "active" : ""}`} disabled={busy || !token} onClick={() => void toggleChannel(type, !item?.active)}><i /></button>
                   {key === "official" && <button disabled={busy || !token} onClick={() => void syncTemplates()}>Sync templates</button>}
                   {key === "unofficial" && !item?.connected && !sessionNeedsCreate && <button disabled={busy || !token || !providerConfig.whatsappUnofficial.enabled} onClick={() => void refreshWahaStatus()}>Show / refresh QR</button>}
+                  {key === "unofficial" && !item?.connected && item?.configured && <button disabled={busy || !token || !providerConfig.whatsappUnofficial.enabled} onClick={() => void controlWaha("reset")}>Generate fresh QR</button>}
                   {key === "unofficial" && !item?.connected && sessionNeedsCreate && <button disabled={busy || !token || !providerConfig.whatsappUnofficial.enabled} onClick={() => void controlWaha(technicalStatus === "STOPPED" ? "start" : "create")}>{technicalStatus === "STOPPED" ? "Start session" : "Create session"}</button>}
                   {key === "unofficial" && item?.connected && <button disabled={busy || !token} onClick={() => void syncWahaContacts()}>Preview contacts</button>}
                   {key === "unofficial" && item?.configured && technicalStatus !== "SCAN_QR_CODE" && <button disabled={busy || !token} onClick={() => void controlWaha("restart")}>Restart</button>}

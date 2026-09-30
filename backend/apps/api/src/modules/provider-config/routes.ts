@@ -94,7 +94,7 @@ export default async function providerConfigRoutes(app: FastifyInstance) {
   }, async (req, reply) => {
     const body = z.object({
       branchId: z.string().default("main"),
-      action: z.enum(["create", "start", "restart", "stop", "logout"]),
+      action: z.enum(["create", "start", "restart", "stop", "logout", "reset"]),
     }).parse(req.body);
     const providerContext = await applyProviderSettings(body.branchId);
     const adapter = providerContext.whatsapp("WHATSAPP_UNOFFICIAL");

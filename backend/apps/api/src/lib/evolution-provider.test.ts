@@ -74,6 +74,24 @@ describe("Evolution API WhatsApp provider", () => {
     });
   });
 
+  it("recreates a stale connector instance before requesting a fresh QR", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ instance: { state: "connecting" } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ base64: "ZnJlc2gtcXI=" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(new WhatsAppUnofficialProvider({
+      ...config,
+      callbackUrl: "http://api:4000/api/v1/webhooks/whatsapp/unofficial",
+      webhookSecret: "protected-webhook-secret",
+    }).sessionAction("reset")).resolves.toMatchObject({ connected: false, status: "CONNECTING", qrDataUrl: "data:image/png;base64,ZnJlc2gtcXI=" });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("http://evolution:8080/instance/delete/cutz-bangs-main");
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe("http://evolution:8080/instance/create");
+    expect(String(fetchMock.mock.calls[4]?.[0])).toBe("http://evolution:8080/instance/connect/cutz-bangs-main");
+  });
+
   it("does not send oversized inline invoice media", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
