@@ -339,6 +339,14 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
         : `evolution_${response.status}:${typeof reason === "string" ? reason : JSON.stringify(reason)}`;
       throw new Error(detail.slice(0, 500));
     }
+    // Evolution's instance controller returns HTTP 200 for some failed
+    // lifecycle requests (notably restart on a closed Baileys session).  Do
+    // not make the Settings button appear successful when the connector has
+    // actually rejected the request.
+    if (data && typeof data === "object" && (data as { error?: unknown }).error === true) {
+      const message = (data as { message?: unknown }).message;
+      throw new Error(`evolution_action_failed:${typeof message === "string" ? message : "unknown"}`);
+    }
     return data;
   }
 
