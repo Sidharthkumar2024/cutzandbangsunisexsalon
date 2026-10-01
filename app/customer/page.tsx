@@ -626,7 +626,9 @@ export default function CustomerPortal() {
                   {rewardSlices.map((slice, index) => (
                     <span
                       key={slice}
-                      style={{ transform: `rotate(${index * (360 / rewardSlices.length)}deg) translateY(-70px) rotate(90deg)` }}
+                      style={{
+                        transform: `rotate(${index * (360 / rewardSlices.length) + 180 / rewardSlices.length}deg) translateY(-68px) rotate(${-index * (360 / rewardSlices.length) - 180 / rewardSlices.length}deg)`,
+                      }}
                     >
                       {slice}
                     </span>

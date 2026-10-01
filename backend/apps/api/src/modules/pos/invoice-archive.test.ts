@@ -40,7 +40,7 @@ vi.mock("@cutz/db", () => ({
   },
 }));
 vi.mock("@cutz/providers", () => ({
-  WAHA_INLINE_MEDIA_MAX_BYTES: 8 * 1024 * 1024,
+  EVOLUTION_INLINE_MEDIA_MAX_BYTES: 8 * 1024 * 1024,
   providers: {
     storage: () => ({
       get: mocks.storageGet,
@@ -50,7 +50,7 @@ vi.mock("@cutz/providers", () => ({
     }),
   },
   invoiceEmail: vi.fn(() => "<p>invoice</p>"),
-  isRestrictedWahaHost: vi.fn(() => false),
+  isRestrictedEvolutionHost: vi.fn(() => false),
 }));
 vi.mock("@cutz/queue", () => ({ enqueueEmail: mocks.enqueueEmail }));
 vi.mock("../../lib/audit.js", () => ({ audit: mocks.audit }));
@@ -283,7 +283,7 @@ describe("invoice archive", () => {
     await app.close();
   });
 
-  it("sends a local invoice PDF inline to unofficial WAHA without exposing a file route", async () => {
+  it("sends a local invoice PDF inline to unofficial Evolution without exposing a file route", async () => {
     const pdf = Buffer.from("%PDF-private");
     mocks.invoiceFindUnique.mockResolvedValue({
       id: "invoice-1",

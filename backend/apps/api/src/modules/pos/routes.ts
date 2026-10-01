@@ -185,8 +185,19 @@ async function nextInvoiceNumber(tx: Prisma.TransactionClient): Promise<string> 
   // claim the same human-facing invoice number.
   await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('cutz_invoice_number')) IS NULL AS locked`;
   const year = new Date().getUTCFullYear();
-  const count = await tx.invoice.count();
-  return `CB-${year}-${String(count + 1).padStart(6, "0")}`;
+  const prefix = `CB-${year}-`;
+  // A count is not a sequence: deleting or importing an invoice can leave a
+  // higher number behind and make count + 1 collide with it. The fixed-width
+  // suffix keeps descending lexicographic order aligned with numeric order.
+  const latest = await tx.invoice.findFirst({
+    where: { number: { startsWith: prefix } },
+    orderBy: { number: "desc" },
+    select: { number: true },
+  });
+  const suffix = latest?.number.slice(prefix.length) ?? "0";
+  const lastSequence = Number.parseInt(suffix, 10);
+  const nextSequence = Number.isSafeInteger(lastSequence) && lastSequence >= 0 ? lastSequence + 1 : 1;
+  return `${prefix}${String(nextSequence).padStart(6, "0")}`;
 }
 
 export default async function posRoutes(app: FastifyInstance) {
@@ -807,6 +818,15 @@ export default async function posRoutes(app: FastifyInstance) {
           coupon: couponQuote ? { code: couponQuote.coupon.code, discountMinor: couponDiscountMinor } : null,
         });
       } catch (err) {
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === "P2002" &&
+          Array.isArray(err.meta?.target) &&
+          err.meta.target.includes("number")
+        ) {
+          app.log.warn({ err }, "invoice number collision; checkout can be retried safely");
+          return reply.code(409).send({ error: "invoice_number_conflict", retryable: true });
+        }
         if (err instanceof InsufficientCreditError) {
           return reply.code(409).send({
             error: "insufficient_membership_credit",

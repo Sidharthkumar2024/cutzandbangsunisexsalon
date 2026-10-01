@@ -2022,7 +2022,7 @@ html,body{max-width:100%;overflow-x:hidden}
 .spin-wheel.is-spinning{animation:spinWheel .72s linear infinite}
 .spin-wheel::before{content:"";position:absolute;inset:8px;border-radius:50%;background:repeating-conic-gradient(from 0deg,#fff 0 5deg,transparent 5deg 30deg);mask:radial-gradient(circle,transparent 0 77%,#000 78%);opacity:.94}
 .spin-wheel b{position:absolute;inset:50%;translate:-50% -50%;width:82px;height:82px;display:grid;place-items:center;border-radius:50%;background:#8d0710;border:4px solid #fff;color:#fff;font:950 18px/.88 system-ui,sans-serif;text-shadow:0 2px 6px rgb(0 0 0 / 25%)}
-.spin-wheel span{position:absolute;left:50%;top:50%;transform-origin:0 0;width:64px;margin-left:-32px;color:white;font-size:8px;font-weight:950;text-transform:uppercase;text-shadow:0 2px 4px rgb(0 0 0 / 36%)}
+.spin-wheel span{position:absolute;left:50%;top:50%;transform-origin:0 0;width:58px;margin-left:-29px;color:white;font-size:8px;font-weight:950;line-height:1.04;text-align:center;text-transform:uppercase;text-shadow:0 2px 4px rgb(0 0 0 / 44%);overflow-wrap:anywhere}
 .scratch-prize-card{position:relative;z-index:2;display:grid;grid-template-columns:.85fr 1.15fr;gap:12px;align-items:stretch;min-height:178px;padding:12px;border:3px solid #ffcf32;border-radius:22px;background:linear-gradient(135deg,#47008a,#6f00a8);box-shadow:0 0 0 5px rgb(255 255 255 / 10%),0 18px 34px rgb(31 0 58 / 34%)}
 .scratch-prize-card>div{display:grid;place-items:center;align-content:center;gap:14px;border-right:1px dashed rgb(255 255 255 / 34%)}
 .scratch-prize-card strong{font:950 clamp(27px,7vw,44px)/.9 system-ui,sans-serif;color:#fff;text-shadow:0 4px 14px rgb(0 0 0 / 25%)}
@@ -2083,7 +2083,7 @@ html,body{max-width:100%;overflow-x:hidden}
 .portal-birthday-card input{min-height:44px;border:1px solid var(--line);border-radius:10px;background:#fff;padding:0 10px;color:var(--ink);font:inherit}
 .portal-birthday-card .button{min-height:44px;white-space:nowrap}
 @media (max-width:700px){.portal-birthday-card{grid-template-columns:1fr;padding:20px}.portal-birthday-card .button{width:100%}}
-@media (max-width:520px){.spin-wheel{width:min(190px,62vw);border-width:8px}.spin-wheel span{font-size:7px;width:56px;margin-left:-28px}.spin-wheel b{width:72px;height:72px;font-size:16px}}
+@media (max-width:520px){.spin-wheel-stage{min-height:228px}.spin-wheel{width:min(208px,66vw);border-width:8px}.spin-wheel span{width:48px;margin-left:-24px;font-size:6px;line-height:1.02}.spin-wheel b{width:66px;height:66px;font-size:15px}}
 
 /* 2026 monochrome workspace system — shared by admin, staff and customer portals. */
 :root{
