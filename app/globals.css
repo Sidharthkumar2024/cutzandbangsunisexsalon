@@ -2070,6 +2070,21 @@ html,body{max-width:100%;overflow-x:hidden}
   .portal-draw-actions{grid-template-columns:1fr}
 }
 
+/* Membership picker must retain its own scroll area; clipping it hides the
+   service choices and the submit action on short laptop/mobile viewports. */
+.membership-service-picker{min-height:0!important;max-height:none!important;overflow:visible!important}
+.membership-service-picker>div:last-child{max-height:260px!important;padding:2px 6px 2px 2px!important;overscroll-behavior:contain}
+
+/* Customer-managed birthday reward and compact phone reward presentation. */
+.portal-birthday-card{display:grid;grid-template-columns:minmax(0,1fr) minmax(160px,.55fr) auto;align-items:end;gap:16px;margin-top:16px;padding:24px 26px;border:1px solid #e1d4c8;border-radius:16px;background:linear-gradient(135deg,#fffaf4,#fff0f6)}
+.portal-birthday-card h2{margin:0;font:400 30px Georgia,serif;color:var(--wine)}
+.portal-birthday-card p:not(.eyebrow){margin:8px 0 0;color:var(--muted);line-height:1.5}
+.portal-birthday-card label{display:grid;gap:7px;color:var(--muted);font-size:.78rem;font-weight:800}
+.portal-birthday-card input{min-height:44px;border:1px solid var(--line);border-radius:10px;background:#fff;padding:0 10px;color:var(--ink);font:inherit}
+.portal-birthday-card .button{min-height:44px;white-space:nowrap}
+@media (max-width:700px){.portal-birthday-card{grid-template-columns:1fr;padding:20px}.portal-birthday-card .button{width:100%}}
+@media (max-width:520px){.spin-wheel{width:min(190px,62vw);border-width:8px}.spin-wheel span{font-size:7px;width:56px;margin-left:-28px}.spin-wheel b{width:72px;height:72px;font-size:16px}}
+
 /* 2026 monochrome workspace system — shared by admin, staff and customer portals. */
 :root{
   --workspace-bg:#f5f6f8;

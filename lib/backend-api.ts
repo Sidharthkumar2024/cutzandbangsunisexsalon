@@ -144,6 +144,7 @@ export type BackendCustomer = {
   customerSince: string;
   lastVisitAt?: string | null;
   segments: string[];
+  tags?: string[];
 };
 export type BackendCustomerDirectory = {
   customers: BackendCustomer[];
@@ -1815,6 +1816,11 @@ export const backendApi = {
       `/portal/customer/rewards/${encodeURIComponent(kind)}/play`,
       { method: "POST", body: "{}" },
       token,
+    ),
+  updateCustomerPortalProfile: (token: string, payload: { birthDate: string | null }) =>
+    request<{ birthDate: string | null; updatedAt: string }>(
+      "/portal/customer/profile",
+      { method: "PATCH", body: JSON.stringify(payload) }, token,
     ),
   requestCustomerReschedule: (token: string, appointmentId: string, note?: string) =>
     request<{ requested: boolean; eventId: string }>(

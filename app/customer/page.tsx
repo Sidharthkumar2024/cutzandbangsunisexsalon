@@ -69,6 +69,7 @@ export default function CustomerPortal() {
   const [activeReward, setActiveReward] = useState<RewardKind | null>(null);
   const [drawResults, setDrawResults] = useState<Partial<Record<RewardKind, CustomerRewardDrawResult>>>({});
   const [rewardModal, setRewardModal] = useState<RewardModalState | null>(null);
+  const [birthDate, setBirthDate] = useState("");
 
   useEffect(() => {
     const savedToken = window.localStorage.getItem(CUSTOMER_TOKEN_KEY);
@@ -81,6 +82,7 @@ export default function CustomerPortal() {
       .then((overview) => {
         setData(overview);
         setToken(savedToken);
+        setBirthDate((overview.tags ?? []).find((tag) => /^dob:\d{4}-\d{2}-\d{2}$/u.test(tag))?.slice(4) ?? "");
       })
       .catch(() => {
         window.localStorage.removeItem(CUSTOMER_TOKEN_KEY);
@@ -104,6 +106,20 @@ export default function CustomerPortal() {
     } finally {
       setBusy(false);
     }
+  };
+  const saveBirthday = async () => {
+    if (!token) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.updateCustomerPortalProfile(token, { birthDate: birthDate || null });
+      const overview = await backendApi.customerOverview(token);
+      setData(overview);
+      setBirthDate((overview.tags ?? []).find((tag) => /^dob:\d{4}-\d{2}-\d{2}$/u.test(tag))?.slice(4) ?? "");
+      setMessage("Birthday saved. Your birthday gift will appear here on your special day.");
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message.replaceAll("_", " ") : "Birthday could not be saved.");
+    } finally { setBusy(false); }
   };
 
   const verifyOtp = async () => {
@@ -459,6 +475,11 @@ export default function CustomerPortal() {
             </div>
           </article>
         </section>
+        <section className="portal-birthday-card" aria-label="Birthday reward">
+          <div><p className="eyebrow">Birthday gift</p><h2>Celebrate with us</h2><p>Save your date of birth securely. On your birthday, your portal shows a 10% gift; active members receive 15% off.</p></div>
+          <label>Date of birth<input type="date" value={birthDate} max={new Date().toISOString().slice(0, 10)} onChange={(event) => setBirthDate(event.target.value)} /></label>
+          <button className="button admin-primary" type="button" disabled={busy || !birthDate} onClick={() => void saveBirthday()}>{busy ? "Saving…" : "Save birthday"}</button>
+        </section>
         {servicePackages.length > 0 && (
           <section className="portal-packages">
             <div className="section-heading">
@@ -597,7 +618,7 @@ export default function CustomerPortal() {
                 <div className="spin-pointer" aria-hidden="true" />
                 <div
                   className={`spin-wheel ${rewardModalLoading ? "is-spinning" : ""}`}
-                  style={rewardModalResult ? { transform: `rotate(${720 + ((rewardModalResult.roll * 37) % 360)}deg)` } : undefined}
+                  style={undefined}
                 >
                   {rewardSlices.map((slice, index) => (
                     <span

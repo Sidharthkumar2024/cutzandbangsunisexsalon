@@ -345,6 +345,20 @@ export default async function platformRoutes(app: FastifyInstance) {
     return { ...customer, loyaltyRules: await getLoyaltyRules(prisma, customer.branchId), marketingSettings: marketing?.value ?? null };
   });
 
+  // A customer can update only their own birthday. Keep the canonical date in
+  // the existing private customer tags field rather than exposing it in links.
+  app.patch("/portal/customer/profile", { preHandler: authorize("CUSTOMER") }, async (req, reply) => {
+    const body = z.object({ birthDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u).nullable() }).parse(req.body);
+    if (body.birthDate && Number.isNaN(Date.parse(`${body.birthDate}T00:00:00.000Z`))) return reply.code(400).send({ error: "invalid_birth_date" });
+    const customer = await prisma.customer.findFirst({ where: { userId: req.user!.id, deletedAt: null }, select: { id: true, tags: true } });
+    if (!customer) return reply.code(404).send({ error: "customer_profile_not_found" });
+    const tags = customer.tags.filter((tag) => !/^(?:dob|birthday|bday)[:=\s]+/iu.test(tag));
+    if (body.birthDate) tags.push(`dob:${body.birthDate}`);
+    const updated = await prisma.customer.update({ where: { id: customer.id }, data: { tags } });
+    await audit("customer.portal_profile.update", "Customer", customer.id, { actorUserId: req.user?.id, before: { hasBirthDate: customer.tags.some((tag) => /^(?:dob|birthday|bday)[:=\s]+/iu.test(tag)) }, after: { hasBirthDate: Boolean(body.birthDate) }, ip: req.ip });
+    return { birthDate: body.birthDate, updatedAt: updated.updatedAt };
+  });
+
   // Backward-compatible alias for older frontend paths.
   app.get("/platform/portal/customer/overview", { preHandler: authorize("CUSTOMER") }, async (req, reply) => {
     const customer = await prisma.customer.findFirst({ where: { userId: req.user!.id, deletedAt: null }, include: { appointments: { where: { deletedAt: null }, orderBy: { startAt: "desc" }, take: 100, include: { items: { include: { service: true, staff: true } } } }, invoices: { orderBy: { createdAt: "desc" }, take: 100, include: { items: true, payments: true } }, memberships: { where: { isActive: true }, include: { plan: true, ledger: { orderBy: { createdAt: "desc" } } } }, servicePackages: { where: { isActive: true }, orderBy: { createdAt: "desc" }, include: { package: { include: { items: { include: { service: true } } } }, ledger: { orderBy: { createdAt: "asc" }, include: { service: true } } } }, walletLedger: { orderBy: { createdAt: "desc" }, take: 100 }, loyaltyLedger: { orderBy: { createdAt: "desc" }, take: 100 } } });
