@@ -9114,7 +9114,7 @@ function Settings({
                   <button type="button" className={`toggle ${item?.active ? "active" : ""}`} disabled={busy || !token} onClick={() => void toggleChannel(type, !item?.active)}><i /></button>
                   {key === "official" && <button disabled={busy || !token} onClick={() => void syncTemplates()}>Sync templates</button>}
                   {key === "unofficial" && !item?.connected && !sessionNeedsCreate && <button disabled={busy || !token || !providerConfig.whatsappUnofficial.enabled} onClick={() => void refreshWahaStatus()}>Show / refresh QR</button>}
-                  {key === "unofficial" && item?.configured && <button disabled={busy || !token || !providerConfig.whatsappUnofficial.enabled} onClick={() => void controlWaha("reset")}>Reset & generate fresh QR</button>}
+                  {key === "unofficial" && providerConfig.whatsappUnofficial.enabled && <button disabled={busy || !token} onClick={() => void controlWaha("reset")}>Reset & generate fresh QR</button>}
                   {key === "unofficial" && !item?.connected && sessionNeedsCreate && <button disabled={busy || !token || !providerConfig.whatsappUnofficial.enabled} onClick={() => void controlWaha(technicalStatus === "STOPPED" ? "start" : "create")}>{technicalStatus === "STOPPED" ? "Start session" : "Create session"}</button>}
                   {key === "unofficial" && item?.connected && <button disabled={busy || !token} onClick={() => void syncWahaContacts()}>Preview contacts</button>}
                   {key === "unofficial" && item?.configured && technicalStatus !== "SCAN_QR_CODE" && <button disabled={busy || !token} onClick={() => void controlWaha("restart")}>Restart</button>}
