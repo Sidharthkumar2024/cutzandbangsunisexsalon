@@ -256,6 +256,9 @@ export default function CustomerPortal() {
     )
     .sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))[0];
   const membership = data.memberships[0];
+  const todayMonthDay = new Date().toISOString().slice(5, 10);
+  const birthdayIsToday = Boolean(birthDate && birthDate.slice(5, 10) === todayMonthDay);
+  const birthdayDiscount = membership ? 15 : 10;
   const servicePackages = data.servicePackages ?? [];
   const stampRules = data.marketingSettings?.rewardRules;
   const stampEveryVisits = Math.max(2, Math.min(50, Number(stampRules?.stampEveryVisits ?? 5)));
@@ -476,7 +479,7 @@ export default function CustomerPortal() {
           </article>
         </section>
         <section className="portal-birthday-card" aria-label="Birthday reward">
-          <div><p className="eyebrow">Birthday gift</p><h2>Celebrate with us</h2><p>Save your date of birth securely. On your birthday, your portal shows a 10% gift; active members receive 15% off.</p></div>
+          <div><p className="eyebrow">Birthday gift</p><h2>{birthdayIsToday ? `${birthdayDiscount}% off unlocked` : "Celebrate with us"}</h2><p>{birthdayIsToday ? `Happy birthday! Show this portal screen at checkout to receive your ${birthdayDiscount}% birthday gift.` : "Save your date of birth securely. On your birthday, this screen unlocks a 10% gift; active members receive 15% off."}</p></div>
           <label>Date of birth<input type="date" value={birthDate} max={new Date().toISOString().slice(0, 10)} onChange={(event) => setBirthDate(event.target.value)} /></label>
           <button className="button admin-primary" type="button" disabled={busy || !birthDate} onClick={() => void saveBirthday()}>{busy ? "Saving…" : "Save birthday"}</button>
         </section>
