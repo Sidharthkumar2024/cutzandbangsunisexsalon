@@ -558,7 +558,9 @@ async function applyStoredProviderSettings(branchId: string) {
           baseUrl: nonEmpty(storedUnofficial?.baseUrl) ?? process.env.EVOLUTION_API_URL ?? "",
           callbackUrl: nonEmpty(storedUnofficial?.callbackUrl) ?? process.env.WA_UNOFFICIAL_CALLBACK_URL ?? "",
           session: nonEmpty(storedUnofficial?.session) ?? process.env.EVOLUTION_INSTANCE ?? "cutz-bangs-main",
-          apiKey: decryptSecret(storedUnofficial?.apiKeyEncrypted ?? storedUnofficial?.secretEncrypted) ?? process.env.EVOLUTION_API_KEY,
+          // Prefer the runtime connector credential after a VPS key rotation;
+          // the encrypted settings value remains a fallback for local setups.
+          apiKey: process.env.EVOLUTION_API_KEY ?? decryptSecret(storedUnofficial?.apiKeyEncrypted ?? storedUnofficial?.secretEncrypted),
           webhookSecret: decryptSecret(storedUnofficial?.webhookSecretEncrypted) ?? process.env.WA_UNOFFICIAL_WEBHOOK_SECRET,
         }
       : undefined,

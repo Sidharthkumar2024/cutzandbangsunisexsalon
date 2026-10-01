@@ -253,7 +253,10 @@ function runtimeConfig(stored: StoredProviderSettings): ProviderRuntimeConfig {
     whatsappUnofficial: stored.whatsappUnofficial
       ? {
           ...stored.whatsappUnofficial,
-          apiKey: decryptSecret(stored.whatsappUnofficial.apiKeyEncrypted ?? stored.whatsappUnofficial.secretEncrypted),
+          // The VPS-managed connector key is the authoritative credential.
+          // A previously saved panel key can survive a connector-key rotation
+          // and then turn every QR action into a misleading 403.
+          apiKey: process.env.EVOLUTION_API_KEY ?? decryptSecret(stored.whatsappUnofficial.apiKeyEncrypted ?? stored.whatsappUnofficial.secretEncrypted),
           webhookSecret: decryptSecret(stored.whatsappUnofficial.webhookSecretEncrypted),
           callbackUrl: stored.whatsappUnofficial.callbackUrl || process.env.WA_UNOFFICIAL_CALLBACK_URL,
         }
