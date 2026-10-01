@@ -463,7 +463,16 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
       try {
         await this.json(`/instance/delete/${encodeURIComponent(this.session)}`, { method: "DELETE" });
       } catch (error) {
-        if (!(error instanceof Error) || !/^evolution_404\b/.test(error.message)) throw error;
+        if (!(error instanceof Error) || !/^evolution_(?:400|404)\b/.test(error.message)) throw error;
+        // Some Evolution releases return 400 from instance/delete when a
+        // connected Baileys session is still tearing down.  Logging out the
+        // same instance is the supported, non-destructive fallback: it drops
+        // only the WhatsApp pairing and lets /instance/connect issue a new QR.
+        // Never mask a different provider failure here.
+        if (/^evolution_400\b/.test(error.message)) {
+          await this.json(`/instance/logout/${encodeURIComponent(this.session)}`, { method: "DELETE", body: "{}" });
+          return this.health();
+        }
       }
       await this.json("/instance/create", {
         method: "POST",
