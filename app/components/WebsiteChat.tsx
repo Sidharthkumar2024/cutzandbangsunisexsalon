@@ -90,7 +90,8 @@ export default function WebsiteChat() {
           </div>
           <form onSubmit={send}>
             {!messages.length && <div className="website-chat-identity"><input aria-label="Your name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" /><input aria-label="Mobile number" inputMode="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Mobile number" /></div>}
-            <div className="website-chat-compose"><input aria-label="Message" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Type your message…" /><button disabled={busy || !draft.trim() || (!messages.length && (!name.trim() || phone.replace(/\D/gu, "").length < 8))}>{busy ? "…" : "Send"}</button></div>
+            <div className="website-chat-compose"><input aria-label="Message" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Type your message…" /><button disabled={busy || !draft.trim() || (!messages.length && (!name.trim() || phone.replace(/\D/gu, "").length < 8))}>{busy ? "Please wait…" : "Send"}</button></div>
+            {busy && <small className="website-chat-wait" role="status">Please wait while your message is saved for the salon team.</small>}
             {error && <small className="website-chat-error">{error}</small>}
             <small className="website-chat-consent">Chat creates a salon enquiry only. WhatsApp marketing needs separate consent.</small>
           </form>

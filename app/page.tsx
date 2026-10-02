@@ -48,7 +48,7 @@ export default async function Home() {
       <nav className="topbar" aria-label="Main navigation">
         <a className="wordmark brand-image-link" href="#top" aria-label="Cutz and Bangs home"><BrandLogo priority /></a>
         <a className="mobile-login-pill" href="/customer">Login</a>
-        <div className="nav-links"><a href="#services">Services</a><a href="#studio">Our studio</a><a href="#membership">Membership</a><a href="#visit">Visit</a><a href="/contact">Contact</a></div>
+        <div className="nav-links"><a href="#services">Services</a><a href="/about">About us</a><a href="#membership">Membership</a><a href="#visit">Visit</a><a href="/contact">Contact</a></div>
         <div className="nav-actions"><a className="staff-login" href="/customer">Sign in</a><a className="staff-login" href="/admin/login">Team login</a><a className="button button-dark nav-book" href="/book">Book a visit</a></div>
       </nav>
 
@@ -74,6 +74,7 @@ export default async function Home() {
       {testimonials.length > 0 && <section className="testimonial-section" id="reviews">
         <div className="testimonial-heading"><p className="eyebrow">Notes from the chair</p><h2>They came for a service.<br/><em>They stayed for the feeling.</em></h2></div>
         <div className="testimonial-grid">{testimonials.map((item, index) => <article key={item.id} className={index === 1 ? 'featured' : ''}><div className="review-stars" aria-label={`${item.rating} out of 5 stars`}>{'★'.repeat(item.rating)}</div><blockquote>“{item.quote}”</blockquote><footer><span>{item.customerName.split(' ').map(part => part[0]).join('').slice(0,2)}</span><div><strong>{item.customerName}</strong><small>{item.customerDetail}</small></div></footer></article>)}</div>
+        <a className="google-review-link" href={business.directions} target="_blank" rel="noreferrer">See our location and leave a Google review <span>↗</span></a>
       </section>}
 
       <section className="membership-plans-section" id="membership">
@@ -94,7 +95,7 @@ export default async function Home() {
       </section>
 
       <section className="booking-peek" id="book"><div><p className="eyebrow">Your time, beautifully spent</p><h2>Ready for a refresh?</h2></div><a className="button button-light" href="/book">Start booking <span>→</span></a></section>
-      <footer className="footer"><a className="wordmark brand-image-link" href="#top"><BrandLogo /></a><p>Sector 15 Dwarka · New Delhi 110059</p><div><a href="/book">Book</a><a href="/contact">Contact</a><a href="/customer">My account</a><a href="/staff">Staff</a><a href="/admin/login">Admin</a></div></footer>
+      <footer className="footer"><a className="wordmark brand-image-link" href="#top"><BrandLogo /></a><p>Sector 15 Dwarka · New Delhi 110059</p><div><a href="/book">Book</a><a href="/about">About</a><a href="/contact">Contact</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/customer">My account</a><a href="/staff">Staff</a></div></footer>
       <WebsiteChat />
     </main>
   );

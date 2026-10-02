@@ -2,6 +2,25 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { AIProvider, VendorBillExtraction } from "@cutz/types";
 
 const MODEL = process.env.AI_MODEL ?? "claude-sonnet-5";
+const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-5-mini";
+
+async function openAiText(system: string, user: string, maxTokens: number): Promise<string | null> {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) return null;
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      messages: [{ role: "system", content: system }, { role: "user", content: user }],
+      max_completion_tokens: maxTokens,
+    }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) throw new Error(`openai_${response.status}`);
+  const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+  return payload.choices?.[0]?.message?.content?.trim() || null;
+}
 
 /**
  * Anthropic-backed AI provider for campaign drafts and the inbox FAQ assistant.
@@ -18,28 +37,41 @@ export class AnthropicAIProvider implements AIProvider {
   }
 
   async draft(prompt: string, context?: Record<string, unknown>): Promise<string> {
-    if (!this.client) return `[ai:dev draft] ${prompt}`;
+    const system =
+      "You write short, friendly marketing copy for a salon. No emojis unless asked. " +
+      "Keep it under 60 words and never invent prices or offers not in the context. " +
+      "Return a draft only; a salon staff member must approve it before sending.";
+    const user = `${prompt}\n\nContext: ${JSON.stringify(context ?? {})}`;
+    if (!this.client) {
+      const generated = await openAiText(system, user, 800);
+      if (!generated) throw new Error("ai_provider_not_configured");
+      return generated;
+    }
     const msg = await this.client.messages.create({
       model: MODEL,
       max_tokens: 800,
-      system:
-        "You write short, friendly marketing copy for a salon. No emojis unless asked. " +
-        "Keep it under 60 words and never invent prices or offers not in the context.",
-      messages: [{ role: "user", content: `${prompt}\n\nContext: ${JSON.stringify(context ?? {})}` }],
+      system,
+      messages: [{ role: "user", content: user }],
     });
     return msg.content.filter((b) => b.type === "text").map((b) => (b as { text: string }).text).join("");
   }
 
   async answerFaq(question: string, kb: Record<string, unknown>): Promise<string | null> {
-    if (!this.client) return null;
+    const system =
+      "You are a salon front-desk assistant. Answer ONLY from the provided knowledge base " +
+      "(services, pricing, timings, location). If the answer is not clearly in the KB, reply " +
+      "with exactly the token HANDOFF so a human can take over. Do not guess.";
+    const user = `KB: ${JSON.stringify(kb)}\n\nQuestion: ${question}`;
+    if (!this.client) {
+      const generated = await openAiText(system, user, 400);
+      if (!generated || generated === "HANDOFF" || generated.includes("HANDOFF")) return null;
+      return generated;
+    }
     const msg = await this.client.messages.create({
       model: MODEL,
       max_tokens: 400,
-      system:
-        "You are a salon front-desk assistant. Answer ONLY from the provided knowledge base " +
-        "(services, pricing, timings, location). If the answer is not clearly in the KB, reply " +
-        "with exactly the token HANDOFF so a human can take over. Do not guess.",
-      messages: [{ role: "user", content: `KB: ${JSON.stringify(kb)}\n\nQuestion: ${question}` }],
+      system,
+      messages: [{ role: "user", content: user }],
     });
     const text = msg.content
       .filter((b) => b.type === "text")

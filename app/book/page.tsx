@@ -320,7 +320,8 @@ export default function BookingPage() {
     );
 
   return (
-    <main className="booking-shell">
+      <main className="booking-shell">
+        {loading && <div className="booking-wait-overlay" role="status" aria-live="assertive"><div><span aria-hidden="true" /><strong>Please wait…</strong><p>We’re confirming your appointment. Please don’t close this page.</p></div></div>}
       <header className="booking-header">
         <Link className="booking-brand" href="/">
           <span>CUTZ</span>

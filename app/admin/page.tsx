@@ -7461,13 +7461,13 @@ function Campaigns({
           </div>
         )}
         {createBlockReason && <p className="campaign-form-warning">{createBlockReason}</p>}
-        <div className="form-actions"><button disabled={!token || busy} onClick={() => void draft()}>AI draft</button><button className="button admin-primary" disabled={busy || Boolean(createBlockReason)} onClick={() => void create()}>Create for approval</button></div>
+        <div className="form-actions"><button disabled={!token || busy} onClick={() => void draft()}>AI draft (ChatGPT / Anthropic)</button><button className="button admin-primary" disabled={busy || Boolean(createBlockReason)} onClick={() => void create()}>Create for approval</button></div>
       </section>
       <div className="campaign-steps">
         {[
           ["1", "Audience", audienceMode === "MANUAL" ? `${manualStats.valid} pasted/CSV numbers` : `At-risk / lapsed · ${attention}`],
           ["2", "Safety", "Campaign-only import, consent and STOP opt-out"],
-          ["3", "Channel", "Official or unofficial WhatsApp"],
+          ["3", "Channel", "Official Meta WhatsApp"],
           ["4", "Reports", "Sent, delivered, read, replied, failed"],
         ].map(([num, label, detail], i) => (
           <article key={label} className={i < 3 ? "complete" : ""}>
