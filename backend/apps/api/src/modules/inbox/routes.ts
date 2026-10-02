@@ -270,6 +270,32 @@ export default async function inboxRoutes(app: FastifyInstance) {
     return { synced: remote.length, templates: remote };
   });
 
+  app.post("/integrations/whatsapp/templates", { preHandler: authorize("OWNER", "ADMIN") }, async (req, reply) => {
+    const body = z.object({
+      name: z.string().trim().regex(/^[a-z0-9_]{1,512}$/),
+      language: z.string().trim().regex(/^[a-z]{2,3}(?:_[A-Z]{2})?$/).default("en"),
+      category: z.enum(["MARKETING", "UTILITY", "BROADCAST"]),
+      body: z.string().trim().min(1).max(1024),
+      header: z.string().trim().max(60).optional(),
+      footer: z.string().trim().max(60).optional(),
+    }).parse(req.body);
+    const providerContext = await applyProviderSettings("main");
+    const messaging = providerContext.whatsapp("WHATSAPP_OFFICIAL");
+    if (!messaging.createTemplate) return reply.code(501).send({ error: "official_template_creation_not_supported" });
+    try {
+      const result = await messaging.createTemplate({
+        ...body,
+        category: body.category === "BROADCAST" ? "MARKETING" : body.category,
+      });
+      return reply.code(201).send({ ...result, useCase: body.category });
+    } catch (error) {
+      return reply.code(422).send({
+        error: "meta_template_submission_failed",
+        detail: error instanceof Error ? error.message.slice(0, 500) : "Meta template submission failed",
+      });
+    }
+  });
+
   app.get("/inbox", { preHandler: authorize(...STAFF) }, async (req) => {
     const { unread } = req.query as Record<string, string>;
     const scopedBranch = ["OWNER", "ADMIN"].includes(req.user!.role) ? undefined : req.user!.branchId ?? "__none__";
@@ -285,7 +311,7 @@ export default async function inboxRoutes(app: FastifyInstance) {
   });
 
   app.post("/inbox", { preHandler: authorize(...STAFF) }, async (req, reply) => {
-    const body = z.object({ customerId: z.string(), channel: z.enum(WHATSAPP_CHANNELS) }).parse(req.body);
+    const body = z.object({ customerId: z.string(), channel: z.literal("WHATSAPP_OFFICIAL") }).parse(req.body);
     await ensureChannels();
     const [customer, channel] = await Promise.all([
       prisma.customer.findFirst({ where: { id: body.customerId, deletedAt: null } }),

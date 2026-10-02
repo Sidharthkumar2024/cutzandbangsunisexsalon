@@ -4459,7 +4459,6 @@ function POS({
                 {([
                   ["OFF", "Off"],
                   ["WHATSAPP_OFFICIAL", "Official"],
-                  ["WHATSAPP_UNOFFICIAL", "Unofficial"],
                 ] as const).map(([channel, label]) => (
                   <button
                     type="button"
@@ -4504,7 +4503,6 @@ function POS({
               </button>
               {([
                 ["WHATSAPP_OFFICIAL", "Official WhatsApp"],
-                ["WHATSAPP_UNOFFICIAL", "Unofficial WhatsApp"],
               ] as const).map(([channel, label]) => (
                 <button
                   type="button"
@@ -6453,9 +6451,6 @@ function Inbox({
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [inboxSearch, setInboxSearch] = useState("");
   const [unreadOnly, setUnreadOnly] = useState(false);
-  const [newChannel, setNewChannel] = useState<
-    "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL"
-  >("WHATSAPP_OFFICIAL");
   const selected =
     data.conversations.find((item) => item.id === selectedId) ??
     data.conversations[0];
@@ -6610,7 +6605,7 @@ function Inbox({
     setBusy(true);
     setMessage("");
     try {
-      const conversation = await backendApi.createConversation(token, { customerId: newCustomerId, channel: newChannel });
+      const conversation = await backendApi.createConversation(token, { customerId: newCustomerId, channel: "WHATSAPP_OFFICIAL" });
       setSelectedId(conversation.id);
       setDetail(await backendApi.conversation(token, conversation.id));
       setMessage("Conversation ready on the selected WhatsApp provider.");
@@ -6627,7 +6622,7 @@ function Inbox({
       <section className="admin-card inbox-start-bar">
         <div><p className="eyebrow">New outbound thread</p><strong>Start a WhatsApp conversation</strong></div>
         <select value={newCustomerId} onChange={(event) => setNewCustomerId(event.target.value)}><option value="">Select customer</option>{data.customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name} · {customer.phone ?? "No phone"}</option>)}</select>
-        <select value={newChannel} onChange={(event) => setNewChannel(event.target.value as typeof newChannel)}><option value="WHATSAPP_OFFICIAL">Official Cloud API</option><option value="WHATSAPP_UNOFFICIAL">Unofficial QR session</option></select>
+        <span className="integration-badge connected">Official Meta Cloud API</span>
         <button className="button admin-primary" disabled={busy || !token || !newCustomerId} onClick={() => void startConversation()}>Start conversation</button>
       </section>
       <div className="inbox-layout admin-card">
@@ -7034,15 +7029,19 @@ function Campaigns({
 }) {
   const [name, setName] = useState("");
   const [segment, setSegment] = useState("LAPSED");
-  const [channel, setChannel] = useState<
-    "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL" | "EMAIL"
-  >("WHATSAPP_OFFICIAL");
+  const channel = "WHATSAPP_OFFICIAL" as const;
   const [audienceMode, setAudienceMode] = useState<"SEGMENT" | "MANUAL">("SEGMENT");
   const [manualNumbers, setManualNumbers] = useState("");
   const [manualConsentConfirmed, setManualConsentConfirmed] = useState(false);
   const [lastImportSummary, setLastImportSummary] = useState("");
-  const [verification, setVerification] = useState<Awaited<ReturnType<typeof backendApi.verifyCampaignPhones>> | null>(null);
   const [content, setContent] = useState("");
+  const [officialTemplates, setOfficialTemplates] = useState<BackendWhatsAppTemplate[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [templateName, setTemplateName] = useState("");
+  const [templateCategory, setTemplateCategory] = useState<"MARKETING" | "UTILITY" | "BROADCAST">("MARKETING");
+  const [templateLanguage, setTemplateLanguage] = useState("en");
+  const [templateHeader, setTemplateHeader] = useState("");
+  const [templateFooter, setTemplateFooter] = useState("");
   const [offer, setOffer] = useState("");
   const [mediaKey, setMediaKey] = useState("");
   const [mediaType, setMediaType] = useState<"image" | "document" | "video" | "">("");
@@ -7056,15 +7055,17 @@ function Campaigns({
   const [retryingId, setRetryingId] = useState("");
   const [recurrenceBusyId, setRecurrenceBusyId] = useState("");
   const [busy, setBusy] = useState(false);
-  const [waRisk, setWaRisk] = useState<BackendWhatsAppStatus["unofficial"]["risk"]>();
-  const [waStatus, setWaStatus] = useState<BackendWhatsAppStatus["unofficial"]>();
+  const [waStatus, setWaStatus] = useState<BackendWhatsAppStatus["official"]>();
   useEffect(() => {
     if (!token) return;
     backendApi.whatsappStatus(token).then((result) => {
-      setWaRisk(result.unofficial.risk);
-      setWaStatus(result.unofficial);
+      setWaStatus(result.official);
+      const templates = result.official.templates ?? [];
+      setOfficialTemplates(templates);
+      setSelectedTemplateId((current) => current || templates.find((item) => item.status.toLowerCase() === "approved")?.id || "");
     }).catch(() => undefined);
   }, [token, data.campaigns.length]);
+  const selectedTemplate = officialTemplates.find((item) => item.id === selectedTemplateId);
   const attention = data.range
     ? data.range.customers.lapsed +
       data.customers.filter((item) => item.segments.includes("AT_RISK")).length
@@ -7080,6 +7081,8 @@ function Campaigns({
       ? "Campaign name required."
       : !content.trim()
         ? "Message required."
+        : !selectedTemplate
+          ? "Select an approved Meta template."
         : audienceMode === "MANUAL" && !manualStats.valid
           ? "Paste numbers or upload CSV before creating this campaign."
           : audienceMode === "MANUAL" && channel.startsWith("WHATSAPP") && !manualConsentConfirmed
@@ -7091,7 +7094,8 @@ function Campaigns({
                 : "";
   const manualPhoneSet = new Set(manualStats.uniquePhones);
   const knownWhatsAppReady = data.customers.filter((customer) => customer.phone && manualPhoneSet.has(normalizeCampaignPhone(customer.phone)) && customer.waConsent).length;
-  const campaignTotals = data.campaigns.reduce(
+  const officialCampaigns = data.campaigns.filter((item) => item.channel === "WHATSAPP_OFFICIAL");
+  const campaignTotals = officialCampaigns.reduce(
     (sum, campaign) => {
       const engagement = campaign.engagement;
       sum.total += engagement?.total ?? campaign._count.recipients;
@@ -7104,7 +7108,7 @@ function Campaigns({
     },
     { total: 0, sent: 0, delivered: 0, read: 0, replied: 0, failed: 0 },
   );
-  const campaignRows = data.campaigns.map((item) => ({
+  const campaignRows = officialCampaigns.map((item) => ({
     campaign: item,
     cells: [
         item.name,
@@ -7149,12 +7153,14 @@ function Campaigns({
     try {
       if (audienceMode === "MANUAL" && manualStats.valid < 1) throw new Error("Paste numbers or import a CSV before creating a manual campaign.");
       if (audienceMode === "MANUAL" && channel.startsWith("WHATSAPP") && !manualConsentConfirmed) throw new Error("Confirm WhatsApp consent before sending to pasted/CSV numbers.");
-      if (audienceMode === "MANUAL" && channel === "EMAIL") throw new Error("Email campaigns need CRM customers with email consent. Use a CRM segment for email.");
+      if (!selectedTemplate) throw new Error("Select an approved Meta template before creating the campaign.");
       const result = await backendApi.createCampaign(token, {
         name,
         channel,
         segment: audienceMode === "SEGMENT" ? segment : undefined,
         content,
+        templateName: selectedTemplate.name,
+        templateLanguage: selectedTemplate.language,
         branchId: "main",
         recipientContacts: audienceMode === "MANUAL" ? manualRecipients : undefined,
         recipientPhones: audienceMode === "MANUAL" ? manualStats.uniquePhones : undefined,
@@ -7175,6 +7181,31 @@ function Campaigns({
       onRefresh();
     } catch (cause) {
       setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Campaign could not be created.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const createOfficialTemplate = async () => {
+    if (!token || !templateName.trim() || !content.trim()) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const normalizedName = templateName.trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
+      const result = await backendApi.createWhatsAppTemplate(token, {
+        name: normalizedName,
+        language: templateLanguage,
+        category: templateCategory,
+        body: content.trim(),
+        header: templateHeader.trim() || undefined,
+        footer: templateFooter.trim() || undefined,
+      });
+      await backendApi.syncWhatsAppTemplates(token);
+      const status = await backendApi.whatsappStatus(token);
+      setWaStatus(status.official);
+      setOfficialTemplates(status.official.templates ?? []);
+      setMessage(`${normalizedName} submitted to Meta. Status: ${prettyStatus(result.status)}. Broadcast templates use Meta's Marketing category.`);
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Template could not be submitted to Meta.");
     } finally {
       setBusy(false);
     }
@@ -7200,7 +7231,7 @@ function Campaigns({
       onRefresh();
     } catch (cause) {
       const error = cause instanceof Error ? prettyStatus(cause.message) : "Approval failed.";
-      setRowMessage(`Approval failed: ${error}. Check eligible recipients, consent, and Evolution API connection.`);
+      setRowMessage(`Approval failed: ${error}. Check the approved template, eligible recipients, consent, and Meta Cloud API connection.`);
       setMessage(`Approval failed: ${error}`);
     } finally {
       setApprovingId("");
@@ -7246,25 +7277,9 @@ function Campaigns({
       onRefresh();
     } catch (cause) {
       const error = cause instanceof Error ? prettyStatus(cause.message) : "Retry failed.";
-      setRowMessage(`Retry failed: ${error}. Reconnect Evolution API, then try again.`);
+      setRowMessage(`Retry failed: ${error}. Check the Meta Cloud API connection and approved template, then try again.`);
     } finally {
       setRetryingId("");
-    }
-  };
-  const verifyManualNumbers = async () => {
-    if (!token || !manualStats.valid) return;
-    setBusy(true);
-    setMessage("");
-    try {
-      const result = await backendApi.verifyCampaignPhones(token, { branchId: "main", phones: manualStats.uniquePhones });
-      setVerification(result);
-      setMessage(result.providerConnected
-        ? `Verification complete: ${result.registered} matched in Evolution contacts, ${result.unknown} unknown.`
-        : `Evolution verification unavailable: ${result.valid} valid numbers, ${result.unknown} unknown.`);
-    } catch (cause) {
-      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "WhatsApp number verification failed.");
-    } finally {
-      setBusy(false);
     }
   };
   const importContacts = async (file?: File) => {
@@ -7278,7 +7293,6 @@ function Campaigns({
       const uniqueContacts = dedupeCampaignContacts(contacts);
       setAudienceMode("MANUAL");
       setManualNumbers(uniqueContacts.map((contact) => `${contact.name}, ${contact.phone}`).join("\n"));
-      setVerification(null);
       setLastImportSummary(`${stats.total} numbers found · ${stats.valid} valid · ${stats.duplicates} duplicate · ${stats.invalid} invalid`);
       if (channel.startsWith("WHATSAPP") && !manualConsentConfirmed) {
         setMessage(`CSV loaded: ${stats.valid} valid campaign-only numbers. Tick consent confirmation before sending WhatsApp campaign.`);
@@ -7306,33 +7320,29 @@ function Campaigns({
       </div>
       <div className={`campaign-connection-strip ${waStatus?.connected ? "connected" : "disconnected"}`}>
         <span aria-hidden="true" />
-        <div><strong>Evolution API WhatsApp</strong><small>{waStatus?.connected ? `Connected${waStatus.accountNumber ? ` · ${waStatus.accountNumber}` : ""}` : waStatus?.detail ?? "Checking Evolution API connection…"}</small></div>
+        <div><strong>Official Meta Cloud API</strong><small>{waStatus?.connected ? "Connected and ready for approved templates" : waStatus?.detail ?? "Checking Meta Cloud API connection…"}</small></div>
         <b>{waStatus?.connected ? "READY" : "ACTION NEEDED"}</b>
       </div>
-      <section className="campaign-safety-grid">
+      <section className="campaign-safety-grid official-only-campaign">
         <article className="admin-card csv-import-card">
           <div><p className="eyebrow">Marketing audience</p><h2>CSV or pasted numbers</h2><p>CSV can contain only phone numbers; name is optional. These numbers are campaign-only and are not saved to Customers/CRM.</p></div>
           <label className="csv-picker"><span>{busy ? "Reading…" : "Choose CSV file"}</span><input type="file" accept=".csv,text/csv" disabled={busy || !token} onChange={(event) => void importContacts(event.target.files?.[0])} /></label>
           <label className="campaign-consent"><input type="checkbox" checked={manualConsentConfirmed} onChange={(event) => setManualConsentConfirmed(event.target.checked)} /> I have permission to send WhatsApp marketing to pasted/CSV numbers.</label>
-          <textarea value={manualNumbers} onChange={(event) => { setManualNumbers(event.target.value); setAudienceMode("MANUAL"); setVerification(null); }} rows={5} placeholder={"Paste mobile numbers here…\n9876543210\nRiya Sharma, 9123456789"} />
+          <textarea value={manualNumbers} onChange={(event) => { setManualNumbers(event.target.value); setAudienceMode("MANUAL"); }} rows={5} placeholder={"Paste mobile numbers here…\n9876543210\nRiya Sharma, 9123456789"} />
           <div className="campaign-audience-stats">
             <span><strong>{manualStats.total}</strong><small>Numbers found</small></span>
             <span><strong>{manualStats.valid}</strong><small>Valid format</small></span>
-            <span><strong>{verification?.registered ?? knownWhatsAppReady}</strong><small>{verification ? "Evolution matched" : "Known opted-in CRM"}</small></span>
+            <span><strong>{knownWhatsAppReady}</strong><small>Known opted-in CRM</small></span>
             <span><strong>{manualStats.duplicates}</strong><small>Duplicates</small></span>
           </div>
-          <button className="button campaign-verify-button" disabled={!token || busy || !manualStats.valid} onClick={() => void verifyManualNumbers()}>
-            {busy ? "Checking…" : "Verify WhatsApp numbers"}
-          </button>
           {lastImportSummary && <small>{lastImportSummary}</small>}
-          <small>{verification ? verification.detail : "Evolution API connection is required for QR WhatsApp delivery; delivery reports remain the final truth."}</small>
+          <small>Official Meta delivery reports remain the final delivery truth.</small>
         </article>
-        <article className={`admin-card campaign-risk-card risk-${waRisk?.label ?? "high"}`}>
-          <p className="eyebrow">Unofficial WhatsApp risk</p>
-          <div><strong>{waRisk?.score ?? "—"}/100</strong><span>{waRisk ? prettyStatus(waRisk.label) : "Awaiting Evolution API status"}</span></div>
-          <progress max="100" value={waRisk?.score ?? 100} />
-          <p>{waRisk ? `${waRisk.safeguards.intervalSeconds}s spacing · ${waRisk.safeguards.dailyCap}/day · ${waRisk.safeguards.deliveryWindow}` : "Connect Evolution API to calculate the current operational signal."}</p>
-          <small>This is a conservative heuristic, not a ban probability or guarantee. Unofficial access always retains meaningful account risk.</small>
+        <article className="admin-card official-template-summary">
+          <p className="eyebrow">Official templates</p>
+          <div><strong>{officialTemplates.filter((item) => item.status.toLowerCase() === "approved").length}</strong><span>Approved by Meta</span></div>
+          <p>Marketing and Broadcast messages use Meta-approved Marketing templates. Utility is for transactional service updates.</p>
+          <small>Templates in Pending status cannot be used until Meta approves them.</small>
         </article>
       </section>
       <section className="campaign-report-grid">
@@ -7342,14 +7352,24 @@ function Campaigns({
         <article><small>Replies / failed</small><strong>{campaignTotals.replied}/{campaignTotals.failed}</strong><span>Follow-up and cleanup list</span></article>
       </section>
       <section className="admin-card campaign-builder phase-one-form">
-        <div><p className="eyebrow">Send now after approval</p><h2>Create campaign</h2><small>Choose a CRM segment for saved customers, or use pasted/CSV numbers as campaign-only recipients. Unofficial WhatsApp appends “Reply STOP to opt out” and uses pacing to reduce ban risk.</small></div>
+        <div><p className="eyebrow">Official WhatsApp only</p><h2>Create campaign</h2><small>Choose a Meta-approved template and an opted-in CRM segment, or use consented CSV numbers as campaign-only recipients.</small></div>
         <label>Name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="August comeback offer" /></label>
         <label>Audience mode<select value={audienceMode} onChange={(event) => setAudienceMode(event.target.value as "SEGMENT" | "MANUAL")}><option value="SEGMENT">CRM segment</option><option value="MANUAL">CSV / pasted numbers</option></select></label>
         <label>CRM audience<select value={segment} onChange={(event) => setSegment(event.target.value)} disabled={audienceMode === "MANUAL"}><option value="NEW">New</option><option value="REPEAT">Repeat</option><option value="VIP">VIP</option><option value="AT_RISK">At-risk</option><option value="LAPSED">Lapsed</option><option value="MEMBER">Members</option><option value="HIGH_SPEND">High spend</option></select></label>
-        <label>Channel<select value={channel} onChange={(event) => setChannel(event.target.value as typeof channel)}><option value="WHATSAPP_OFFICIAL">WhatsApp Official</option><option value="WHATSAPP_UNOFFICIAL">WhatsApp Unofficial</option><option value="EMAIL">Email</option></select></label>
+        <label>Channel<input value="Official Meta Cloud API" disabled readOnly /></label>
+        <label>Approved template<select value={selectedTemplateId} onChange={(event) => { setSelectedTemplateId(event.target.value); const next = officialTemplates.find((item) => item.id === event.target.value); if (next) setContent(next.body); }}><option value="">Select approved template</option>{officialTemplates.filter((item) => item.status.toLowerCase() === "approved").map((item) => <option key={item.id} value={item.id}>{item.name} · {item.language}</option>)}</select></label>
         <label>Offer<input value={offer} onChange={(event) => setOffer(event.target.value)} placeholder="20% off on weekday services" /></label>
         <label>Image / PDF creative<span className="campaign-file-picker">{mediaName || "Choose creative"}<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={(event) => void uploadCreative(event.target.files?.[0])} /></span></label>
         <label className="campaign-copy">Message<textarea value={content} onChange={(event) => setContent(event.target.value)} rows={5} /></label>
+        <div className="campaign-template-builder">
+          <div><p className="eyebrow">Meta template maker</p><h3>Create for approval</h3><small>Broadcast is submitted to Meta as a Marketing template. Use variables like {"{{1}}"} in the body.</small></div>
+          <label>Template type<select value={templateCategory} onChange={(event) => setTemplateCategory(event.target.value as typeof templateCategory)}><option value="MARKETING">Marketing</option><option value="UTILITY">Utility</option><option value="BROADCAST">Broadcast</option></select></label>
+          <label>Template name<input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="festival_offer_2026" /></label>
+          <label>Language<select value={templateLanguage} onChange={(event) => setTemplateLanguage(event.target.value)}><option value="en">English</option><option value="en_US">English (US)</option><option value="hi">Hindi</option></select></label>
+          <label>Header (optional)<input maxLength={60} value={templateHeader} onChange={(event) => setTemplateHeader(event.target.value)} placeholder="Cutz & Bangs offer" /></label>
+          <label>Footer (optional)<input maxLength={60} value={templateFooter} onChange={(event) => setTemplateFooter(event.target.value)} placeholder="Reply STOP to opt out" /></label>
+          <button className="button admin-primary" type="button" disabled={busy || !token || !templateName.trim() || !content.trim()} onClick={() => void createOfficialTemplate()}>{busy ? "Submitting…" : "Create for Meta approval"}</button>
+        </div>
         <div className="campaign-cta-builder">
           <div>
             <p className="eyebrow">Campaign buttons</p>
@@ -8366,9 +8386,9 @@ function Invoices({
     } catch (cause) {
       const raw = cause instanceof Error ? cause.message : "Invoice delivery failed.";
       const text = raw.includes("wa_official_not_configured")
-        ? "Official WhatsApp is not configured yet. Add Meta token, phone-number ID and public invoice storage in Settings, or use Unofficial WhatsApp."
+        ? "Official WhatsApp is not configured yet. Add the Meta token, phone-number ID and public invoice storage in Settings."
         : raw.includes("invoice_public_url_unavailable") || raw.includes("invoice_media_url_not_public_https")
-          ? "Official WhatsApp needs a public HTTPS invoice PDF URL. Configure Cloudinary/S3 storage, or use Unofficial WhatsApp."
+          ? "Official WhatsApp needs a public HTTPS invoice PDF URL. Configure Cloudinary/S3 storage."
           : prettyStatus(raw);
       setMessage(text);
       setDeliveryStatus({ invoiceId: invoice.id, kind: "error", text });
@@ -8423,7 +8443,6 @@ function Invoices({
                   <button disabled={busyId === invoice.id} onClick={() => void openPdf(invoice, true)}>Download</button>
                   <button disabled={busyId === invoice.id || !customer?.email} title={customer?.email ? `Send to ${customer.email}` : "Customer email is missing"} onClick={() => void deliver(invoice, "EMAIL")}>Email</button>
                   <button disabled={busyId === invoice.id || !customer?.phone} title={customer?.phone ? `Send to ${customer.phone}` : "Customer phone is missing"} onClick={() => void deliver(invoice, "WHATSAPP_OFFICIAL")}>Official WA</button>
-                  <button disabled={busyId === invoice.id || !customer?.phone} title={customer?.phone ? `Send to ${customer.phone}` : "Customer phone is missing"} onClick={() => void deliver(invoice, "WHATSAPP_UNOFFICIAL")}>Unofficial WA</button>
                   {deliveryStatus?.invoiceId === invoice.id && (
                     <p className={`invoice-row-feedback ${deliveryStatus.kind}`} role="status">{deliveryStatus.text}</p>
                   )}
@@ -8471,7 +8490,6 @@ function SystemAndAudit({ token, data }: { token: string; data: BackendSnapshot 
     ["Redis queue", health.checks.redis.ok, `${health.checks.redis.latencyMs} ms · ${health.checks.redis.detail}`],
     ["SMTP", health.checks.smtp.configured, health.checks.smtp.detail],
     ["WhatsApp official", health.checks.whatsappOfficial.configured, health.checks.whatsappOfficial.detail],
-    ["WhatsApp unofficial", health.checks.whatsappUnofficial.configured, health.checks.whatsappUnofficial.configured ? "Connector configured" : "Connector not configured"],
   ] as const : [];
   const security = health ? [
     ["Encrypted provider secrets", health.security.providerSecretsEncrypted],
@@ -8603,7 +8621,7 @@ function Settings({
     if (automation) {
       setAutoInvoiceEmail(Boolean(automation.autoInvoiceEmail ?? true));
       setAutoInvoiceWhatsapp(Boolean(automation.autoInvoiceWhatsapp ?? false));
-      setInvoiceWhatsappChannel(automation.invoiceWhatsappChannel === "WHATSAPP_UNOFFICIAL" ? "WHATSAPP_UNOFFICIAL" : "WHATSAPP_OFFICIAL");
+      setInvoiceWhatsappChannel("WHATSAPP_OFFICIAL");
       setInvoiceAttachPdf(Boolean(automation.invoiceAttachPdf ?? true));
       setInvoiceEmailSubject(String(automation.invoiceEmailSubject ?? "Your Cutz & Bangs invoice {{invoiceNumber}}"));
       setInvoiceEmailBody(String(automation.invoiceEmailBody ?? "Hi {{name}}, thank you for visiting Cutz & Bangs. Your invoice {{invoiceNumber}} total is {{total}}."));
@@ -8612,7 +8630,7 @@ function Settings({
       setNonReturningDays(Number(automation.nonReturningDays ?? 30));
       setNonReturningEmail(Boolean(automation.nonReturningEmail ?? false));
       setNonReturningWhatsapp(Boolean(automation.nonReturningWhatsapp ?? true));
-      setNonReturningWhatsappChannel(automation.nonReturningWhatsappChannel === "WHATSAPP_UNOFFICIAL" ? "WHATSAPP_UNOFFICIAL" : "WHATSAPP_OFFICIAL");
+      setNonReturningWhatsappChannel("WHATSAPP_OFFICIAL");
       setNonReturningTemplate(String(automation.nonReturningTemplate ?? "Hi {{name}}, we have missed you at Cutz & Bangs. It has been {{days}} days since your last visit. Reply BOOK and we will reserve a convenient slot."));
     }
   };
@@ -9019,7 +9037,7 @@ function Settings({
               <div className="setting-row"><div><strong>Auto WhatsApp</strong><small>Send to opted-in customers with a phone number</small></div><button type="button" aria-label="Toggle automatic invoice WhatsApp" className={`toggle ${autoInvoiceWhatsapp ? "active" : ""}`} onClick={() => setAutoInvoiceWhatsapp((current) => !current)}><i /></button></div>
               <div className="setting-row"><div><strong>Attach invoice PDF</strong><small>Include the stored PDF with automated delivery</small></div><button type="button" aria-label="Toggle invoice PDF attachment" className={`toggle ${invoiceAttachPdf ? "active" : ""}`} onClick={() => setInvoiceAttachPdf((current) => !current)}><i /></button></div>
             </div>
-            <label>WhatsApp provider<select value={invoiceWhatsappChannel} disabled={!autoInvoiceWhatsapp} onChange={(event) => setInvoiceWhatsappChannel(event.target.value as "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL")}><option value="WHATSAPP_OFFICIAL">Official Meta Cloud API</option><option value="WHATSAPP_UNOFFICIAL">Unofficial QR connector</option></select></label>
+            <label>WhatsApp provider<input value="Official Meta Cloud API" disabled readOnly /></label>
             <label>Email subject<input value={invoiceEmailSubject} onChange={(event) => setInvoiceEmailSubject(event.target.value)} placeholder="Your invoice {{invoiceNumber}}" /></label>
             <label>Email message<textarea rows={4} value={invoiceEmailBody} onChange={(event) => setInvoiceEmailBody(event.target.value)} /></label>
             <label>WhatsApp message<textarea rows={4} value={invoiceWhatsappBody} onChange={(event) => setInvoiceWhatsappBody(event.target.value)} /></label>
@@ -9031,9 +9049,9 @@ function Settings({
               <div className="setting-row"><div><strong>Email</strong><small>Requires email consent</small></div><button type="button" aria-label="Toggle non-returning email" className={`toggle ${nonReturningEmail ? "active" : ""}`} onClick={() => setNonReturningEmail((current) => !current)}><i /></button></div>
               <div className="setting-row"><div><strong>WhatsApp</strong><small>Requires WhatsApp opt-in</small></div><button type="button" aria-label="Toggle non-returning WhatsApp" className={`toggle ${nonReturningWhatsapp ? "active" : ""}`} onClick={() => setNonReturningWhatsapp((current) => !current)}><i /></button></div>
             </div>
-            <label>WhatsApp provider<select value={nonReturningWhatsappChannel} disabled={!nonReturningWhatsapp} onChange={(event) => setNonReturningWhatsappChannel(event.target.value as "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL")}><option value="WHATSAPP_OFFICIAL">Official Meta Cloud API</option><option value="WHATSAPP_UNOFFICIAL">Unofficial QR connector</option></select></label>
+            <label>WhatsApp provider<input value="Official Meta Cloud API" disabled readOnly /></label>
             <label>Follow-up message<textarea rows={7} value={nonReturningTemplate} onChange={(event) => setNonReturningTemplate(event.target.value)} /></label>
-            <p className="automation-safety-note">The backend checks recorded consent, phone/email availability and a 30-day duplicate window before queueing. Unofficial WhatsApp pacing is still controlled by the daily cap and message interval above.</p>
+            <p className="automation-safety-note">The backend checks recorded consent, phone/email availability and a 30-day duplicate window before queueing through the official Meta Cloud API.</p>
           </section>
         </div>
         <p className="template-variable-note"><strong>Template variables:</strong> <code>{"{{name}}"}</code> <code>{"{{invoiceNumber}}"}</code> <code>{"{{total}}"}</code> <code>{"{{days}}"}</code></p>
@@ -9056,7 +9074,7 @@ function Settings({
         <div className="integration-test-row"><input type="email" value={emailTestTo} onChange={(event) => setEmailTestTo(event.target.value)} placeholder="Test recipient email" /><button disabled={busy || !token || !emailTestTo || !providerConfig.smtp.enabled} onClick={() => void testEmail()}>Send SMTP test</button><small>{emailHealth?.detail ?? "Save credentials, then send a connection test."}</small></div>
       </article>
       <article className="admin-card provider-config-card">
-        <div className="card-head"><div><p className="eyebrow">Messaging credentials</p><h2>WhatsApp provider setup</h2><p>Official Meta Cloud API and the optional unofficial connector are isolated from each other.</p></div></div>
+        <div className="card-head"><div><p className="eyebrow">Messaging credentials</p><h2>Official WhatsApp setup</h2><p>All inbox, receipt and campaign messaging uses the Meta Cloud API.</p></div></div>
         <div className="provider-credential-grid">
           <section>
             <header><div><strong>Official Meta Cloud API</strong><small>Recommended for production messaging</small></div><button type="button" className={`toggle ${providerConfig.whatsappOfficial.enabled ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, whatsappOfficial: { ...current.whatsappOfficial, enabled: !current.whatsappOfficial.enabled } }))}><i /></button></header>
@@ -9070,63 +9088,28 @@ function Settings({
             </div>
             <small className="webhook-hint">Webhook endpoint: <code>/api/v1/webhooks/whatsapp</code></small>
           </section>
-          <section>
-            <header><div><strong>Evolution API · QR WhatsApp</strong><small>Self-hosted connector on an isolated private service</small></div><button type="button" className={`toggle ${providerConfig.whatsappUnofficial.enabled ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, enabled: !current.whatsappUnofficial.enabled } }))}><i /></button></header>
-            <div className="provider-config-form">
-              <label>Evolution API URL<input value={providerConfig.whatsappUnofficial.baseUrl} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, baseUrl: event.target.value } }))} placeholder="http://evolution:8080" /></label>
-              <label>Backend webhook URL<input value={providerConfig.whatsappUnofficial.callbackUrl} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, callbackUrl: event.target.value } }))} placeholder="https://salon.example.com/api/v1/webhooks/whatsapp/unofficial" /></label>
-              <label>Session name<input value={providerConfig.whatsappUnofficial.session} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, session: event.target.value } }))} placeholder="cutz-bangs-main" /></label>
-              <label>Evolution API key<input type="password" value={wahaApiKey} onChange={(event) => setWahaApiKey(event.target.value)} placeholder={providerConfig.whatsappUnofficial.hasApiKey ? "Saved · enter only to replace" : "At least 24 characters"} /></label>
-              <label>Webhook secret<input type="password" value={wahaWebhookSecret} onChange={(event) => setWahaWebhookSecret(event.target.value)} placeholder={providerConfig.whatsappUnofficial.hasWebhookSecret ? "Saved · enter only to replace" : "Separate 24+ character secret"} /></label>
-              <label>Seconds between messages<select value={providerConfig.whatsappUnofficial.intervalSeconds} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, intervalSeconds: Number(event.target.value) } }))}><option value="60">60 seconds</option><option value="90">90 seconds · recommended</option><option value="120">120 seconds</option><option value="180">180 seconds</option></select></label>
-              <label>Daily recipient cap<input type="number" min="5" max="75" value={Math.min(75, providerConfig.whatsappUnofficial.dailyCap)} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappUnofficial: { ...current.whatsappUnofficial, dailyCap: Math.min(75, Math.max(5, Number(event.target.value || 75))) } }))} /></label>
-              <label>Delivery window<input value="10 PM–6 AM · nightly" disabled readOnly /></label>
-            </div>
-            <p className="provider-warning">Unofficial access can still be restricted or banned. Campaigns are queued only between 10 PM and 6 AM, with backend pacing capped at 60 opted-in recipients/night and STOP opt-out safety.</p>
-          </section>
         </div>
         <button className="button admin-primary" disabled={busy || !token} onClick={() => void saveProviders()}>{busy ? "Saving…" : "Save & apply provider credentials"}</button>
       </article>
       <article className="admin-card whatsapp-settings">
-        <div className="card-head"><div><p className="eyebrow">Provider adapters</p><h2>WhatsApp integrations</h2><p>Official Cloud API and the isolated unofficial QR session stay separate.</p></div></div>
+        <div className="card-head"><div><p className="eyebrow">Provider adapter</p><h2>Official WhatsApp integration</h2><p>Meta Cloud API is the only messaging channel exposed in the admin panel.</p></div></div>
         <div className="whatsapp-provider-grid">
-          {(["official", "unofficial"] as const).map((key) => {
-            const item = status?.[key];
-            const type = key === "official" ? "WHATSAPP_OFFICIAL" : "WHATSAPP_UNOFFICIAL";
-            const technicalStatus = key === "unofficial" ? status?.unofficial.status : undefined;
-            const hasQr = key === "unofficial" && Boolean(status?.unofficial.qrDataUrl);
-            const sessionNeedsCreate = key === "unofficial" && ["NOT_CONFIGURED", "UNAVAILABLE", "STOPPED"].includes(technicalStatus ?? "");
+          {(["official"] as const).map((key) => {
+            const item = status?.official;
             return (
               <section key={key} className="provider-card">
-                <header><div><strong>{key === "official" ? "Official Meta Cloud API" : "Unofficial QR connector"}</strong><small>{item?.detail ?? (integrationLoading ? "Checking live backend…" : integrationError || "Status unavailable — run check again")}</small>{technicalStatus && <em className="provider-technical-status">{technicalStatus}</em>}</div><span className={item?.connected ? "connected" : "offline"}>{item?.connected ? "Connected" : item?.configured ? hasQr ? "Scan QR" : "Configured" : "Needs setup"}</span></header>
-                {key === "unofficial" && item?.connected && (
-                  <div className="waha-connected"><b>✓ Connected</b><span>{item.accountName || "WhatsApp account"}{item.accountNumber ? ` · +${item.accountNumber}` : ""}</span><small>QR is hidden while the session is working.</small></div>
-                )}
-                {key === "unofficial" && !item?.connected && item?.qrDataUrl && <Image key={item.qrDataUrl.slice(-24)} src={item.qrDataUrl} alt="Scan to link the Evolution API WhatsApp instance" width={240} height={240} unoptimized />}
-                {key === "unofficial" && item?.risk && (
-                  <div className={`wa-risk wa-risk-${item.risk.label}`}>
-                    <div><strong>{item.risk.score}/100</strong><span>{prettyStatus(item.risk.label)} account-risk signal</span></div>
-                    <progress max="100" value={item.risk.score} />
-                    <small>Heuristic, not a ban probability · {item.risk.safeguards.intervalSeconds}s spacing · {item.risk.safeguards.dailyCap}/day · {item.risk.safeguards.deliveryWindow}</small>
-                  </div>
-                )}
+                <header><div><strong>Official Meta Cloud API</strong><small>{item?.detail ?? (integrationLoading ? "Checking live backend…" : integrationError || "Status unavailable — run check again")}</small></div><span className={item?.connected ? "connected" : "offline"}>{item?.connected ? "Connected" : item?.configured ? "Configured" : "Needs setup"}</span></header>
                 <div className="provider-actions">
-                  <button type="button" className={`toggle ${item?.active ? "active" : ""}`} disabled={busy || !token} onClick={() => void toggleChannel(type, !item?.active)}><i /></button>
-                  {key === "official" && <button disabled={busy || !token} onClick={() => void syncTemplates()}>Sync templates</button>}
-                  {key === "unofficial" && !item?.connected && !sessionNeedsCreate && <button disabled={busy || !token || !providerConfig.whatsappUnofficial.enabled} onClick={() => void refreshWahaStatus()}>Show / refresh QR</button>}
-                  {key === "unofficial" && providerConfig.whatsappUnofficial.enabled && <button disabled={busy || !token} onClick={() => void controlWaha("reset")}>Reset & generate fresh QR</button>}
-                  {key === "unofficial" && !item?.connected && sessionNeedsCreate && <button disabled={busy || !token || !providerConfig.whatsappUnofficial.enabled} onClick={() => void controlWaha(technicalStatus === "STOPPED" ? "start" : "create")}>{technicalStatus === "STOPPED" ? "Start session" : "Create session"}</button>}
-                  {key === "unofficial" && item?.connected && <button disabled={busy || !token} onClick={() => void syncWahaContacts()}>Preview contacts</button>}
-                  {key === "unofficial" && item?.configured && technicalStatus !== "SCAN_QR_CODE" && <button disabled={busy || !token} onClick={() => void controlWaha("restart")}>Restart</button>}
-                  {key === "unofficial" && item?.connected && <button disabled={busy || !token} onClick={() => void controlWaha("logout")}>Disconnect</button>}
-                  <button disabled={busy || !token || !testTo || !testMessage} onClick={() => void testProvider(type)}>Send test</button>
+                  <button type="button" className={`toggle ${item?.active ? "active" : ""}`} disabled={busy || !token} onClick={() => void toggleChannel("WHATSAPP_OFFICIAL", !item?.active)}><i /></button>
+                  <button disabled={busy || !token} onClick={() => void syncTemplates()}>Sync templates</button>
+                  <button disabled={busy || !token || !testTo || !testMessage} onClick={() => void testProvider("WHATSAPP_OFFICIAL")}>Send test</button>
                 </div>
               </section>
             );
           })}
         </div>
         <div className="whatsapp-test-row"><input value={testTo} onChange={(event) => setTestTo(event.target.value)} placeholder="Recipient with country code" /><input value={testMessage} onChange={(event) => setTestMessage(event.target.value)} placeholder="Test message" /></div>
-        <small>{status ? "Live provider status loaded" : "Provider status not loaded"} · {data.channels.filter((channel) => channel.type.startsWith("WHATSAPP")).length} WhatsApp channel records · credentials remain server-side.</small>
+        <small>{status ? "Live official provider status loaded" : "Official provider status not loaded"} · credentials remain server-side.</small>
       </article>
     </div>
   );

@@ -1623,9 +1623,11 @@ export const backendApi = {
     token: string,
     payload: {
       name: string;
-      channel: "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL" | "EMAIL" | "SMS";
+      channel: "WHATSAPP_OFFICIAL";
       segment?: string;
       content: string;
+      templateName: string;
+      templateLanguage?: string;
       mediaKey?: string;
       mediaType?: "image" | "document" | "video";
       ctaButtons?: BackendCampaignCtaButton[];
@@ -1741,6 +1743,14 @@ export const backendApi = {
       { method: "POST", body: "{}" },
       token,
     ),
+  createWhatsAppTemplate: (
+    token: string,
+    payload: { name: string; language: string; category: "MARKETING" | "UTILITY" | "BROADCAST"; body: string; header?: string; footer?: string },
+  ) => request<{ id?: string; status: string; category: string; useCase: string }>(
+    "/integrations/whatsapp/templates",
+    { method: "POST", body: JSON.stringify(payload) },
+    token,
+  ),
   controlWahaSession: (
     token: string,
     action: "create" | "start" | "restart" | "stop" | "logout",

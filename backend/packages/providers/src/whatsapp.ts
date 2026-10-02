@@ -275,6 +275,34 @@ export class WhatsAppOfficialProvider implements MessagingProvider {
     }));
   }
 
+  async createTemplate(input: {
+    name: string;
+    language: string;
+    category: "MARKETING" | "UTILITY";
+    body: string;
+    header?: string;
+    footer?: string;
+  }) {
+    if (!this.token || !this.wabaId) throw new Error("wa_official_template_not_configured");
+    const components: Array<Record<string, string>> = [];
+    if (input.header) components.push({ type: "HEADER", format: "TEXT", text: input.header });
+    components.push({ type: "BODY", text: input.body });
+    if (input.footer) components.push({ type: "FOOTER", text: input.footer });
+    const response = await fetch(this.endpoint(`${this.wabaId}/message_templates`), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: input.name, language: input.language, category: input.category, allow_category_change: true, components }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const raw = await response.text();
+    if (!response.ok) {
+      const failure = officialFailure(response.status, raw);
+      throw new Error([failure.error, failure.providerCode, failure.detail].filter(Boolean).join(":"));
+    }
+    const data = JSON.parse(raw) as { id?: string; status?: string; category?: string };
+    return { id: data.id, status: (data.status ?? "PENDING").toLowerCase(), category: data.category ?? input.category };
+  }
+
   verifyWebhook(headers: Record<string, string>, rawBody: string): boolean {
     if (!this.appSecret) return process.env.NODE_ENV !== "production";
     const sig = headers["x-hub-signature-256"];

@@ -60,6 +60,14 @@ export interface MessagingProvider {
   verifyWebhook(headers: Record<string, string>, rawBody: string): boolean;
   health?(): Promise<WhatsAppSessionState>;
   listTemplates?(): Promise<Array<{ name: string; language: string; status: string; body: string }>>;
+  createTemplate?(input: {
+    name: string;
+    language: string;
+    category: "MARKETING" | "UTILITY";
+    body: string;
+    header?: string;
+    footer?: string;
+  }): Promise<{ id?: string; status: string; category: string }>;
   sessionAction?(action: WhatsAppSessionAction): Promise<WhatsAppSessionState>;
   listContacts?(limit?: number): Promise<WhatsAppContact[]>;
 }

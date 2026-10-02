@@ -1304,6 +1304,8 @@ model Campaign {
   channel         ChannelType
   segment         CustomerSegment?
   content         String
+  templateName    String?
+  templateLanguage String?          @default("en")
   mediaKey        String?
   mediaType       String?
   ctaJson         Json?

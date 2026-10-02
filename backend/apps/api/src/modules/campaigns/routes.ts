@@ -367,9 +367,11 @@ export default async function campaignRoutes(app: FastifyInstance) {
     const body = z
       .object({
         name: z.string(),
-        channel: z.enum(["WHATSAPP_OFFICIAL", "WHATSAPP_UNOFFICIAL", "EMAIL", "SMS"]),
+        channel: z.literal("WHATSAPP_OFFICIAL"),
         segment: z.enum(["NEW", "REPEAT", "VIP", "AT_RISK", "LAPSED", "MEMBER", "HIGH_SPEND"]).optional(),
         content: z.string(),
+        templateName: z.string().trim().regex(/^[a-z0-9_]{1,512}$/),
+        templateLanguage: z.string().trim().default("en"),
         mediaKey: z.string().trim().max(512).optional(),
         mediaType: z.enum(["image", "document", "video"]).optional(),
         ctaButtons: z.array(campaignCtaSchema).max(3).optional(),
@@ -391,12 +393,19 @@ export default async function campaignRoutes(app: FastifyInstance) {
         if (manualCount && value.channel.startsWith("WHATSAPP") && !value.manualConsentConfirmed) {
           ctx.addIssue({ code: z.ZodIssueCode.custom, message: "whatsapp_manual_consent_required", path: ["manualConsentConfirmed"] });
         }
-        if (manualCount && value.channel === "EMAIL") {
-          ctx.addIssue({ code: z.ZodIssueCode.custom, message: "manual_phone_campaign_is_whatsapp_only", path: ["channel"] });
-        }
       })
       .parse(req.body);
     if (req.user?.role === "MANAGER" && req.user.branchId !== body.branchId) return reply.code(403).send({ error: "forbidden" });
+    const approvedTemplate = await prisma.template.findFirst({
+      where: {
+        name: body.templateName,
+        language: body.templateLanguage,
+        status: { equals: "approved", mode: "insensitive" },
+        channel: { type: "WHATSAPP_OFFICIAL", isActive: true },
+      },
+      select: { id: true },
+    });
+    if (!approvedTemplate) return reply.code(409).send({ error: "official_template_not_approved" });
 
     // Materialize recipients from the segment now (audience snapshot).
     const now = new Date();
@@ -420,11 +429,8 @@ export default async function campaignRoutes(app: FastifyInstance) {
       : await prisma.customer.findMany({
           where: {
             id: { in: ids },
-            ...(body.channel === "EMAIL"
-              ? { email: { not: null }, emailConsent: true }
-              : body.channel.startsWith("WHATSAPP")
-                ? { phone: { not: null }, waConsent: true }
-                : {}),
+            phone: { not: null },
+            waConsent: true,
           },
           select: { id: true },
         });
@@ -439,6 +445,8 @@ export default async function campaignRoutes(app: FastifyInstance) {
         channel: body.channel,
         segment: manualAudienceRequested ? null : body.segment,
         content: body.content,
+        templateName: body.templateName,
+        templateLanguage: body.templateLanguage,
         mediaKey: body.mediaKey,
         mediaType: body.mediaType,
         ctaJson: body.ctaButtons?.length ? body.ctaButtons : undefined,
@@ -456,11 +464,7 @@ export default async function campaignRoutes(app: FastifyInstance) {
       after: { branchId: body.branchId, name: body.name, channel: body.channel, segment: manualAudienceRequested ? "MANUAL_EXTERNAL" : body.segment, manualPhones: manualCreates.length, recipientCount: recipientCreates.length, hasMedia: Boolean(body.mediaKey), ctaButtons: body.ctaButtons?.length ?? 0, recurrence: body.recurrence?.enabled ? body.recurrence : undefined },
       ip: req.ip,
     });
-    const pacing = await publicProviderSettings(body.branchId);
-    const risk = body.channel === "WHATSAPP_UNOFFICIAL"
-      ? unofficialRisk(pacing.whatsappUnofficial.intervalSeconds, pacing.whatsappUnofficial.dailyCap, recipientCreates.length)
-      : undefined;
-    return reply.code(201).send({ ...campaign, deliveryRisk: risk });
+    return reply.code(201).send(campaign);
   });
 
   // Approval gate — only after this does the worker send.
@@ -477,6 +481,11 @@ export default async function campaignRoutes(app: FastifyInstance) {
       prisma.campaignRecipient.findMany({ where: { campaignId: id, status: "queued" }, select: { id: true } }),
     ]);
     if (!recipients.length) return reply.code(409).send({ error: "campaign_has_no_eligible_recipients" });
+    if (existing.channel === "WHATSAPP_OFFICIAL") {
+      const state = await providerContext.whatsapp("WHATSAPP_OFFICIAL").health?.();
+      if (!state?.connected) return reply.code(409).send({ error: "meta_cloud_api_not_connected", detail: state?.detail });
+      if (!existing.templateName) return reply.code(409).send({ error: "official_campaign_template_required" });
+    }
     if (existing.channel === "WHATSAPP_UNOFFICIAL") {
       const state = await unofficialMessaging.health?.();
       if (!state?.connected) return reply.code(409).send({ error: "evolution_instance_not_connected", detail: state?.detail });

@@ -278,9 +278,19 @@ new Worker<CampaignJob>(
         if (health && (!health.configured || !health.connected)) {
           throw new Error(health.detail ?? `${campaign.channel.toLowerCase()}_not_connected`);
         }
+        const templateVariableCount = campaign.channel === "WHATSAPP_OFFICIAL"
+          ? Math.max(0, ...Array.from(campaign.content.matchAll(/\{\{(\d+)\}\}/gu), (match) => Number(match[1] ?? 0)))
+          : 0;
+        const templateValues = [recipientName, String(daysSinceVisit)];
+        const variables = templateVariableCount
+          ? Object.fromEntries(Array.from({ length: templateVariableCount }, (_, index) => [String(index + 1), templateValues[index] ?? "-"]))
+          : undefined;
         const result = await messaging.send({
           to: recipientPhone,
           body,
+          templateName: campaign.channel === "WHATSAPP_OFFICIAL" ? campaign.templateName ?? undefined : undefined,
+          templateLanguage: campaign.templateLanguage ?? undefined,
+          variables,
           mediaUrl,
           mediaType: campaign.mediaType as "image" | "document" | "video" | undefined,
         });

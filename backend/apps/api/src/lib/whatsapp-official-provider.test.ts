@@ -12,6 +12,37 @@ const config = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("official WhatsApp provider failures", () => {
+  it("submits a structured message template to the WABA endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "template-1", status: "PENDING", category: "MARKETING" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new WhatsAppOfficialProvider(config).createTemplate({
+      name: "festival_offer_2026",
+      language: "en",
+      category: "MARKETING",
+      header: "Festival offer",
+      body: "Hello {{1}}, enjoy 20% off.",
+      footer: "Reply STOP to opt out",
+    });
+
+    expect(result).toEqual({ id: "template-1", status: "pending", category: "MARKETING" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://graph.facebook.com/v23.0/waba-id/message_templates",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toMatchObject({
+      name: "festival_offer_2026",
+      language: "en",
+      category: "MARKETING",
+      components: [
+        { type: "HEADER", format: "TEXT", text: "Festival offer" },
+        { type: "BODY", text: "Hello {{1}}, enjoy 20% off." },
+        { type: "FOOTER", text: "Reply STOP to opt out" },
+      ],
+    });
+  });
+
   it("rejects an invalid recipient before calling Meta", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
