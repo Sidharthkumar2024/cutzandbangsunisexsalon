@@ -31,7 +31,13 @@ export async function notifyAppointment(appointmentId: string, kind: Appointment
   if (!phone || !waConsent) return { email: emailStatus, whatsapp: "skipped" };
   try {
     const channels = await prisma.channel.findMany({ where: { type: { in: ["WHATSAPP_UNOFFICIAL", "WHATSAPP_OFFICIAL"] }, isActive: true } });
-    const preferred = channels.find((channel) => channel.type === "WHATSAPP_UNOFFICIAL") ? "WHATSAPP_UNOFFICIAL" : channels.find((channel) => channel.type === "WHATSAPP_OFFICIAL") ? "WHATSAPP_OFFICIAL" : null;
+    // Meta Cloud API is the production default. The QR connector remains an
+    // explicit fallback while a branch completes official-provider setup.
+    const preferred = channels.find((channel) => channel.type === "WHATSAPP_OFFICIAL")
+      ? "WHATSAPP_OFFICIAL"
+      : channels.find((channel) => channel.type === "WHATSAPP_UNOFFICIAL")
+        ? "WHATSAPP_UNOFFICIAL"
+        : null;
     if (!preferred) return { email: emailStatus, whatsapp: "skipped" };
     const providerContext = await applyProviderSettings(appointment.branchId);
     const messaging = providerContext.whatsapp(preferred);

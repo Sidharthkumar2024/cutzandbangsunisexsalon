@@ -17,7 +17,7 @@ export type ReceiptAutomationSettings = {
 export const DEFAULT_RECEIPT_AUTOMATION_SETTINGS: ReceiptAutomationSettings = {
   autoInvoiceEmail: true,
   autoInvoiceWhatsapp: true,
-  invoiceWhatsappChannel: "WHATSAPP_UNOFFICIAL",
+  invoiceWhatsappChannel: "WHATSAPP_OFFICIAL",
   invoiceAttachPdf: true,
   invoiceEmailSubject: "Your Cutz & Bangs invoice {{invoiceNumber}}",
   invoiceEmailBody:
@@ -28,7 +28,7 @@ export const DEFAULT_RECEIPT_AUTOMATION_SETTINGS: ReceiptAutomationSettings = {
   nonReturningDays: 30,
   nonReturningEmail: false,
   nonReturningWhatsapp: true,
-  nonReturningWhatsappChannel: "WHATSAPP_UNOFFICIAL",
+  nonReturningWhatsappChannel: "WHATSAPP_OFFICIAL",
   nonReturningTemplate:
     "Hi {{name}}, we have missed you at Cutz & Bangs. It has been {{days}} days since your last visit. Reply BOOK and we will reserve a convenient slot.",
 };

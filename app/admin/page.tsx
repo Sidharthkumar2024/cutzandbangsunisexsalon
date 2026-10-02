@@ -7036,7 +7036,7 @@ function Campaigns({
   const [segment, setSegment] = useState("LAPSED");
   const [channel, setChannel] = useState<
     "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL" | "EMAIL"
-  >("WHATSAPP_UNOFFICIAL");
+  >("WHATSAPP_OFFICIAL");
   const [audienceMode, setAudienceMode] = useState<"SEGMENT" | "MANUAL">("SEGMENT");
   const [manualNumbers, setManualNumbers] = useState("");
   const [manualConsentConfirmed, setManualConsentConfirmed] = useState(false);
@@ -8561,7 +8561,7 @@ function Settings({
   const [inactiveDays, setInactiveDays] = useState(60);
   const [autoInvoiceEmail, setAutoInvoiceEmail] = useState(true);
   const [autoInvoiceWhatsapp, setAutoInvoiceWhatsapp] = useState(false);
-  const [invoiceWhatsappChannel, setInvoiceWhatsappChannel] = useState<"WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL">("WHATSAPP_UNOFFICIAL");
+  const [invoiceWhatsappChannel, setInvoiceWhatsappChannel] = useState<"WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL">("WHATSAPP_OFFICIAL");
   const [invoiceAttachPdf, setInvoiceAttachPdf] = useState(true);
   const [invoiceEmailSubject, setInvoiceEmailSubject] = useState("Your Cutz & Bangs invoice {{invoiceNumber}}");
   const [invoiceEmailBody, setInvoiceEmailBody] = useState("Hi {{name}}, thank you for visiting Cutz & Bangs. Your invoice {{invoiceNumber}} total is {{total}}.");
@@ -8570,7 +8570,7 @@ function Settings({
   const [nonReturningDays, setNonReturningDays] = useState(30);
   const [nonReturningEmail, setNonReturningEmail] = useState(false);
   const [nonReturningWhatsapp, setNonReturningWhatsapp] = useState(true);
-  const [nonReturningWhatsappChannel, setNonReturningWhatsappChannel] = useState<"WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL">("WHATSAPP_UNOFFICIAL");
+  const [nonReturningWhatsappChannel, setNonReturningWhatsappChannel] = useState<"WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL">("WHATSAPP_OFFICIAL");
   const [nonReturningTemplate, setNonReturningTemplate] = useState("Hi {{name}}, we have missed you at Cutz & Bangs. It has been {{days}} days since your last visit. Reply BOOK and we will reserve a convenient slot.");
   const [testTo, setTestTo] = useState("");
   const [testMessage, setTestMessage] = useState("Hello from Cutz & Bangs");
@@ -8603,7 +8603,7 @@ function Settings({
     if (automation) {
       setAutoInvoiceEmail(Boolean(automation.autoInvoiceEmail ?? true));
       setAutoInvoiceWhatsapp(Boolean(automation.autoInvoiceWhatsapp ?? false));
-      setInvoiceWhatsappChannel(automation.invoiceWhatsappChannel === "WHATSAPP_OFFICIAL" ? "WHATSAPP_OFFICIAL" : "WHATSAPP_UNOFFICIAL");
+      setInvoiceWhatsappChannel(automation.invoiceWhatsappChannel === "WHATSAPP_UNOFFICIAL" ? "WHATSAPP_UNOFFICIAL" : "WHATSAPP_OFFICIAL");
       setInvoiceAttachPdf(Boolean(automation.invoiceAttachPdf ?? true));
       setInvoiceEmailSubject(String(automation.invoiceEmailSubject ?? "Your Cutz & Bangs invoice {{invoiceNumber}}"));
       setInvoiceEmailBody(String(automation.invoiceEmailBody ?? "Hi {{name}}, thank you for visiting Cutz & Bangs. Your invoice {{invoiceNumber}} total is {{total}}."));
@@ -8612,7 +8612,7 @@ function Settings({
       setNonReturningDays(Number(automation.nonReturningDays ?? 30));
       setNonReturningEmail(Boolean(automation.nonReturningEmail ?? false));
       setNonReturningWhatsapp(Boolean(automation.nonReturningWhatsapp ?? true));
-      setNonReturningWhatsappChannel(automation.nonReturningWhatsappChannel === "WHATSAPP_OFFICIAL" ? "WHATSAPP_OFFICIAL" : "WHATSAPP_UNOFFICIAL");
+      setNonReturningWhatsappChannel(automation.nonReturningWhatsappChannel === "WHATSAPP_UNOFFICIAL" ? "WHATSAPP_UNOFFICIAL" : "WHATSAPP_OFFICIAL");
       setNonReturningTemplate(String(automation.nonReturningTemplate ?? "Hi {{name}}, we have missed you at Cutz & Bangs. It has been {{days}} days since your last visit. Reply BOOK and we will reserve a convenient slot."));
     }
   };

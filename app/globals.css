@@ -2250,3 +2250,61 @@ html,body{max-width:100%;overflow-x:hidden}
   .campaign-connection-strip{grid-template-columns:auto 1fr}.campaign-connection-strip>b{grid-column:2;justify-self:start}
   .admin-sidebar{background:#fff!important}.admin-topbar{padding-inline:14px!important}
 }
+
+/* Company-standard responsive surface. Public branding stays warm while the
+   operating workspace remains neutral, high-contrast and easy to scan. */
+.admin-shell,.staff-portal-shell,.portal-shell,.portal-auth-shell{
+  --workspace-bg:#f6f7f9;
+  --workspace-card:#fff;
+  --workspace-ink:#111318;
+  --workspace-muted:#626b78;
+  --workspace-line:#dde1e7;
+  --workspace-soft:#f1f3f6;
+  --workspace-black:#111318;
+}
+.admin-page{width:100%;max-width:1680px;margin-inline:auto}
+.admin-card{overflow:hidden}
+.admin-shell :is(button,a,input,select,textarea){-webkit-tap-highlight-color:transparent}
+.admin-shell :is(button,.button,.filter-button,.icon-button,.csv-picker){min-height:42px}
+.admin-shell :is(input,select,textarea){border-radius:10px!important}
+.admin-shell :is(button,.button,.filter-button,.icon-button){border-radius:10px}
+.admin-topbar .global-search,.global-search-control{min-width:min(360px,34vw)}
+.admin-topbar .global-search input,.global-search-control input{font-size:14px!important}
+.settings-card h2,.provider-config-card h2,.automation-settings-card h2{letter-spacing:-.02em}
+.provider-credential-grid>section,.automation-panel{min-width:0}
+
+@media(max-width:1024px){
+  .admin-page{padding-inline:18px}
+  .dashboard-grid,.lower-grid,.membership-builder-grid,.provider-credential-grid,.automation-delivery-grid{grid-template-columns:1fr!important}
+  .calendar-toolbar,.crm-toolbar{gap:10px}
+  .admin-card{border-radius:14px!important}
+}
+@media(max-width:780px){
+  .admin-topbar{position:sticky;top:0;z-index:8;min-height:64px!important}
+  .admin-topbar h1{font-size:18px!important}
+  .admin-page{padding:14px 12px calc(76px + env(safe-area-inset-bottom))!important}
+  .admin-actions{gap:8px}
+  .admin-actions .admin-primary{padding-inline:12px!important;white-space:nowrap}
+  .card-head{align-items:flex-start!important;flex-direction:column!important;gap:12px!important}
+  .card-head>*{max-width:100%}
+  .metric-grid,.membership-metrics,.security-grid,.system-check-grid,.loyalty-rule-grid{grid-template-columns:1fr!important}
+  .settings-card,.provider-config-card,.automation-settings-card{padding:16px!important}
+  .setting-row{align-items:center;gap:12px}.setting-row>div{min-width:0}
+  .setting-row strong,.setting-row small{overflow-wrap:anywhere}
+  .provider-config-form,.whatsapp-test-row,.integration-test-row{grid-template-columns:1fr!important}
+  .provider-config-form>*{grid-column:auto!important}
+  .provider-actions{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}
+  .provider-actions>button{width:100%;white-space:normal!important}.provider-actions>.toggle{width:48px}
+  .campaign-builder,.campaign-steps,.campaign-safety-grid{grid-template-columns:1fr!important}
+  .campaign-table{margin-inline:-4px}
+  .pos-service-grid,.pos-layout,.pos-checkout-grid{grid-template-columns:1fr!important}
+  .membership-service-tools{grid-template-columns:1fr 1fr!important}.membership-service-tools input{grid-column:1/-1}
+  .membership-service-picker>div:last-child{grid-template-columns:1fr!important}
+  .inbox-start-bar{grid-template-columns:1fr!important}.inbox-start-bar>*{grid-column:1!important}
+}
+@media(max-width:420px){
+  .admin-actions .admin-primary{font-size:0!important;width:44px;padding:0!important}
+  .admin-actions .admin-primary::after{content:'+';font-size:22px;line-height:1}
+  .provider-actions{grid-template-columns:1fr!important}
+  .automation-actions{display:grid!important;grid-template-columns:1fr}.automation-actions button{width:100%}
+}

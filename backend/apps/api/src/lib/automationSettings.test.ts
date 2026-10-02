@@ -18,7 +18,7 @@ describe("receipt automation settings", () => {
       }),
     ).toMatchObject({
       nonReturningDays: 7,
-      invoiceWhatsappChannel: "WHATSAPP_UNOFFICIAL",
+      invoiceWhatsappChannel: "WHATSAPP_OFFICIAL",
     });
   });
 
