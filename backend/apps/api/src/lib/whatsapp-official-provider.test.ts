@@ -43,6 +43,32 @@ describe("official WhatsApp provider failures", () => {
     });
   });
 
+  it("submits an authentication OTP template with copy-code button", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "template-otp", status: "PENDING", category: "AUTHENTICATION" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new WhatsAppOfficialProvider(config).createTemplate({
+      name: "cutz_customer_otp",
+      language: "en",
+      category: "AUTHENTICATION",
+      body: "{{1}} is your Cutz & Bangs login code.",
+      footer: "This code expires in 10 minutes.",
+    });
+
+    expect(result).toEqual({ id: "template-otp", status: "pending", category: "AUTHENTICATION" });
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toMatchObject({
+      name: "cutz_customer_otp",
+      language: "en",
+      category: "AUTHENTICATION",
+      components: [
+        { type: "BODY", text: "{{1}} is your Cutz & Bangs login code." },
+        { type: "FOOTER", text: "This code expires in 10 minutes." },
+        { type: "BUTTONS", buttons: [{ type: "OTP", otp_type: "COPY_CODE", text: "Copy code" }] },
+      ],
+    });
+  });
+
   it("rejects an invalid recipient before calling Meta", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

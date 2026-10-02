@@ -278,16 +278,22 @@ export class WhatsAppOfficialProvider implements MessagingProvider {
   async createTemplate(input: {
     name: string;
     language: string;
-    category: "MARKETING" | "UTILITY";
+    category: "MARKETING" | "UTILITY" | "AUTHENTICATION";
     body: string;
     header?: string;
     footer?: string;
   }) {
     if (!this.token || !this.wabaId) throw new Error("wa_official_template_not_configured");
-    const components: Array<Record<string, string>> = [];
-    if (input.header) components.push({ type: "HEADER", format: "TEXT", text: input.header });
+    const components: Array<Record<string, unknown>> = [];
+    if (input.category !== "AUTHENTICATION" && input.header) components.push({ type: "HEADER", format: "TEXT", text: input.header });
     components.push({ type: "BODY", text: input.body });
     if (input.footer) components.push({ type: "FOOTER", text: input.footer });
+    if (input.category === "AUTHENTICATION") {
+      components.push({
+        type: "BUTTONS",
+        buttons: [{ type: "OTP", otp_type: "COPY_CODE", text: "Copy code" }],
+      });
+    }
     const response = await fetch(this.endpoint(`${this.wabaId}/message_templates`), {
       method: "POST",
       headers: { Authorization: `Bearer ${this.token}`, "Content-Type": "application/json" },

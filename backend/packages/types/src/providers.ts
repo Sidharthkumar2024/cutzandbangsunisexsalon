@@ -63,7 +63,7 @@ export interface MessagingProvider {
   createTemplate?(input: {
     name: string;
     language: string;
-    category: "MARKETING" | "UTILITY";
+    category: "MARKETING" | "UTILITY" | "AUTHENTICATION";
     body: string;
     header?: string;
     footer?: string;

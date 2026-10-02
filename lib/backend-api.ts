@@ -1745,7 +1745,7 @@ export const backendApi = {
     ),
   createWhatsAppTemplate: (
     token: string,
-    payload: { name: string; language: string; category: "MARKETING" | "UTILITY" | "BROADCAST"; body: string; header?: string; footer?: string },
+    payload: { name: string; language: string; category: "MARKETING" | "UTILITY" | "AUTHENTICATION" | "BROADCAST"; body: string; header?: string; footer?: string },
   ) => request<{ id?: string; status: string; category: string; useCase: string }>(
     "/integrations/whatsapp/templates",
     { method: "POST", body: JSON.stringify(payload) },

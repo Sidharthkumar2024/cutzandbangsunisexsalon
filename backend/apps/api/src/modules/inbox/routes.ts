@@ -274,7 +274,7 @@ export default async function inboxRoutes(app: FastifyInstance) {
     const body = z.object({
       name: z.string().trim().regex(/^[a-z0-9_]{1,512}$/),
       language: z.string().trim().regex(/^[a-z]{2,3}(?:_[A-Z]{2})?$/).default("en"),
-      category: z.enum(["MARKETING", "UTILITY", "BROADCAST"]),
+      category: z.enum(["MARKETING", "UTILITY", "AUTHENTICATION", "BROADCAST"]),
       body: z.string().trim().min(1).max(1024),
       header: z.string().trim().max(60).optional(),
       footer: z.string().trim().max(60).optional(),

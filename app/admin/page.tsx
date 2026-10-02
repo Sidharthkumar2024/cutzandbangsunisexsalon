@@ -77,6 +77,21 @@ const cartLineKey = (kind: CartItem["kind"], id: string) => `${kind}:${id}`;
 type InvoiceWhatsAppChannel =
   | "WHATSAPP_OFFICIAL"
   | "WHATSAPP_UNOFFICIAL";
+type OfficialTemplateCategory =
+  | "MARKETING"
+  | "UTILITY"
+  | "AUTHENTICATION"
+  | "BROADCAST";
+type OfficialTemplatePreset = {
+  label: string;
+  description: string;
+  name: string;
+  category: OfficialTemplateCategory;
+  language: string;
+  header?: string;
+  body: string;
+  footer?: string;
+};
 type SaleService = {
   id: string;
   name: string;
@@ -87,6 +102,48 @@ type CustomerDirectorySegment = "ALL" | "NEW" | "REPEAT" | "AT_RISK" | "LAPSED";
 
 const money = (minor: number) =>
   `₹${Math.round(minor / 100).toLocaleString("en-IN")}`;
+
+const officialTemplatePresets: OfficialTemplatePreset[] = [
+  {
+    label: "Marketing offer",
+    description: "Win-back or festival offer for opted-in customers.",
+    name: "cutz_marketing_offer",
+    category: "MARKETING",
+    language: "en",
+    header: "Cutz & Bangs offer",
+    body: "Hi {{1}}, your salon offer is ready. Book this week and get {{2}} at Cutz & Bangs Dwarka.",
+    footer: "Reply STOP to opt out",
+  },
+  {
+    label: "Utility invoice",
+    description: "Transactional invoice or booking update.",
+    name: "cutz_invoice_update",
+    category: "UTILITY",
+    language: "en",
+    header: "Cutz & Bangs update",
+    body: "Hi {{1}}, your Cutz & Bangs invoice {{2}} for {{3}} is ready. Thank you for visiting us.",
+    footer: "Cutz & Bangs Sector 15 Dwarka",
+  },
+  {
+    label: "OTP login",
+    description: "Customer portal one-time code.",
+    name: "cutz_customer_otp",
+    category: "AUTHENTICATION",
+    language: "en",
+    body: "{{1}} is your Cutz & Bangs login code.",
+    footer: "This code expires in 10 minutes.",
+  },
+  {
+    label: "Broadcast campaign",
+    description: "Newsletter-style broadcast submitted as Marketing.",
+    name: "cutz_broadcast_update",
+    category: "BROADCAST",
+    language: "en",
+    header: "Cutz & Bangs update",
+    body: "Hi {{1}}, new salon slots and offers are available at Cutz & Bangs. Tap to book or call us today.",
+    footer: "Reply STOP to opt out",
+  },
+];
 
 function playPosAddSound() {
   if (typeof window === "undefined") return;
@@ -7038,7 +7095,7 @@ function Campaigns({
   const [officialTemplates, setOfficialTemplates] = useState<BackendWhatsAppTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [templateName, setTemplateName] = useState("");
-  const [templateCategory, setTemplateCategory] = useState<"MARKETING" | "UTILITY" | "BROADCAST">("MARKETING");
+  const [templateCategory, setTemplateCategory] = useState<OfficialTemplateCategory>("MARKETING");
   const [templateLanguage, setTemplateLanguage] = useState("en");
   const [templateHeader, setTemplateHeader] = useState("");
   const [templateFooter, setTemplateFooter] = useState("");
@@ -7210,6 +7267,16 @@ function Campaigns({
       setBusy(false);
     }
   };
+  const applyTemplatePreset = (preset: OfficialTemplatePreset) => {
+    setTemplateName(preset.name);
+    setTemplateCategory(preset.category);
+    setTemplateLanguage(preset.language);
+    setTemplateHeader(preset.header ?? "");
+    setTemplateFooter(preset.footer ?? "");
+    setContent(preset.body);
+    if (!name.trim()) setName(preset.label);
+    setMessage(`${preset.label} template loaded. Review the wording, then submit it for Meta approval.`);
+  };
   const uploadCreative = async (file?: File) => {
     if (!token || !file) return;
     setBusy(true); setMessage("");
@@ -7363,7 +7430,15 @@ function Campaigns({
         <label className="campaign-copy">Message<textarea value={content} onChange={(event) => setContent(event.target.value)} rows={5} /></label>
         <div className="campaign-template-builder">
           <div><p className="eyebrow">Meta template maker</p><h3>Create for approval</h3><small>Broadcast is submitted to Meta as a Marketing template. Use variables like {"{{1}}"} in the body.</small></div>
-          <label>Template type<select value={templateCategory} onChange={(event) => setTemplateCategory(event.target.value as typeof templateCategory)}><option value="MARKETING">Marketing</option><option value="UTILITY">Utility</option><option value="BROADCAST">Broadcast</option></select></label>
+          <div className="official-template-presets">
+            {officialTemplatePresets.map((preset) => (
+              <button type="button" key={preset.name} onClick={() => applyTemplatePreset(preset)}>
+                <strong>{preset.label}</strong>
+                <small>{preset.description}</small>
+              </button>
+            ))}
+          </div>
+          <label>Template type<select value={templateCategory} onChange={(event) => setTemplateCategory(event.target.value as OfficialTemplateCategory)}><option value="MARKETING">Marketing</option><option value="UTILITY">Utility</option><option value="AUTHENTICATION">OTP / Authentication</option><option value="BROADCAST">Broadcast</option></select></label>
           <label>Template name<input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="festival_offer_2026" /></label>
           <label>Language<select value={templateLanguage} onChange={(event) => setTemplateLanguage(event.target.value)}><option value="en">English</option><option value="en_US">English (US)</option><option value="hi">Hindi</option></select></label>
           <label>Header (optional)<input maxLength={60} value={templateHeader} onChange={(event) => setTemplateHeader(event.target.value)} placeholder="Cutz & Bangs offer" /></label>
@@ -8596,6 +8671,9 @@ function Settings({
   const [message, setMessage] = useState("");
   const [integrationLoading, setIntegrationLoading] = useState(true);
   const [integrationError, setIntegrationError] = useState("");
+  const officialWebhookCallback = typeof window === "undefined"
+    ? "/api/v1/webhooks/whatsapp"
+    : `${window.location.origin}/api/v1/webhooks/whatsapp`;
 
   const applySettings = (settings: Record<string, unknown>) => {
     const booking = settings.booking as Record<string, unknown> | undefined;
@@ -9086,7 +9164,13 @@ function Settings({
               <label>App secret<input type="password" value={officialAppSecret} onChange={(event) => setOfficialAppSecret(event.target.value)} placeholder={providerConfig.whatsappOfficial.hasAppSecret ? "Saved · enter only to replace" : "Meta app secret"} /></label>
               <label>Webhook verify token<input type="password" value={webhookVerifyToken} onChange={(event) => setWebhookVerifyToken(event.target.value)} placeholder={providerConfig.whatsappOfficial.hasWebhookVerifyToken ? "Saved · enter only to replace" : "At least 12 characters"} /></label>
             </div>
-            <small className="webhook-hint">Webhook endpoint: <code>/api/v1/webhooks/whatsapp</code></small>
+            <div className="meta-setup-panel">
+              <strong>Meta setup values</strong>
+              <span>Callback URL <code>{officialWebhookCallback}</code></span>
+              <span>Verify token <code>{providerConfig.whatsappOfficial.hasWebhookVerifyToken ? "Saved securely" : "Create any private 12+ character token, paste the same value in Meta and here."}</code></span>
+              <span>App secret <code>{providerConfig.whatsappOfficial.hasAppSecret ? "Saved securely" : "Meta App dashboard -> App settings -> Basic -> App secret."}</code></span>
+              <small>In Meta/Facebook: create an app, add WhatsApp, connect the business phone, create a permanent system-user token with WhatsApp permissions, then subscribe this callback under WhatsApp webhook fields.</small>
+            </div>
           </section>
         </div>
         <button className="button admin-primary" disabled={busy || !token} onClick={() => void saveProviders()}>{busy ? "Saving…" : "Save & apply provider credentials"}</button>
