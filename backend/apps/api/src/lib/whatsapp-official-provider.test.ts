@@ -12,6 +12,22 @@ const config = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("official WhatsApp provider failures", () => {
+  it("shows a safe actionable Graph diagnostic for credential failures", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: { message: "Invalid OAuth access token: meta-test-token", code: 190, error_subcode: 123 },
+    }), { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const health = await new WhatsAppOfficialProvider(config).health();
+
+    expect(health).toEqual({
+      configured: true,
+      connected: false,
+      detail: "Meta returned 401 (190:123): Invalid OAuth access token: [redacted]",
+    });
+    expect(health.detail).not.toContain("meta-test-token");
+  });
+
   it("submits a structured message template to the WABA endpoint", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "template-1", status: "PENDING", category: "MARKETING" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

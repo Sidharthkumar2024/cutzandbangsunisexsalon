@@ -242,10 +242,26 @@ export class WhatsAppOfficialProvider implements MessagingProvider {
         headers: { Authorization: `Bearer ${this.token}` },
         signal: AbortSignal.timeout(10_000),
       });
+      if (!response.ok) {
+        const raw = await response.text();
+        let meta: MetaErrorPayload["error"] | undefined;
+        try {
+          meta = (JSON.parse(raw) as MetaErrorPayload).error;
+        } catch {
+          // Keep the status-only diagnostic when Graph returns non-JSON text.
+        }
+        const providerCode = meta?.code === undefined ? "" : ` (${meta.code}${meta.error_subcode === undefined ? "" : `:${meta.error_subcode}`})`;
+        const providerMessage = (meta?.error_data?.details ?? meta?.message ?? "").replaceAll(this.token, "[redacted]").slice(0, 300);
+        return {
+          configured: true,
+          connected: false,
+          detail: `Meta returned ${response.status}${providerCode}${providerMessage ? `: ${providerMessage}` : ""}`,
+        };
+      }
       return {
         configured: true,
-        connected: response.ok,
-        detail: response.ok ? "Meta Cloud API reachable" : `Meta returned ${response.status}`,
+        connected: true,
+        detail: "Meta Cloud API reachable",
       };
     } catch (error) {
       return { configured: true, connected: false, detail: error instanceof Error ? error.message : "Meta unavailable" };

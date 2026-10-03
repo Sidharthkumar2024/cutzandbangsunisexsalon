@@ -6758,7 +6758,10 @@ function Inbox({
             <span>⌕</span>
             <input value={inboxSearch} onChange={(event) => setInboxSearch(event.target.value)} placeholder="Name or phone" />
           </label>
-          <button className={`inbox-unread-filter ${unreadOnly ? "active" : ""}`} onClick={() => setUnreadOnly((value) => !value)}>Unread only · {data.conversations.filter((item) => item.unread).length}</button>
+          <div className="inbox-filter-tabs" role="tablist" aria-label="Filter conversations">
+            <button type="button" role="tab" aria-selected={!unreadOnly} className={!unreadOnly ? "active" : ""} onClick={() => setUnreadOnly(false)}>All <b>{data.conversations.length}</b></button>
+            <button type="button" role="tab" aria-selected={unreadOnly} className={unreadOnly ? "active" : ""} onClick={() => setUnreadOnly(true)}>Unread <b>{data.conversations.filter((item) => item.unread).length}</b></button>
+          </div>
           {conversationRows.map((item) => (
             <button
               key={item.id}
