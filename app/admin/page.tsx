@@ -8948,6 +8948,23 @@ function Settings({
   };
   const saveProviders = async () => {
     if (!token) return;
+    // The API intentionally refuses an enabled Official Cloud API without all
+    // credentials required for sending and webhook verification. Surface that
+    // requirement before making the request so the toggle does not appear to
+    // silently fail.
+    if (providerConfig.whatsappOfficial.enabled) {
+      const official = providerConfig.whatsappOfficial;
+      const missing: string[] = [];
+      if (!official.phoneId.trim()) missing.push("Phone number ID");
+      if (!official.wabaId.trim()) missing.push("WhatsApp Business ID");
+      if (!officialToken && !official.hasToken) missing.push("permanent access token");
+      if (!officialAppSecret && !official.hasAppSecret) missing.push("app secret");
+      if (!webhookVerifyToken && !official.hasWebhookVerifyToken) missing.push("webhook verify token");
+      if (missing.length) {
+        setMessage(`Official Meta Cloud API needs: ${missing.join(", ")}.`);
+        return;
+      }
+    }
     setBusy(true);
     setMessage("");
     try {
