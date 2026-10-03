@@ -1522,6 +1522,7 @@ export const backendApi = {
       internal: boolean;
       templateName?: string;
       templateLanguage?: string;
+      variables?: Record<string, string>;
       mediaUrl?: string;
     },
   ) =>
@@ -1762,7 +1763,7 @@ export const backendApi = {
     ),
   createWhatsAppTemplate: (
     token: string,
-    payload: { name: string; language: string; category: "MARKETING" | "UTILITY" | "AUTHENTICATION" | "BROADCAST"; body: string; header?: string; footer?: string },
+    payload: { name: string; language: string; category: "MARKETING" | "UTILITY" | "AUTHENTICATION" | "BROADCAST"; body: string; header?: string; footer?: string; buttons?: Array<{ type: "URL" | "PHONE_NUMBER"; text: string; value: string }> },
   ) => request<{ id?: string; status: string; category: string; useCase: string }>(
     "/integrations/whatsapp/templates",
     { method: "POST", body: JSON.stringify(payload) },

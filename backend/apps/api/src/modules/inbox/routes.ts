@@ -203,7 +203,6 @@ export default async function inboxRoutes(app: FastifyInstance) {
         where: { type: "WHATSAPP_OFFICIAL" },
         select: {
           templates: {
-            where: { status: "approved" },
             select: { id: true, name: true, language: true, status: true, body: true, createdAt: true },
             orderBy: [{ name: "asc" }, { language: "asc" }],
           },
@@ -278,7 +277,23 @@ export default async function inboxRoutes(app: FastifyInstance) {
       body: z.string().trim().min(1).max(1024),
       header: z.string().trim().max(60).optional(),
       footer: z.string().trim().max(60).optional(),
+      buttons: z.array(z.object({
+        type: z.enum(["URL", "PHONE_NUMBER"]),
+        text: z.string().trim().min(1).max(25),
+        value: z.string().trim().min(1).max(200),
+      })).max(2).optional(),
     }).parse(req.body);
+    if (body.category === "AUTHENTICATION" && body.buttons?.length) {
+      return reply.code(400).send({ error: "authentication_template_uses_meta_otp_button" });
+    }
+    for (const button of body.buttons ?? []) {
+      if (button.type === "URL" && !/^https:\/\//iu.test(button.value)) {
+        return reply.code(400).send({ error: "template_button_url_must_use_https" });
+      }
+      if (button.type === "PHONE_NUMBER" && !/^\+[1-9]\d{7,14}$/u.test(button.value)) {
+        return reply.code(400).send({ error: "template_button_phone_must_be_e164" });
+      }
+    }
     const providerContext = await applyProviderSettings("main");
     const messaging = providerContext.whatsapp("WHATSAPP_OFFICIAL");
     if (!messaging.createTemplate) return reply.code(501).send({ error: "official_template_creation_not_supported" });
@@ -362,6 +377,7 @@ export default async function inboxRoutes(app: FastifyInstance) {
       internal: z.boolean().default(false),
       templateName: z.string().optional(),
       templateLanguage: z.string().optional(),
+      variables: z.record(z.string(), z.string().max(1024)).optional(),
       mediaUrl: z.string().url().optional(),
       mediaType: z.enum(["image", "document", "video", "audio"]).optional(),
       location: z.object({ latitude: z.number(), longitude: z.number(), name: z.string().optional(), address: z.string().optional() }).optional(),
@@ -380,12 +396,23 @@ export default async function inboxRoutes(app: FastifyInstance) {
       } else if (!conversation.customer?.phone || !WHATSAPP_CHANNELS.includes(conversation.channel.type as typeof WHATSAPP_CHANNELS[number])) {
         return reply.code(422).send({ error: "channel_cannot_send" });
       } else {
+        if (conversation.channel.type === "WHATSAPP_OFFICIAL" && !body.templateName) {
+          const lastInbound = await prisma.message.findFirst({
+            where: { conversationId: id, direction: "in" },
+            orderBy: { createdAt: "desc" },
+            select: { createdAt: true },
+          });
+          if (!lastInbound || Date.now() - lastInbound.createdAt.getTime() >= 24 * 60 * 60 * 1000) {
+            return reply.code(409).send({ error: "whatsapp_service_window_expired_use_approved_template" });
+          }
+        }
         const providerContext = await applyProviderSettings(conversation.customer.branchId);
         const result = await providerContext.whatsapp(conversation.channel.type as typeof WHATSAPP_CHANNELS[number]).send({
           to: conversation.customer.phone,
           body: body.body,
           templateName: body.templateName,
           templateLanguage: body.templateLanguage,
+          variables: body.variables,
           mediaUrl: body.mediaUrl,
           mediaType: body.mediaType,
           location: body.location,

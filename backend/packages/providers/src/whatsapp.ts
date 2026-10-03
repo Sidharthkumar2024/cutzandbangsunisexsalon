@@ -171,8 +171,8 @@ export class WhatsAppOfficialProvider implements MessagingProvider {
         template: {
           name: msg.templateName,
           language: { code: msg.templateLanguage ?? "en" },
-          components: msg.variables
-            ? [{ type: "body", parameters: Object.values(msg.variables).map((text) => ({ type: "text", text })) }]
+          components: msg.variables && Object.keys(msg.variables).length
+            ? [{ type: "body", parameters: Object.entries(msg.variables).sort(([a], [b]) => Number(a) - Number(b)).map(([, text]) => ({ type: "text", text })) }]
             : undefined,
         },
       };
@@ -282,12 +282,21 @@ export class WhatsAppOfficialProvider implements MessagingProvider {
     body: string;
     header?: string;
     footer?: string;
+    buttons?: Array<{ type: "URL" | "PHONE_NUMBER"; text: string; value: string }>;
   }) {
     if (!this.token || !this.wabaId) throw new Error("wa_official_template_not_configured");
     const components: Array<Record<string, unknown>> = [];
     if (input.category !== "AUTHENTICATION" && input.header) components.push({ type: "HEADER", format: "TEXT", text: input.header });
     components.push({ type: "BODY", text: input.body });
     if (input.footer) components.push({ type: "FOOTER", text: input.footer });
+    if (input.category !== "AUTHENTICATION" && input.buttons?.length) {
+      components.push({
+        type: "BUTTONS",
+        buttons: input.buttons.map((button) => button.type === "URL"
+          ? { type: "URL", text: button.text, url: button.value }
+          : { type: "PHONE_NUMBER", text: button.text, phone_number: button.value }),
+      });
+    }
     if (input.category === "AUTHENTICATION") {
       components.push({
         type: "BUTTONS",

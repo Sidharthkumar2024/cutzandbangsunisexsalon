@@ -67,6 +67,7 @@ export interface MessagingProvider {
     body: string;
     header?: string;
     footer?: string;
+    buttons?: Array<{ type: "URL" | "PHONE_NUMBER"; text: string; value: string }>;
   }): Promise<{ id?: string; status: string; category: string }>;
   sessionAction?(action: WhatsAppSessionAction): Promise<WhatsAppSessionState>;
   listContacts?(limit?: number): Promise<WhatsAppContact[]>;

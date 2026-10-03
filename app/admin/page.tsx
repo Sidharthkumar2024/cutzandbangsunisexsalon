@@ -16,7 +16,6 @@ import {
   type CashBreakdown,
   type BackendAppointment,
   type BackendCampaign,
-  type BackendCampaignCtaButton,
   type BackendCampaignRecurrence,
   type BackendCustomer,
   type BackendCustomerDetail,
@@ -92,6 +91,7 @@ type OfficialTemplatePreset = {
   body: string;
   footer?: string;
 };
+type OfficialTemplateButton = { id: string; type: "URL" | "PHONE_NUMBER"; text: string; value: string };
 type SaleService = {
   id: string;
   name: string;
@@ -373,7 +373,6 @@ type MarketingSettings = {
   reviewLink: string;
   rewardRules: MarketingRewardRules;
 };
-type CampaignCtaDraft = BackendCampaignCtaButton & { id: string };
 const defaultMarketingRewardRules = (): MarketingRewardRules => ({
   stampEveryVisits: 5,
   stampMinInvoiceMinor: 100_000,
@@ -503,27 +502,6 @@ const campaignWeekdays = [
   ["5", "Fri"],
   ["6", "Sat"],
 ] as const;
-const newCampaignCta = (): CampaignCtaDraft => ({
-  id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-  type: "WEBSITE",
-  label: "Book now",
-  value: "",
-});
-const campaignCtaHint = (type: BackendCampaignCtaButton["type"]) => {
-  if (type === "CALL") return "Phone number, e.g. 9876543210";
-  if (type === "LOCATION") return "Google Maps link or salon address";
-  return "Website URL, e.g. https://cutzandbangs.com";
-};
-const sanitizeCampaignCtas = (buttons: CampaignCtaDraft[]): BackendCampaignCtaButton[] =>
-  buttons
-    .map((button) => ({
-      type: button.type,
-      label: button.label.trim(),
-      value: button.value.trim(),
-      ...(button.secondary?.trim() ? { secondary: button.secondary.trim() } : {}),
-    }))
-    .filter((button) => button.label.length >= 2 && button.value.length >= 3)
-    .slice(0, 3);
 const sanitizeCampaignRecurrence = (value: BackendCampaignRecurrence): BackendCampaignRecurrence => ({
   enabled: value.enabled,
   frequency: value.frequency,
@@ -6591,23 +6569,29 @@ function Inbox({
   const [officialTemplates, setOfficialTemplates] = useState<BackendWhatsAppTemplate[]>([]);
   const [templateMode, setTemplateMode] = useState<"text" | "template">("text");
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [templateVariables, setTemplateVariables] = useState<string[]>([]);
   const [inboxSearch, setInboxSearch] = useState("");
   const [unreadOnly, setUnreadOnly] = useState(false);
   const selected =
     data.conversations.find((item) => item.id === selectedId) ??
     data.conversations[0];
   const canUseTemplate = selected?.channel.type === "WHATSAPP_OFFICIAL";
-  const activeTemplate = officialTemplates.find((template) => template.id === selectedTemplateId);
+  const activeTemplate = officialTemplates.find((template) => template.id === selectedTemplateId && template.status.toLowerCase() === "approved");
+  const templateVariableCount = activeTemplate ? Math.max(0, ...Array.from(activeTemplate.body.matchAll(/\{\{(\d+)\}\}/gu), (match) => Number(match[1]))) : 0;
+  const lastInboundAt = detail?.messages.filter((item) => item.direction === "in").map((item) => Date.parse(item.createdAt)).filter(Number.isFinite).sort((a, b) => b - a)[0];
+  const serviceWindowOpen = Boolean(lastInboundAt && Date.now() - lastInboundAt < 24 * 60 * 60 * 1000);
   const sendDisabled = (() => {
     if (!selected) return true;
     if (internal) return !body.trim();
-    if (canUseTemplate && templateMode === "template") return !activeTemplate;
+    if (canUseTemplate && templateMode === "template") return !activeTemplate || templateVariables.length < templateVariableCount || templateVariables.slice(0, templateVariableCount).some((value) => !value.trim());
+    if (canUseTemplate && !serviceWindowOpen) return true;
     return !body.trim();
   })();
   const conversationRows = data.conversations.filter((item) => (!unreadOnly || item.unread) && (!inboxSearch.trim() || (item.customer?.name ?? "").toLowerCase().includes(inboxSearch.toLowerCase()) || (item.customer?.phone ?? "").includes(inboxSearch.replace(/\D/g, ""))));
   const load = async (id: string) => {
     if (!token) return;
     setSelectedId(id);
+    setDetail(null);
     setBusy(true);
     setMessage("");
     try {
@@ -6652,7 +6636,7 @@ function Inbox({
       try {
         const next = await backendApi.whatsappStatus(token);
         if (!cancelled) {
-          const templates = next.official.templates ?? [];
+          const templates = (next.official.templates ?? []).filter((template) => template.status.toLowerCase() === "approved");
           if (!templates.length && templateMode === "template") {
             setTemplateMode("text");
           }
@@ -6690,6 +6674,7 @@ function Inbox({
           internal: false,
           templateName: activeTemplate.name,
           templateLanguage: activeTemplate.language,
+          variables: templateVariableCount ? Object.fromEntries(templateVariables.slice(0, templateVariableCount).map((value, index) => [String(index + 1), value.trim()])) : undefined,
         } as Parameters<typeof backendApi.sendConversationMessage>[2];
         if (!body.trim()) delete templatePayload.body;
         await backendApi.sendConversationMessage(token, selected.id, templatePayload);
@@ -6873,9 +6858,15 @@ function Inbox({
                 {templateMode === "template" && (
                   <select
                     value={selectedTemplateId}
-                    onChange={(event) => setSelectedTemplateId(event.target.value)}
+                    onChange={(event) => {
+                      const nextId = event.target.value;
+                      const nextTemplate = officialTemplates.find((template) => template.id === nextId);
+                      const nextCount = nextTemplate ? Math.max(0, ...Array.from(nextTemplate.body.matchAll(/\{\{(\d+)\}\}/gu), (match) => Number(match[1]))) : 0;
+                      setSelectedTemplateId(nextId);
+                      setTemplateVariables(Array.from({ length: nextCount }, () => ""));
+                    }}
                   >
-                    <option value="">{officialTemplates.length ? "Choose template" : "No approved templates"}</option>
+                    <option value="">{officialTemplates.length ? "Choose approved template" : "No approved templates · sync in Settings"}</option>
                     {officialTemplates.map((template) => (
                       <option key={template.id} value={template.id}>
                         {template.name} ({template.language}) · {template.status}
@@ -6885,12 +6876,16 @@ function Inbox({
                 )}
               </div>
             )}
+            {canUseTemplate && !internal && templateMode === "template" && activeTemplate && templateVariableCount > 0 && <div className="inbox-template-variables">
+              <small>Fill the approved template variables before sending:</small>
+              {Array.from({ length: templateVariableCount }, (_, index) => <label key={`${activeTemplate.id}-${index}`}><span>{`{{${index + 1}}}`}</span><input value={templateVariables[index] ?? ""} onChange={(event) => setTemplateVariables((values) => { const next = [...values]; next[index] = event.target.value; return next; })} placeholder={index === 0 ? "Customer name" : `Value ${index + 1}`} /></label>)}
+            </div>}
+            {canUseTemplate && !internal && templateMode === "text" && <small className={`inbox-service-window ${serviceWindowOpen ? "open" : "closed"}`}>{serviceWindowOpen ? "Customer service window is open · free-form replies enabled" : "24-hour reply window closed · choose an approved Meta template to message this customer"}</small>}
             <input
               value={body}
               onChange={(event) => setBody(event.target.value)}
-              placeholder={
-                internal ? "Write a team-only note…" : "Type a reply…"
-              }
+              placeholder={internal ? "Write a team-only note…" : templateMode === "template" && canUseTemplate ? "Approved template will be sent with the values above" : "Type a reply…"}
+              disabled={!internal && canUseTemplate && templateMode === "template"}
             />
             <button
               disabled={busy || sendDisabled}
@@ -6899,7 +6894,7 @@ function Inbox({
               {busy ? "…" : "Send ↑"}
             </button>
             <button
-              disabled={busy || !selected}
+              disabled={busy || !selected || (canUseTemplate && !serviceWindowOpen)}
               onClick={() => void sendRateList()}
             >
               {busy ? "…" : "Send rate list"}
@@ -7184,11 +7179,11 @@ function Campaigns({
   const [templateLanguage, setTemplateLanguage] = useState("en");
   const [templateHeader, setTemplateHeader] = useState("");
   const [templateFooter, setTemplateFooter] = useState("");
+  const [templateButtons, setTemplateButtons] = useState<OfficialTemplateButton[]>([]);
   const [offer, setOffer] = useState("");
   const [mediaKey, setMediaKey] = useState("");
   const [mediaType, setMediaType] = useState<"image" | "document" | "video" | "">("");
   const [mediaName, setMediaName] = useState("");
-  const [ctaButtons, setCtaButtons] = useState<CampaignCtaDraft[]>([]);
   const [recurrence, setRecurrence] = useState<BackendCampaignRecurrence>(() => defaultCampaignRecurrence());
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [message, setMessage] = useState("");
@@ -7208,6 +7203,24 @@ function Campaigns({
     }).catch(() => undefined);
   }, [token, data.campaigns.length]);
   const selectedTemplate = officialTemplates.find((item) => item.id === selectedTemplateId);
+  const syncCampaignTemplates = async () => {
+    if (!token || busy) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await backendApi.syncWhatsAppTemplates(token);
+      const result = await backendApi.whatsappStatus(token);
+      setWaStatus(result.official);
+      const templates = result.official.templates ?? [];
+      setOfficialTemplates(templates);
+      setSelectedTemplateId((current) => current && templates.some((item) => item.id === current) ? current : templates.find((item) => item.status.toLowerCase() === "approved")?.id ?? "");
+      setMessage("Meta template status refreshed.");
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Meta templates could not be refreshed.");
+    } finally {
+      setBusy(false);
+    }
+  };
   const attention = data.range
     ? data.range.customers.lapsed +
       data.customers.filter((item) => item.segments.includes("AT_RISK")).length
@@ -7215,7 +7228,6 @@ function Campaigns({
   const manualContacts = campaignContactsFromText(manualNumbers, manualConsentConfirmed);
   const manualStats = campaignAudienceStats(manualContacts.map((contact) => contact.phone));
   const manualRecipients = dedupeCampaignContacts(manualContacts);
-  const validCtaButtons = sanitizeCampaignCtas(ctaButtons);
   const validRecurrence = sanitizeCampaignRecurrence(recurrence);
   const createBlockReason = !token
     ? "Login required."
@@ -7223,7 +7235,7 @@ function Campaigns({
       ? "Campaign name required."
       : !content.trim()
         ? "Message required."
-        : !selectedTemplate
+        : !selectedTemplate || selectedTemplate.status.toLowerCase() !== "approved"
           ? "Select an approved Meta template."
         : audienceMode === "MANUAL" && !manualStats.valid
           ? "Paste numbers or upload CSV before creating this campaign."
@@ -7295,7 +7307,7 @@ function Campaigns({
     try {
       if (audienceMode === "MANUAL" && manualStats.valid < 1) throw new Error("Paste numbers or import a CSV before creating a manual campaign.");
       if (audienceMode === "MANUAL" && channel.startsWith("WHATSAPP") && !manualConsentConfirmed) throw new Error("Confirm WhatsApp consent before sending to pasted/CSV numbers.");
-      if (!selectedTemplate) throw new Error("Select an approved Meta template before creating the campaign.");
+      if (!selectedTemplate || selectedTemplate.status.toLowerCase() !== "approved") throw new Error("Select an approved Meta template before creating the campaign.");
       const result = await backendApi.createCampaign(token, {
         name,
         channel,
@@ -7309,13 +7321,11 @@ function Campaigns({
         manualConsentConfirmed: audienceMode === "MANUAL" ? manualConsentConfirmed : undefined,
         mediaKey: mediaKey || undefined,
         mediaType: mediaType || undefined,
-        ctaButtons: validCtaButtons.length ? validCtaButtons : undefined,
         recurrence: validRecurrence.enabled ? validRecurrence : undefined,
       });
       setName("");
       setContent("");
       setMediaKey(""); setMediaType(""); setMediaName("");
-      setCtaButtons([]);
       setRecurrence(() => defaultCampaignRecurrence());
       if (audienceMode === "MANUAL") setManualNumbers("");
       setLastImportSummary("");
@@ -7340,6 +7350,7 @@ function Campaigns({
         body: content.trim(),
         header: templateHeader.trim() || undefined,
         footer: templateFooter.trim() || undefined,
+        buttons: templateCategory === "AUTHENTICATION" ? undefined : templateButtons.map(({ type, text, value }) => ({ type, text: text.trim(), value: value.trim() })),
       });
       await backendApi.syncWhatsAppTemplates(token);
       const status = await backendApi.whatsappStatus(token);
@@ -7358,6 +7369,7 @@ function Campaigns({
     setTemplateLanguage(preset.language);
     setTemplateHeader(preset.header ?? "");
     setTemplateFooter(preset.footer ?? "");
+    setTemplateButtons([]);
     setContent(preset.body);
     if (!name.trim()) setName(preset.label);
     setMessage(`${preset.label} template loaded. Review the wording, then submit it for Meta approval.`);
@@ -7491,10 +7503,10 @@ function Campaigns({
           <small>Official Meta delivery reports remain the final delivery truth.</small>
         </article>
         <article className="admin-card official-template-summary">
-          <p className="eyebrow">Official templates</p>
+          <div className="official-template-summary-heading"><p className="eyebrow">Official templates</p><button type="button" className="button button-light" disabled={busy || !token} onClick={() => void syncCampaignTemplates()}>{busy ? "Syncing…" : "Sync Meta templates"}</button></div>
           <div><strong>{officialTemplates.filter((item) => item.status.toLowerCase() === "approved").length}</strong><span>Approved by Meta</span></div>
+          <small>{officialTemplates.filter((item) => item.status.toLowerCase() !== "approved").length} pending/rejected · approval is required before a campaign can use a template</small>
           <p>Marketing and Broadcast messages use Meta-approved Marketing templates. Utility is for transactional service updates.</p>
-          <small>Templates in Pending status cannot be used until Meta approves them.</small>
         </article>
       </section>
       <section className="campaign-report-grid">
@@ -7528,32 +7540,24 @@ function Campaigns({
           <label>Language<select value={templateLanguage} onChange={(event) => setTemplateLanguage(event.target.value)}><option value="en">English</option><option value="en_US">English (US)</option><option value="hi">Hindi</option></select></label>
           <label>Header (optional)<input maxLength={60} value={templateHeader} onChange={(event) => setTemplateHeader(event.target.value)} placeholder="Cutz & Bangs offer" /></label>
           <label>Footer (optional)<input maxLength={60} value={templateFooter} onChange={(event) => setTemplateFooter(event.target.value)} placeholder="Reply STOP to opt out" /></label>
-          <button className="button admin-primary" type="button" disabled={busy || !token || !templateName.trim() || !content.trim()} onClick={() => void createOfficialTemplate()}>{busy ? "Submitting…" : "Create for Meta approval"}</button>
+          {templateCategory !== "AUTHENTICATION" && <div className="template-cta-fields">
+            <div><strong>Meta call-to-action buttons</strong><small>These are reviewed with the template and appear as real tappable buttons after Meta approves it. Use an HTTPS URL for Book now / Visit now or an international phone number for Call now.</small></div>
+            {templateButtons.map((button) => <div className="template-cta-row" key={button.id}>
+              <label>Button type<select value={button.type} onChange={(event) => setTemplateButtons((items) => items.map((item) => item.id === button.id ? { ...item, type: event.target.value as OfficialTemplateButton["type"], value: "" } : item))}><option value="URL">Website</option><option value="PHONE_NUMBER">Call</option></select></label>
+              <label>Button label<input maxLength={25} value={button.text} onChange={(event) => setTemplateButtons((items) => items.map((item) => item.id === button.id ? { ...item, text: event.target.value } : item))} placeholder={button.type === "URL" ? "Book now" : "Call now"} /></label>
+              <label>{button.type === "URL" ? "HTTPS URL" : "Phone number (+country code)"}<input value={button.value} onChange={(event) => setTemplateButtons((items) => items.map((item) => item.id === button.id ? { ...item, value: event.target.value } : item))} placeholder={button.type === "URL" ? "https://cutzandbangs.com/book" : "+911234567890"} /></label>
+              <button type="button" aria-label={`Remove ${button.text || "template"} button`} onClick={() => setTemplateButtons((items) => items.filter((item) => item.id !== button.id))}>Remove</button>
+            </div>)}
+            <button className="button" type="button" disabled={templateButtons.length >= 2} onClick={() => setTemplateButtons((items) => [...items, { id: crypto.randomUUID(), type: "URL", text: "", value: "" }])}>+ Add Meta button · {templateButtons.length}/2</button>
+          </div>}
+          <button className="button admin-primary" type="button" disabled={busy || !token || !templateName.trim() || !content.trim() || templateButtons.some((button) => !button.text.trim() || (button.type === "URL" ? !/^https:\/\//iu.test(button.value.trim()) : !/^\+[1-9]\d{7,14}$/u.test(button.value.trim())))} onClick={() => void createOfficialTemplate()}>{busy ? "Submitting…" : "Create for Meta approval"}</button>
         </div>
         <div className="campaign-cta-builder">
           <div>
             <p className="eyebrow">Campaign buttons</p>
-            <h3>Call, website or location CTA</h3>
-            <small>These appear under the message as tappable phone, website, or Maps links. Add up to 3.</small>
+            <h3>Use buttons from the approved Meta template</h3>
+            <small>WhatsApp displays interactive Book now / Visit now / Call now buttons only when those buttons are part of the Meta-approved template. Add them in Meta template maker above, submit for review, sync status, then select the approved template here.</small>
           </div>
-          {ctaButtons.map((button) => (
-            <div className="campaign-cta-row" key={button.id}>
-              <label>Type<select value={button.type} onChange={(event) => setCtaButtons((current) => current.map((item) => item.id === button.id ? { ...item, type: event.target.value as BackendCampaignCtaButton["type"], value: "" } : item))}><option value="WEBSITE">Website</option><option value="CALL">Call</option><option value="LOCATION">Location</option></select></label>
-              <label>Button text<input value={button.label} maxLength={32} onChange={(event) => setCtaButtons((current) => current.map((item) => item.id === button.id ? { ...item, label: event.target.value } : item))} placeholder={button.type === "CALL" ? "Call salon" : button.type === "LOCATION" ? "Get directions" : "Book now"} /></label>
-              <label>Link / phone / address<input value={button.value} onChange={(event) => setCtaButtons((current) => current.map((item) => item.id === button.id ? { ...item, value: event.target.value } : item))} placeholder={campaignCtaHint(button.type)} /></label>
-              <button type="button" aria-label={`Remove ${button.label || "CTA"} button`} onClick={() => setCtaButtons((current) => current.filter((item) => item.id !== button.id))}>Remove</button>
-            </div>
-          ))}
-          <button className="button" type="button" disabled={ctaButtons.length >= 3} onClick={() => setCtaButtons((current) => [...current, newCampaignCta()])}>
-            + Add campaign button
-          </button>
-        {validCtaButtons.length > 0 && (
-            <div className="campaign-cta-preview">
-              {validCtaButtons.map((button) => (
-                <span key={`${button.type}-${button.label}-${button.value}`}>{button.type === "CALL" ? "☎" : button.type === "LOCATION" ? "⌖" : "↗"} {button.label}</span>
-              ))}
-            </div>
-          )}
         </div>
         <div className="campaign-repeat-builder">
           <div>
