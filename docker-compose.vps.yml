@@ -135,7 +135,10 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      DOMAIN: ${DOMAIN}
+      # Keep the public proxy valid even if the shell running Compose does not
+      # export DOMAIN. An empty value makes Caddy interpret the site block as a
+      # global options block and it exits before binding ports 80/443.
+      DOMAIN: ${DOMAIN:-cutzandbangs.com}
     volumes:
       - ./backend/deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddydata:/data
