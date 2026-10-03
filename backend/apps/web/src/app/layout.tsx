@@ -58,6 +58,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </div>
         </nav>
         {children}
+        <footer className="container" style={{ padding: "28px 20px", borderTop: "1px solid var(--border)" }}>
+          <Link href="/privacy">Privacy</Link>{" · "}<Link href="/terms">Terms</Link>{" · "}<Link href="/data-deletion">Data deletion</Link>{" · "}<Link href="/about">About</Link>{" · "}<Link href="/contact-us">Contact</Link>
+        </footer>
         <PwaInstallPrompt />
       </body>
     </html>
