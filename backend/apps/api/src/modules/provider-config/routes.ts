@@ -34,7 +34,12 @@ const providerSchema = z.object({
     session: z.string().trim().min(2).max(100).regex(/^[a-zA-Z0-9_-]+$/),
     apiKey: z.string().min(24).max(500).optional(),
     webhookSecret: z.string().min(24).max(500).optional(),
-    intervalSeconds: z.number().int().min(60).max(300),
+    // Older VPS installations use 720 seconds for the retired QR connector.
+    // This payload is still submitted alongside the official Cloud API form so
+    // rejecting it here prevented every official credential change from being
+    // saved. Keep the legacy value readable while the official-only settings
+    // flow is rolled out.
+    intervalSeconds: z.number().int().min(60).max(900),
     dailyCap: z.number().int().min(5).max(75),
     windowStartHour: z.number().int().min(0).max(22),
     windowEndHour: z.number().int().min(1).max(23),
