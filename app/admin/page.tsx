@@ -4725,6 +4725,7 @@ function Customers({
   const [directoryLoading, setDirectoryLoading] = useState(false);
   const [directoryLoadingMore, setDirectoryLoadingMore] = useState(false);
   const [directoryRefreshKey, setDirectoryRefreshKey] = useState(0);
+  const importInputRef = useRef<HTMLInputElement>(null);
   const canDeleteCustomer = ["OWNER", "ADMIN", "MANAGER"].includes(
     data.user?.role ?? "",
   );
@@ -4965,6 +4966,76 @@ function Customers({
     }
   };
 
+  const csvValue = (value: string | null | undefined) => {
+    const text = value ?? "";
+    return /[",\n\r]/u.test(text) ? `"${text.replace(/"/gu, '""')}"` : text;
+  };
+  const downloadCsv = (filename: string, rows: string[][]) => {
+    const csv = `\uFEFF${rows.map((row) => row.map(csvValue).join(",")).join("\r\n")}\r\n`;
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+  const downloadSample = () => {
+    downloadCsv("cutz-bangs-customer-import-sample.csv", [
+      ["name", "phone", "email", "source", "tags", "customer_since"],
+      ["Aarav Sharma", "919876543210", "aarav@example.com", "walk_in", "hair;vip", todayInputDate()],
+    ]);
+    setMessage("Sample CSV downloaded. Fill it in Excel, then save as CSV UTF-8 before importing.");
+  };
+  const exportCustomers = async () => {
+    if (!token) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const customers = await backendApi.exportCustomers(token);
+      downloadCsv(`cutz-bangs-customers-${todayInputDate()}.csv`, [
+        ["name", "phone", "email", "source", "tags", "customer_since", "whatsapp_consent", "email_consent"],
+        ...customers.map((customer) => [
+          customer.name,
+          customer.phone ?? "",
+          customer.email ?? "",
+          customer.source ?? "",
+          customer.tags.join(";"),
+          customer.customerSince ? customer.customerSince.slice(0, 10) : "",
+          customer.waConsent ? "yes" : "no",
+          customer.emailConsent ? "yes" : "no",
+        ]),
+      ]);
+      setMessage(`${customers.length.toLocaleString("en-IN")} customers exported as an Excel-compatible CSV.`);
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Customer export could not be created.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const importCustomers = async (file: File) => {
+    if (!token) return;
+    if (!/\.(csv|txt)$/iu.test(file.name)) {
+      setMessage("Please save the Excel sheet as CSV UTF-8, then upload it. Use the sample CSV as the column guide.");
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      setMessage("The CSV is too large. Please upload a file smaller than 25 MB.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await backendApi.importCustomers(token, { branchId: "main", csv: await file.text() });
+      setMessage(`Import complete: ${result.created} added, ${result.restored} restored, ${result.skipped} duplicates skipped.`);
+      setDirectoryRefreshKey((current) => current + 1);
+      onRefresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Customer import could not be completed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="customers-view">
       {message && <div className="calendar-message">{message}</div>}
@@ -5001,6 +5072,20 @@ function Customers({
         >
           + Add customer
         </button>
+        <input
+          ref={importInputRef}
+          type="file"
+          accept=".csv,text/csv,text/plain"
+          style={{ display: "none" }}
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0];
+            event.currentTarget.value = "";
+            if (file) void importCustomers(file);
+          }}
+        />
+        <button className="button" disabled={busy || !token} onClick={() => importInputRef.current?.click()}>Import CSV</button>
+        <button className="button" disabled={busy || !token} onClick={() => void exportCustomers()}>Export CSV</button>
+        <button className="button" type="button" onClick={downloadSample}>Sample CSV</button>
       </div>
       <p className="customer-directory-status">
         {directoryLoading
@@ -8618,7 +8703,7 @@ function Settings({
   const [status, setStatus] = useState<BackendWhatsAppStatus | null>(null);
   const [providerConfig, setProviderConfig] = useState<BackendProviderConfig>({
     smtp: { enabled: false, host: "", port: 587, secure: false, user: "", from: "", hasPassword: false },
-    whatsappOfficial: { enabled: false, phoneId: "", wabaId: "", graphVersion: "v23.0", hasToken: false, hasAppSecret: false, hasWebhookVerifyToken: false },
+    whatsappOfficial: { enabled: false, phoneId: "", wabaId: "", graphVersion: "v26.0", hasToken: false, hasAppSecret: false, hasWebhookVerifyToken: false },
     whatsappUnofficial: {
       enabled: false,
       baseUrl: "",
@@ -9176,7 +9261,7 @@ function Settings({
             <div className="provider-config-form">
               <label>Phone number ID<input value={providerConfig.whatsappOfficial.phoneId} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappOfficial: { ...current.whatsappOfficial, phoneId: event.target.value } }))} /></label>
               <label>WhatsApp business ID<input value={providerConfig.whatsappOfficial.wabaId} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappOfficial: { ...current.whatsappOfficial, wabaId: event.target.value } }))} /></label>
-              <label>Graph API version<input value={providerConfig.whatsappOfficial.graphVersion} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappOfficial: { ...current.whatsappOfficial, graphVersion: event.target.value } }))} placeholder="v23.0" /></label>
+              <label>Graph API version<input value={providerConfig.whatsappOfficial.graphVersion} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappOfficial: { ...current.whatsappOfficial, graphVersion: event.target.value } }))} placeholder="v26.0" /></label>
               <label>Permanent access token<input type="password" value={officialToken} onChange={(event) => setOfficialToken(event.target.value)} placeholder={providerConfig.whatsappOfficial.hasToken ? "Saved · enter only to replace" : "Meta access token"} /></label>
               <label>App secret<input type="password" value={officialAppSecret} onChange={(event) => setOfficialAppSecret(event.target.value)} placeholder={providerConfig.whatsappOfficial.hasAppSecret ? "Saved · enter only to replace" : "Meta app secret"} /></label>
               <label>Webhook verify token<input type="password" value={webhookVerifyToken} onChange={(event) => setWebhookVerifyToken(event.target.value)} placeholder={providerConfig.whatsappOfficial.hasWebhookVerifyToken ? "Saved · enter only to replace" : "At least 12 characters"} /></label>

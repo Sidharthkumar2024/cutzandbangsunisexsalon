@@ -111,7 +111,7 @@ function envProviderSettings(): StoredProviderSettings {
       enabled: envFlag(process.env.WA_OFFICIAL_ENABLED, officialConfigured),
       phoneId: process.env.WA_OFFICIAL_PHONE_ID ?? "",
       wabaId: process.env.WA_OFFICIAL_WABA_ID ?? "",
-      graphVersion: process.env.WA_GRAPH_VERSION ?? "v23.0",
+      graphVersion: process.env.WA_GRAPH_VERSION ?? "v26.0",
       tokenEncrypted: undefined,
       appSecretEncrypted: undefined,
       webhookVerifyTokenEncrypted: undefined,
@@ -285,7 +285,12 @@ export async function publicProviderSettings(branchId = "main") {
       enabled: stored.whatsappOfficial?.enabled ?? false,
       phoneId: stored.whatsappOfficial?.phoneId ?? "",
       wabaId: stored.whatsappOfficial?.wabaId ?? "",
-      graphVersion: stored.whatsappOfficial?.graphVersion ?? "v23.0",
+      // The salon is standardising on Graph API v26. Existing v23 settings are
+      // upgraded in the editable admin response and are persisted as v26 on
+      // the next Save & apply action.
+      graphVersion: stored.whatsappOfficial?.graphVersion && stored.whatsappOfficial.graphVersion !== "v23.0"
+        ? stored.whatsappOfficial.graphVersion
+        : "v26.0",
       hasToken: Boolean(stored.whatsappOfficial?.tokenEncrypted || process.env.WA_OFFICIAL_TOKEN),
       hasAppSecret: Boolean(stored.whatsappOfficial?.appSecretEncrypted || process.env.WA_APP_SECRET),
       hasWebhookVerifyToken: Boolean(stored.whatsappOfficial?.webhookVerifyTokenEncrypted || process.env.WA_WEBHOOK_VERIFY_TOKEN),

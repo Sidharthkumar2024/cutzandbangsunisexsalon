@@ -545,4 +545,26 @@ export default async function customerRoutes(app: FastifyInstance) {
     }
     return reply.send({ created, restored, skipped, total: rows.length });
   });
+
+  app.get("/customers/export", { preHandler: authorize("OWNER", "ADMIN", "MANAGER") }, async (req, reply) => {
+    const { branchId = "main" } = z.object({ branchId: z.string().optional() }).parse(req.query);
+    if (!['OWNER', 'ADMIN'].includes(req.user!.role) && req.user!.branchId !== branchId) {
+      return reply.code(403).send({ error: "forbidden" });
+    }
+    const customers = await prisma.customer.findMany({
+      where: { branchId, deletedAt: null },
+      orderBy: [{ name: "asc" }, { createdAt: "asc" }],
+      select: {
+        name: true,
+        phone: true,
+        email: true,
+        source: true,
+        tags: true,
+        customerSince: true,
+        waConsent: true,
+        emailConsent: true,
+      },
+    });
+    return reply.send(customers);
+  });
 }

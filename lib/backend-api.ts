@@ -1131,6 +1131,23 @@ export const backendApi = {
     if (payload.segment && payload.segment !== "ALL") params.set("segment", payload.segment);
     return request<BackendCustomerDirectory>(`/customers/directory?${params.toString()}`, {}, token);
   },
+  exportCustomers: (token: string, branchId = "main") =>
+    request<Array<{
+      name: string;
+      phone: string | null;
+      email: string | null;
+      source: string | null;
+      tags: string[];
+      customerSince: string | null;
+      waConsent: boolean;
+      emailConsent: boolean;
+    }>>(`/customers/export?branchId=${encodeURIComponent(branchId)}`, {}, token),
+  importCustomers: (token: string, payload: { branchId: string; csv: string }) =>
+    request<{ created: number; restored: number; skipped: number; total: number }>(
+      "/customers/import",
+      { method: "POST", body: JSON.stringify(payload) },
+      token,
+    ),
   twoFactorStatus: (token: string) => request<BackendTwoFactorStatus>("/auth/2fa/status", {}, token),
   setupTwoFactor: (token: string) => request<{ qrDataUrl: string; manualKey: string; otpAuthUri: string }>("/auth/2fa/setup", { method: "POST", body: "{}" }, token),
   enableTwoFactor: (token: string, code: string) => request<{ enabled: true; enabledAt: string; recoveryCodes: string[] }>("/auth/2fa/enable", { method: "POST", body: JSON.stringify({ code }) }, token),
