@@ -9090,11 +9090,21 @@ function Settings({
           ...(wahaWebhookSecret ? { webhookSecret: wahaWebhookSecret } : {}),
         },
       });
-      await Promise.all([
-        backendApi.updateChannel(token, "EMAIL", saved.smtp.enabled),
-        backendApi.updateChannel(token, "WHATSAPP_OFFICIAL", saved.whatsappOfficial.enabled),
-        backendApi.updateChannel(token, "WHATSAPP_UNOFFICIAL", saved.whatsappUnofficial.enabled),
-      ]);
+      // Persisted provider credentials and channel activation are separate
+      // operations. Apply channels one at a time so one unrelated channel
+      // failure cannot make a successful credential save look like a failure.
+      const channelResults: string[] = [];
+      for (const [type, active] of [
+        ["EMAIL", saved.smtp.enabled],
+        ["WHATSAPP_OFFICIAL", saved.whatsappOfficial.enabled],
+        ["WHATSAPP_UNOFFICIAL", saved.whatsappUnofficial.enabled],
+      ] as const) {
+        try {
+          await backendApi.updateChannel(token, type, active);
+        } catch (cause) {
+          channelResults.push(`${type}: ${cause instanceof Error ? prettyStatus(cause.message) : "apply failed"}`);
+        }
+      }
       setProviderConfig(saved);
       setSmtpPassword("");
       setOfficialToken("");
@@ -9104,7 +9114,9 @@ function Settings({
       setWahaWebhookSecret("");
       await loadIntegrations();
       onRefresh();
-      setMessage("Email and WhatsApp credentials saved securely and applied to the backend.");
+      setMessage(channelResults.length
+        ? `Provider credentials saved securely. Channel activation needs attention: ${channelResults.join("; ")}. You can retry the channel toggle below.`
+        : "Provider credentials saved securely and channel settings applied.");
     } catch (cause) {
       setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Provider credentials could not be saved.");
     } finally {
