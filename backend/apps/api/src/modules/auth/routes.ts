@@ -259,7 +259,9 @@ export default async function authRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post("/auth/login", { config: { rateLimit: { max: 10, timeWindow: "15 minutes" } } }, async (req, reply) => {
+  // Temporarily unthrottled at the owner's request while initial admin access is being verified.
+  // Reinstate the route-level limit before the next production hardening pass.
+  app.post("/auth/login", async (req, reply) => {
     const { email: rawEmail, password, code, recoveryCode } = z
       .object({
         email: z.string().email(),
