@@ -724,6 +724,8 @@ export default async function posRoutes(app: FastifyInstance) {
             name: customer.name,
             invoiceNumber: result.invoice.number,
             total: moneyText(result.invoice.totalMinor),
+            customerPortalUrl: customerPortalUrl(customer.phone) ?? "",
+            googleReviewUrl,
           };
           const loyaltySummary = [
             result.loyalty.earnedPoints + result.loyalty.marketingRewardPoints > 0

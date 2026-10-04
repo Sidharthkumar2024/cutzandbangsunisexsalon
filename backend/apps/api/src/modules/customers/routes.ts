@@ -153,7 +153,7 @@ export default async function customerRoutes(app: FastifyInstance) {
     return prisma.customer.findFirst({
       where: { branchId, deletedAt: null, phone: { endsWith: key } },
       include: {
-        invoices: { where: { status: { not: "VOID" } }, orderBy: { createdAt: "desc" }, take: 5, select: { id: true, number: true, totalMinor: true, createdAt: true, status: true } },
+        invoices: { where: { status: { not: "VOID" } }, orderBy: [{ issuedAt: "desc" }, { createdAt: "desc" }], take: 5, select: { id: true, number: true, totalMinor: true, issuedAt: true, createdAt: true, status: true } },
         historyEntries: { orderBy: { visitedAt: "desc" }, take: 5 },
       },
     });
@@ -294,7 +294,7 @@ export default async function customerRoutes(app: FastifyInstance) {
           take: 50,
           include: { items: { include: { service: true, staff: true } } },
         },
-        invoices: { orderBy: { createdAt: "desc" }, take: 50, include: { payments: true, items: true } },
+        invoices: { orderBy: [{ issuedAt: "desc" }, { createdAt: "desc" }], take: 50, include: { payments: true, items: true } },
         memberships: { include: { plan: true, ledger: { orderBy: { createdAt: "desc" } } } },
         servicePackages: {
           where: { isActive: true },

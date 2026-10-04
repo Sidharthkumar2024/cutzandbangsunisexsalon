@@ -23,7 +23,7 @@ export const DEFAULT_RECEIPT_AUTOMATION_SETTINGS: ReceiptAutomationSettings = {
   invoiceEmailBody:
     "Hi {{name}}, thank you for visiting Cutz & Bangs. Your invoice {{invoiceNumber}} total is {{total}}.",
   invoiceWhatsappBody:
-    "Thank you {{name}} for visiting Cutz & Bangs. Invoice {{invoiceNumber}} · {{total}}.",
+    "Hi {{name}}, thank you for visiting Cutz & Bangs.\nInvoice {{invoiceNumber}} total {{total}} is attached as PDF.\nRewards/login: {{customerPortalUrl}}\nPlease review us on Google: {{googleReviewUrl}}",
   nonReturningEnabled: false,
   nonReturningDays: 30,
   nonReturningEmail: false,
@@ -47,14 +47,6 @@ const text = (value: unknown, fallback: string, max: number) => {
 const bool = (value: unknown, fallback: boolean) =>
   typeof value === "boolean" ? value : fallback;
 
-const whatsappChannel = (
-  value: unknown,
-  fallback: "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL",
-) =>
-  value === "WHATSAPP_OFFICIAL" || value === "WHATSAPP_UNOFFICIAL"
-    ? value
-    : fallback;
-
 export function normalizeReceiptAutomationSettings(
   value: unknown,
 ): ReceiptAutomationSettings {
@@ -67,10 +59,7 @@ export function normalizeReceiptAutomationSettings(
       input.autoInvoiceWhatsapp,
       defaults.autoInvoiceWhatsapp,
     ),
-    invoiceWhatsappChannel: whatsappChannel(
-      input.invoiceWhatsappChannel,
-      defaults.invoiceWhatsappChannel,
-    ),
+    invoiceWhatsappChannel: "WHATSAPP_UNOFFICIAL",
     invoiceAttachPdf: bool(input.invoiceAttachPdf, defaults.invoiceAttachPdf),
     invoiceEmailSubject: text(
       input.invoiceEmailSubject,
@@ -102,10 +91,7 @@ export function normalizeReceiptAutomationSettings(
       input.nonReturningWhatsapp,
       defaults.nonReturningWhatsapp,
     ),
-    nonReturningWhatsappChannel: whatsappChannel(
-      input.nonReturningWhatsappChannel,
-      defaults.nonReturningWhatsappChannel,
-    ),
+    nonReturningWhatsappChannel: "WHATSAPP_UNOFFICIAL",
     nonReturningTemplate: text(
       input.nonReturningTemplate,
       defaults.nonReturningTemplate,

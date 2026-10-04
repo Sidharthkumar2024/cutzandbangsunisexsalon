@@ -5326,7 +5326,7 @@ function Customers({
               })),
               ...detail.invoices.map((invoice) => ({
                 key: `i-${invoice.id}`,
-                at: invoice.createdAt,
+                at: invoice.issuedAt ?? invoice.createdAt,
                 title: `${invoice.number} · ${money(invoice.totalMinor)}`,
                 meta: `${prettyStatus(invoice.status)} · ${invoice.payments.map((payment) => prettyStatus(payment.method)).join(" + ") || "No payment"}`,
               })),
@@ -8769,7 +8769,7 @@ function Settings({
   const [invoiceAttachPdf, setInvoiceAttachPdf] = useState(true);
   const [invoiceEmailSubject, setInvoiceEmailSubject] = useState("Your Cutz & Bangs invoice {{invoiceNumber}}");
   const [invoiceEmailBody, setInvoiceEmailBody] = useState("Hi {{name}}, thank you for visiting Cutz & Bangs. Your invoice {{invoiceNumber}} total is {{total}}.");
-  const [invoiceWhatsappBody, setInvoiceWhatsappBody] = useState("Thank you {{name}} for visiting Cutz & Bangs. Invoice {{invoiceNumber}} · {{total}}.");
+  const [invoiceWhatsappBody, setInvoiceWhatsappBody] = useState("Hi {{name}}, thank you for visiting Cutz & Bangs.\nInvoice {{invoiceNumber}} total {{total}} is attached as PDF.\nRewards/login: {{customerPortalUrl}}\nPlease review us on Google: {{googleReviewUrl}}");
   const [nonReturningEnabled, setNonReturningEnabled] = useState(false);
   const [nonReturningDays, setNonReturningDays] = useState(30);
   const [nonReturningEmail, setNonReturningEmail] = useState(false);
@@ -8814,7 +8814,7 @@ function Settings({
       setInvoiceAttachPdf(Boolean(automation.invoiceAttachPdf ?? true));
       setInvoiceEmailSubject(String(automation.invoiceEmailSubject ?? "Your Cutz & Bangs invoice {{invoiceNumber}}"));
       setInvoiceEmailBody(String(automation.invoiceEmailBody ?? "Hi {{name}}, thank you for visiting Cutz & Bangs. Your invoice {{invoiceNumber}} total is {{total}}."));
-      setInvoiceWhatsappBody(String(automation.invoiceWhatsappBody ?? "Thank you {{name}} for visiting Cutz & Bangs. Invoice {{invoiceNumber}} · {{total}}."));
+      setInvoiceWhatsappBody(String(automation.invoiceWhatsappBody ?? "Hi {{name}}, thank you for visiting Cutz & Bangs.\nInvoice {{invoiceNumber}} total {{total}} is attached as PDF.\nRewards/login: {{customerPortalUrl}}\nPlease review us on Google: {{googleReviewUrl}}"));
       setNonReturningEnabled(Boolean(automation.nonReturningEnabled ?? false));
       setNonReturningDays(Number(automation.nonReturningDays ?? 30));
       setNonReturningEmail(Boolean(automation.nonReturningEmail ?? false));
@@ -9272,7 +9272,7 @@ function Settings({
             <p className="automation-safety-note">The backend checks recorded consent, phone/email availability and a 30-day duplicate window before queueing through the QR-paired Evolution API.</p>
           </section>
         </div>
-        <p className="template-variable-note"><strong>Template variables:</strong> <code>{"{{name}}"}</code> <code>{"{{invoiceNumber}}"}</code> <code>{"{{total}}"}</code> <code>{"{{days}}"}</code></p>
+        <p className="template-variable-note"><strong>Template variables:</strong> <code>{"{{name}}"}</code> <code>{"{{invoiceNumber}}"}</code> <code>{"{{total}}"}</code> <code>{"{{customerPortalUrl}}"}</code> <code>{"{{googleReviewUrl}}"}</code> <code>{"{{days}}"}</code></p>
         <div className="automation-actions">
           <button className="button admin-primary" disabled={busy || !token || !invoiceEmailSubject.trim() || !invoiceEmailBody.trim() || !invoiceWhatsappBody.trim() || !nonReturningTemplate.trim()} onClick={() => void saveAutomation()}>{busy ? "Saving…" : "Save automation rules"}</button>
           <button className="button" disabled={busy || !token || !nonReturningEnabled || (!nonReturningEmail && !nonReturningWhatsapp)} onClick={() => void runFollowUpNow()}>{busy ? "Running…" : "Run follow-up now"}</button>

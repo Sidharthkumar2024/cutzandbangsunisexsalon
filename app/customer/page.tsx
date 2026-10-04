@@ -571,7 +571,7 @@ export default function CustomerPortal() {
                 <span>
                   <strong>{invoice.number}</strong>
                   <small>
-                    {new Date(invoice.createdAt).toLocaleDateString("en-IN")}
+                    {new Date(invoice.issuedAt ?? invoice.createdAt).toLocaleDateString("en-IN")}
                   </small>
                 </span>
                 <b>{money(invoice.totalMinor)}</b>

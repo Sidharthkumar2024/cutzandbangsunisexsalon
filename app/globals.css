@@ -2109,6 +2109,23 @@ html,body{max-width:100%;overflow-x:hidden}
   .portal-draw-actions{grid-template-columns:1fr}
 }
 
+/* Keep the customer rewards card readable on tablets and small browser widths. */
+.portal-content,.portal-reward-grid,.portal-stamp-card,.portal-draw-card{min-width:0}
+.portal-draw-card{overflow:hidden}
+.portal-stamp-card h2,.portal-draw-card h2{font-size:clamp(28px,5.8vw,34px);line-height:1.08;overflow-wrap:anywhere}
+.portal-draw-card p{overflow-wrap:anywhere}
+.portal-draw-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.portal-draw-actions button{width:100%;min-width:0;white-space:normal;line-height:1.12;text-align:center}
+.portal-draw-actions button span{flex:0 0 auto}
+.portal-draw-status{display:grid;gap:8px;min-width:0}
+.portal-draw-status span{min-width:0;overflow-wrap:anywhere;line-height:1.35}
+
+@media (max-width:640px){
+  .portal-reward-grid,.portal-stamp-card{grid-template-columns:1fr}
+  .portal-stamp-card,.portal-draw-card{padding:20px}
+  .portal-draw-actions{grid-template-columns:1fr}
+}
+
 /* Membership picker must retain its own scroll area; clipping it hides the
    service choices and the submit action on short laptop/mobile viewports. */
 .membership-service-picker{min-height:0!important;max-height:none!important;overflow:visible!important}

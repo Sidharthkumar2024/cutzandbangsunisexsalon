@@ -861,6 +861,7 @@ export type CustomerPortalOverview = BackendCustomer & {
     status: string;
     totalMinor: number;
     paidMinor: number;
+    issuedAt?: string | null;
     createdAt: string;
     pdfUrl?: string | null;
     items: Array<{ id: string; description: string; lineTotalMinor: number }>;
