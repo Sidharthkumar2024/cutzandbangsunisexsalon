@@ -28,7 +28,7 @@ export const DEFAULT_RECEIPT_AUTOMATION_SETTINGS: ReceiptAutomationSettings = {
   nonReturningDays: 30,
   nonReturningEmail: false,
   nonReturningWhatsapp: true,
-  nonReturningWhatsappChannel: "WHATSAPP_OFFICIAL",
+  nonReturningWhatsappChannel: "WHATSAPP_UNOFFICIAL",
   nonReturningTemplate:
     "Hi {{name}}, we have missed you at Cutz & Bangs. It has been {{days}} days since your last visit. Reply BOOK and we will reserve a convenient slot.",
 };

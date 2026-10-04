@@ -8746,7 +8746,7 @@ function Settings({
   const [inactiveDays, setInactiveDays] = useState(60);
   const [autoInvoiceEmail, setAutoInvoiceEmail] = useState(true);
   const [autoInvoiceWhatsapp, setAutoInvoiceWhatsapp] = useState(false);
-  const [invoiceWhatsappChannel, setInvoiceWhatsappChannel] = useState<"WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL">("WHATSAPP_OFFICIAL");
+  const [invoiceWhatsappChannel, setInvoiceWhatsappChannel] = useState<"WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL">("WHATSAPP_UNOFFICIAL");
   const [invoiceAttachPdf, setInvoiceAttachPdf] = useState(true);
   const [invoiceEmailSubject, setInvoiceEmailSubject] = useState("Your Cutz & Bangs invoice {{invoiceNumber}}");
   const [invoiceEmailBody, setInvoiceEmailBody] = useState("Hi {{name}}, thank you for visiting Cutz & Bangs. Your invoice {{invoiceNumber}} total is {{total}}.");
@@ -8755,7 +8755,7 @@ function Settings({
   const [nonReturningDays, setNonReturningDays] = useState(30);
   const [nonReturningEmail, setNonReturningEmail] = useState(false);
   const [nonReturningWhatsapp, setNonReturningWhatsapp] = useState(true);
-  const [nonReturningWhatsappChannel, setNonReturningWhatsappChannel] = useState<"WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL">("WHATSAPP_OFFICIAL");
+  const [nonReturningWhatsappChannel, setNonReturningWhatsappChannel] = useState<"WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL">("WHATSAPP_UNOFFICIAL");
   const [nonReturningTemplate, setNonReturningTemplate] = useState("Hi {{name}}, we have missed you at Cutz & Bangs. It has been {{days}} days since your last visit. Reply BOOK and we will reserve a convenient slot.");
   const [testTo, setTestTo] = useState("");
   const [testMessage, setTestMessage] = useState("Hello from Cutz & Bangs");
@@ -8791,7 +8791,7 @@ function Settings({
     if (automation) {
       setAutoInvoiceEmail(Boolean(automation.autoInvoiceEmail ?? true));
       setAutoInvoiceWhatsapp(Boolean(automation.autoInvoiceWhatsapp ?? false));
-      setInvoiceWhatsappChannel("WHATSAPP_OFFICIAL");
+      setInvoiceWhatsappChannel("WHATSAPP_UNOFFICIAL");
       setInvoiceAttachPdf(Boolean(automation.invoiceAttachPdf ?? true));
       setInvoiceEmailSubject(String(automation.invoiceEmailSubject ?? "Your Cutz & Bangs invoice {{invoiceNumber}}"));
       setInvoiceEmailBody(String(automation.invoiceEmailBody ?? "Hi {{name}}, thank you for visiting Cutz & Bangs. Your invoice {{invoiceNumber}} total is {{total}}."));
@@ -8800,7 +8800,7 @@ function Settings({
       setNonReturningDays(Number(automation.nonReturningDays ?? 30));
       setNonReturningEmail(Boolean(automation.nonReturningEmail ?? false));
       setNonReturningWhatsapp(Boolean(automation.nonReturningWhatsapp ?? true));
-      setNonReturningWhatsappChannel("WHATSAPP_OFFICIAL");
+      setNonReturningWhatsappChannel("WHATSAPP_UNOFFICIAL");
       setNonReturningTemplate(String(automation.nonReturningTemplate ?? "Hi {{name}}, we have missed you at Cutz & Bangs. It has been {{days}} days since your last visit. Reply BOOK and we will reserve a convenient slot."));
     }
   };
@@ -9248,9 +9248,9 @@ function Settings({
               <div className="setting-row"><div><strong>Email</strong><small>Requires email consent</small></div><button type="button" aria-label="Toggle non-returning email" className={`toggle ${nonReturningEmail ? "active" : ""}`} onClick={() => setNonReturningEmail((current) => !current)}><i /></button></div>
               <div className="setting-row"><div><strong>WhatsApp</strong><small>Requires WhatsApp opt-in</small></div><button type="button" aria-label="Toggle non-returning WhatsApp" className={`toggle ${nonReturningWhatsapp ? "active" : ""}`} onClick={() => setNonReturningWhatsapp((current) => !current)}><i /></button></div>
             </div>
-            <label>WhatsApp provider<input value="Official Meta Cloud API" disabled readOnly /></label>
+            <label>WhatsApp provider<input value="Evolution API QR · transactional only" disabled readOnly /></label>
             <label>Follow-up message<textarea rows={7} value={nonReturningTemplate} onChange={(event) => setNonReturningTemplate(event.target.value)} /></label>
-            <p className="automation-safety-note">The backend checks recorded consent, phone/email availability and a 30-day duplicate window before queueing through the official Meta Cloud API.</p>
+            <p className="automation-safety-note">The backend checks recorded consent, phone/email availability and a 30-day duplicate window before queueing through the QR-paired Evolution API.</p>
           </section>
         </div>
         <p className="template-variable-note"><strong>Template variables:</strong> <code>{"{{name}}"}</code> <code>{"{{invoiceNumber}}"}</code> <code>{"{{total}}"}</code> <code>{"{{days}}"}</code></p>
