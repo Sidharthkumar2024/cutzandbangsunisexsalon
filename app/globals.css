@@ -1148,6 +1148,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .pos-customer-actions button{width:100%}
 }
 
+/* Action rows must not inherit the avatar details' column layout. */
+.pos-customer>div.pos-customer-actions{display:flex;flex-direction:row;align-items:center;gap:8px}
+.pos-customer-actions button{flex:1 1 140px!important;height:46px;max-height:46px;padding:8px 12px;line-height:1.2}
+@media(min-width:1200px){.pos-layout{grid-template-columns:minmax(0,1fr) minmax(420px,480px)}}
+
 /* POS/customer usability: independent desktop cart scrolling, full-page mobile flow and single-border searches. */
 .pos-workspace,.pos-layout,.pos-catalog{min-width:0;min-height:0}
 .pos-day-strip{overflow-x:auto;overscroll-behavior-inline:contain;scrollbar-width:thin}

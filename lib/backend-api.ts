@@ -1468,6 +1468,7 @@ export const backendApi = {
       { method: "POST", body: JSON.stringify(payload) },
       token,
     ),
+  resetInvoices: (token: string, branchId: string, confirmation: string) => request<{ cleared: number }>("/invoices/reset", { method: "POST", body: JSON.stringify({ branchId, confirmation }) }, token),
   generateInvoicePdf: (token: string, invoiceId: string) =>
     request<{ url: string; key: string }>(
       `/invoices/${invoiceId}/pdf`,

@@ -3384,7 +3384,7 @@ function POS({
   const [receiptEmailEnabled, setReceiptEmailEnabled] = useState(false);
   const [receiptWhatsappChannel, setReceiptWhatsappChannel] = useState<
     "OFF" | "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL"
-  >("OFF");
+  >("WHATSAPP_UNOFFICIAL");
   const [billDate, setBillDate] = useState(data.currentCash?.businessDate ?? todayInputDate());
   const [deliveryMessage, setDeliveryMessage] = useState("");
   const [sentDeliveryChannels, setSentDeliveryChannels] = useState<
@@ -3626,7 +3626,7 @@ function POS({
     setRedeemLoyalty(false);
     setQuickCustomerMessage("");
     setReceiptEmailEnabled(false);
-    setReceiptWhatsappChannel("OFF");
+    setReceiptWhatsappChannel("WHATSAPP_UNOFFICIAL");
     setWhatsappActionFeedback(null);
   };
 
@@ -3871,12 +3871,15 @@ function POS({
   };
   const openInvoice = async () => {
     if (!token || !invoiceId) return;
+    const preview = window.open("about:blank", "_blank");
     setCharging(true);
     setCheckoutError("");
     try {
       const url = await backendApi.invoicePdfBlob(token, invoiceId);
-      window.open(url, "_blank", "noopener,noreferrer");
+      if (preview) { preview.opener = null; preview.location.href = url; }
+      else { const link = document.createElement("a"); link.href = url; link.download = `${invoice || "invoice"}.pdf`; link.click(); }
     } catch (cause) {
+      preview?.close();
       setCheckoutError(
         cause instanceof Error
           ? prettyStatus(cause.message)
@@ -4500,7 +4503,7 @@ function POS({
               <div role="radiogroup" aria-label="WhatsApp receipt channel">
                 {([
                   ["OFF", "Off"],
-                  ["WHATSAPP_UNOFFICIAL", "QR"],
+                  ["WHATSAPP_UNOFFICIAL", "Auto QR"],
                   ["WHATSAPP_OFFICIAL", "Official"],
                 ] as const).map(([channel, label]) => (
                   <button
@@ -4587,7 +4590,7 @@ function POS({
                 setRedeemLoyalty(false);
                 setRewardMessage("");
                 setReceiptEmailEnabled(false);
-                setReceiptWhatsappChannel("OFF");
+                setReceiptWhatsappChannel("WHATSAPP_UNOFFICIAL");
                 setBillDate(data.currentCash?.businessDate ?? todayInputDate());
                 setWhatsappActionFeedback(null);
                 setSplitCashAmount(0);
@@ -8726,6 +8729,9 @@ function Settings({
   data: BackendSnapshot;
   onRefresh: () => void;
 }) {
+  const [invoiceResetConfirmation, setInvoiceResetConfirmation] = useState("");
+  const [invoiceResetMessage, setInvoiceResetMessage] = useState("");
+  const [invoiceResetBusy, setInvoiceResetBusy] = useState(false);
   const [status, setStatus] = useState<BackendWhatsAppStatus | null>(null);
   const [providerConfig, setProviderConfig] = useState<BackendProviderConfig>({
     smtp: { enabled: false, host: "", port: 587, secure: false, user: "", from: "", hasPassword: false },
@@ -9161,6 +9167,18 @@ function Settings({
   };
   return (
     <div className="settings-stack">
+      {data.user?.role === "OWNER" && <article className="admin-card settings-card">
+        <p className="eyebrow">Invoice reset</p><h2>Clear invoice history</h2>
+        <p>Creates a recovery snapshot, then clears this branch's invoices, invoice items, payments and refunds. Customer spending and visit totals are recalculated. Customers, services, cash sessions, expenses, loyalty balances and prepaid balances stay unchanged. This does not refund customers or recall WhatsApp messages.</p>
+        <label>Type CLEAR INVOICES to confirm<input value={invoiceResetConfirmation} onChange={(event) => setInvoiceResetConfirmation(event.target.value)} autoComplete="off" /></label>
+        <button className="button" disabled={invoiceResetBusy || invoiceResetConfirmation !== "CLEAR INVOICES"} onClick={async () => {
+          setInvoiceResetBusy(true); setInvoiceResetMessage("");
+          try { const result = await backendApi.resetInvoices(token, data.user?.branchId ?? data.branches[0]?.id ?? "main", invoiceResetConfirmation); setInvoiceResetMessage(`${result.cleared} invoices cleared.`); setInvoiceResetConfirmation(""); onRefresh(); }
+          catch (cause) { setInvoiceResetMessage(cause instanceof Error ? cause.message : "Reset failed."); }
+          finally { setInvoiceResetBusy(false); }
+        }}>{invoiceResetBusy ? "Clearing…" : "Clear invoices"}</button>
+        {invoiceResetMessage && <p role="status">{invoiceResetMessage}</p>}
+      </article>}
       {message && <div className="calendar-message">{message}</div>}
       {integrationError && <div className="calendar-message error">Some integration checks failed: {integrationError}. Other providers remain usable.</div>}
       <TwoFactorSettings token={token} />

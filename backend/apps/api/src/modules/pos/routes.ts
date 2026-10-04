@@ -26,7 +26,7 @@ const paymentSchema = z.object({
   membershipId: z.string().optional(),
 });
 const moneyText = (minor: number) => `₹${(minor / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const invoicePdfPrefix = "invoices/v2/";
+const invoicePdfPrefix = "invoices/v3/";
 const googleReviewUrl = "https://maps.app.goo.gl/1FgtMd6URf8T6G53A";
 
 function customerPortalUrl(phone?: string | null) {
@@ -208,6 +208,32 @@ async function nextInvoiceNumber(tx: Prisma.TransactionClient): Promise<string> 
 }
 
 export default async function posRoutes(app: FastifyInstance) {
+  app.post("/invoices/reset", { preHandler: authorize("OWNER") }, async (req) => {
+    const { branchId, confirmation } = z.object({ branchId: z.string().min(1), confirmation: z.literal("CLEAR INVOICES") }).parse(req.body);
+    const result = await prisma.$transaction(async (tx) => {
+      const backup = await tx.invoice.findMany({ where: { branchId }, include: { items: true, payments: true, refunds: { include: { items: true } }, couponRedemption: true } });
+      await tx.setting.create({ data: { key: `invoice-reset-backup:${branchId}:${Date.now()}`, value: JSON.parse(JSON.stringify(backup)) as Prisma.InputJsonValue } });
+      const invoices = await tx.invoice.findMany({ where: { branchId }, select: { id: true, customerId: true, totalMinor: true, status: true } });
+      const ids = invoices.map((invoice) => invoice.id);
+      const refunds = await tx.invoiceRefund.findMany({ where: { invoiceId: { in: ids } }, select: { id: true } });
+      await tx.invoiceRefundItem.deleteMany({ where: { refundId: { in: refunds.map((refund) => refund.id) } } });
+      await tx.invoiceRefund.deleteMany({ where: { invoiceId: { in: ids } } });
+      const payments = await tx.payment.findMany({ where: { invoiceId: { in: ids } }, select: { id: true } });
+      await tx.paymentReconciliation.updateMany({ where: { paymentId: { in: payments.map((payment) => payment.id) } }, data: { paymentId: null } });
+      await tx.payment.deleteMany({ where: { invoiceId: { in: ids } } });
+      await tx.couponRedemption.deleteMany({ where: { invoiceId: { in: ids } } });
+      await tx.invoiceItem.deleteMany({ where: { invoiceId: { in: ids } } });
+      await tx.invoice.deleteMany({ where: { id: { in: ids } } });
+      for (const customerId of [...new Set(invoices.flatMap((invoice) => invoice.customerId ? [invoice.customerId] : []))]) {
+        const remaining = await tx.invoice.aggregate({ where: { customerId, status: "PAID" }, _sum: { totalMinor: true }, _count: true });
+        const latest = await tx.invoice.findFirst({ where: { customerId, status: "PAID" }, orderBy: { issuedAt: "desc" }, select: { issuedAt: true } });
+        await tx.customer.update({ where: { id: customerId }, data: { totalSpent: remaining._sum.totalMinor ?? 0, visitCount: remaining._count, lastVisitAt: latest?.issuedAt ?? null } });
+      }
+      await audit("invoice.reset", "Branch", branchId, { actorUserId: req.user?.id, after: { count: ids.length }, ip: req.ip }, tx);
+      return { cleared: ids.length };
+    }, { timeout: 60000 });
+    return result;
+  });
   app.get(
     "/invoices",
     { preHandler: authorize("OWNER", "ADMIN", "MANAGER", "RECEPTION") },
@@ -1011,7 +1037,7 @@ export default async function posRoutes(app: FastifyInstance) {
     });
     const key = `${invoicePdfPrefix}${inv.number}.pdf`;
     const storage = providers.storage();
-    if (inv.pdfUrl && !inv.pdfUrl.startsWith(invoicePdfPrefix)) {
+    if (inv.pdfUrl && !/^invoices\/v[23]\//.test(inv.pdfUrl)) {
       // Cloudinary's old delivery mode exposed raw objects publicly. Its
       // adapter implements this hook; S3/local private storage intentionally
       // omits it so migration cannot remove an otherwise valid private file.

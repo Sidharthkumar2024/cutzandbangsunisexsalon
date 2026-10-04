@@ -29,6 +29,18 @@ afterEach(() => {
 });
 
 describe("Cloudinary storage privacy", () => {
+  it("uploads new private invoice keys without requiring legacy deletion", async () => {
+    const destroy = vi.fn().mockRejectedValue(new Error("delete unavailable"));
+    const uploadStream = vi.fn((_options: unknown, callback: (error?: unknown, result?: unknown) => void) => {
+      const stream = new PassThrough(); stream.resume();
+      stream.on("finish", () => callback(undefined, { public_id: "invoice" }));
+      return stream;
+    });
+    const provider = new CloudinaryStorageProvider({ config: vi.fn(), uploader: { destroy, upload_stream: uploadStream }, utils: { private_download_url: vi.fn() } } as never);
+    await expect(provider.put("invoices/v3/CB-1.pdf", Buffer.from("%PDF-1.4"), "application/pdf")).resolves.toBe("invoices/v3/CB-1.pdf");
+    expect(destroy).not.toHaveBeenCalled();
+    expect(uploadStream).toHaveBeenCalledWith(expect.objectContaining({ type: "authenticated" }), expect.any(Function));
+  });
   it("can retire a legacy public object without uploading or touching private storage", async () => {
     const destroy = vi.fn().mockResolvedValue({ result: "ok" });
     const uploadStream = vi.fn();

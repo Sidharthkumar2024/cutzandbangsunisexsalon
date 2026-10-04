@@ -146,7 +146,10 @@ export class CloudinaryStorageProvider implements StorageProvider {
     // Remove an object created by the previous public-delivery implementation
     // before replacing it. Otherwise that legacy `/raw/upload/...` URL would
     // remain accessible even after an authenticated twin was uploaded.
-    await this.retireLegacyPublicObject(key);
+    // v3 invoice keys are exclusively authenticated objects and have never
+    // been written with public delivery. Do not make a new private invoice
+    // depend on deleting a nonexistent legacy asset.
+    if (!key.startsWith("invoices/v3/")) await this.retireLegacyPublicObject(key);
 
     await new Promise<void>((resolveUpload, rejectUpload) => {
       const stream = this.client.uploader.upload_stream(
