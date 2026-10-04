@@ -23,7 +23,9 @@ export function parseCsv(text: string): Record<string, string>[] {
   if (field !== "" || row.length) { row.push(field); rows.push(row); }
 
   if (!rows.length) return [];
-  const headers = rows[0].map((h) => h.trim().toLowerCase());
+  // Excel commonly prefixes UTF-8 CSV exports with a BOM. Strip it from the
+  // first header so fields such as `name` still map correctly on import.
+  const headers = rows[0].map((h, index) => (index === 0 ? h.replace(/^\uFEFF/u, "") : h).trim().toLowerCase());
   return rows.slice(1).map((r) => {
     const obj: Record<string, string> = {};
     headers.forEach((h, idx) => (obj[h] = (r[idx] ?? "").trim()));
@@ -36,4 +38,13 @@ export function phoneKey(phone?: string): string | null {
   if (!phone) return null;
   const digits = phone.replace(/\D/g, "");
   return digits.length >= 10 ? digits.slice(-10) : digits || null;
+}
+
+/** Parse consent fields from CSV exports without treating unknown values as consent. */
+export function parseConsent(value?: string): boolean | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (["yes", "true", "1", "subscribed", "opted_in"].includes(normalized)) return true;
+  if (["no", "false", "0", "unsubscribed", "opted_out"].includes(normalized)) return false;
+  return undefined;
 }

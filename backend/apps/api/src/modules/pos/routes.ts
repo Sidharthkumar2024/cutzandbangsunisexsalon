@@ -26,6 +26,7 @@ const paymentSchema = z.object({
 });
 const moneyText = (minor: number) => `₹${(minor / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const invoicePdfPrefix = "invoices/v2/";
+const googleReviewUrl = "https://maps.app.goo.gl/1FgtMd6URf8T6G53A";
 
 function customerPortalUrl(phone?: string | null) {
   const base = process.env.PUBLIC_APP_URL?.replace(/\/$/u, "");
@@ -51,6 +52,7 @@ function invoiceWhatsAppBody(input: {
   if (typeof input.balanceAfter === "number") lines.push(`Current loyalty balance: ${input.balanceAfter} points`);
   const portal = customerPortalUrl(input.customerPhone);
   if (portal) lines.push(`View invoices, stamp card and rewards: ${portal}`);
+  lines.push(`Loved your visit? Please review us: ${googleReviewUrl}`);
   return lines.join("\n");
 }
 

@@ -2,7 +2,7 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "@cutz/db";
 import { authorize } from "../../plugins/auth.js";
-import { parseCsv, phoneKey } from "../../lib/csv.js";
+import { parseConsent, parseCsv, phoneKey } from "../../lib/csv.js";
 import { classify, DEFAULT_SEGMENT_CONFIG } from "../crm/segments.js";
 import { audit } from "../../lib/audit.js";
 import { getLoyaltyRules, postLoyaltyEntry } from "../loyalty/ledger.js";
@@ -509,6 +509,8 @@ export default async function customerRoutes(app: FastifyInstance) {
           email,
           source: r.source || "import",
           tags: r.tags ? r.tags.split(/[;|]/).map((t) => t.trim()).filter(Boolean) : [],
+          waConsent: parseConsent(r.whatsapp_consent || r.wa_consent),
+          emailConsent: parseConsent(r.email_consent),
           customerSince: r.customerSince || r.customer_since || r.since || r.date
             ? new Date(`${r.customerSince || r.customer_since || r.since || r.date}T12:00:00`)
             : undefined,
