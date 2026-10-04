@@ -4472,7 +4472,7 @@ function POS({
         </div>
         {!paid && (
           <section className="pos-receipt-delivery" aria-labelledby="pos-receipt-delivery-title">
-            <label className="pos-receipt-email">
+            <label className="pos-invoice-date">
               <span><strong>Invoice date</strong><small>Choose today or a past date. Past invoices do not affect today's drawer closing.</small></span>
               <input aria-label="Invoice date before payment" type="date" max={todayInputDate()} value={billDate} onChange={(event) => setBillDate(event.target.value || data.currentCash?.businessDate || todayInputDate())} />
             </label>
