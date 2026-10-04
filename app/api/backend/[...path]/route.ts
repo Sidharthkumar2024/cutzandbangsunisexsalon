@@ -131,7 +131,10 @@ async function forward(request: Request, context: { params: Promise<{ path: stri
     if (isLogout || (sessionToken && response.status === 401)) {
       responseHeaders.set('set-cookie', sessionCookie('', 0));
     }
-    return new Response(body, {
+    // Fetch forbids a body (even an empty ArrayBuffer) on no-content responses.
+    // Password resets return 204 after committing the new password.
+    const hasNoBody = request.method === 'HEAD' || [204, 205, 304].includes(response.status);
+    return new Response(hasNoBody ? null : body, {
       status: response.status,
       headers: responseHeaders,
     });
