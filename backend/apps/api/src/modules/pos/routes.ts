@@ -17,6 +17,7 @@ import {
   normalizeReceiptAutomationSettings,
   plainTextEmailHtml,
 } from "../../lib/automationSettings.js";
+import { zonedToUtc } from "../../lib/tz.js";
 
 const paymentSchema = z.object({
   method: z.enum(["CASH", "UPI", "CARD", "SPLIT", "MEMBERSHIP_CREDIT", "WALLET"]),
@@ -128,12 +129,15 @@ function invoiceArchiveWhere(
 ): Prisma.InvoiceWhereInput {
   const requestedBranch = ["OWNER", "ADMIN"].includes(user.role) ? query.branchId : user.branchId ?? undefined;
   const search = query.q?.trim();
+  const dateRange = query.from || query.to
+    ? { ...(query.from ? { gte: query.from } : {}), ...(query.to ? { lte: query.to } : {}) }
+    : undefined;
   return {
     ...(requestedBranch ? { branchId: requestedBranch } : {}),
     ...(query.customerId ? { customerId: query.customerId } : {}),
     ...(query.status ? { status: query.status } : {}),
-    ...(query.from || query.to
-      ? { createdAt: { ...(query.from ? { gte: query.from } : {}), ...(query.to ? { lte: query.to } : {}) } }
+    ...(dateRange
+      ? { OR: [{ issuedAt: dateRange }, { issuedAt: null, createdAt: dateRange }] }
       : {}),
     ...(search
       ? {
@@ -180,6 +184,7 @@ const posSchema = z.object({
     .default([]),
   loyaltyPointsToRedeem: z.number().int().nonnegative().default(0),
   couponCode: z.string().trim().min(3).max(24).optional(),
+  businessDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u).optional(),
 });
 
 async function nextInvoiceNumber(tx: Prisma.TransactionClient): Promise<string> {
@@ -237,7 +242,7 @@ export default async function posRoutes(app: FastifyInstance) {
       const [rows, total, totals] = await Promise.all([
         prisma.invoice.findMany({
           where,
-          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          orderBy: [{ issuedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
           skip: (query.page - 1) * query.pageSize,
           take: query.pageSize,
           select: {
@@ -312,7 +317,7 @@ export default async function posRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: "product_id_required" });
       }
       const [branch, customer, appointment, staffCount, companions, services, products, cashSession] = await Promise.all([
-        prisma.branch.findFirst({ where: { id: body.branchId, deletedAt: null }, select: { id: true } }),
+        prisma.branch.findFirst({ where: { id: body.branchId, deletedAt: null }, select: { id: true, timezone: true } }),
         body.customerId ? prisma.customer.findFirst({ where: { id: body.customerId, branchId: body.branchId, deletedAt: null }, select: { id: true, name: true, email: true, phone: true, emailConsent: true, waConsent: true, loyaltyPoints: true } }) : null,
         body.appointmentId ? prisma.appointment.findFirst({ where: { id: body.appointmentId, branchId: body.branchId, deletedAt: null }, select: { id: true } }) : null,
         prisma.staff.count({ where: { id: { in: body.lines.flatMap((line) => line.staffId ? [line.staffId] : []) }, branchId: body.branchId, deletedAt: null } }),
@@ -322,7 +327,7 @@ export default async function posRoutes(app: FastifyInstance) {
         }),
         prisma.service.findMany({ where: { id: { in: serviceIds }, isActive: true, deletedAt: null } }),
         prisma.product.findMany({ where: { id: { in: productIds }, branchId: body.branchId, isActive: true, deletedAt: null } }),
-        prisma.cashSession.findFirst({ where: { branchId: body.branchId, status: "OPEN" }, select: { id: true } }),
+        prisma.cashSession.findFirst({ where: { branchId: body.branchId, status: "OPEN" }, select: { id: true, businessDate: true } }),
       ]);
       if (!branch) return reply.code(404).send({ error: "branch_not_found" });
       if (!cashSession) return reply.code(409).send({ error: "open_cash_session_required" });
@@ -336,6 +341,8 @@ export default async function posRoutes(app: FastifyInstance) {
       if (staffCount !== uniqueStaffIds.size) return reply.code(400).send({ error: "staff_branch_mismatch" });
       if (services.length !== serviceIds.length) return reply.code(400).send({ error: "service_not_found" });
       if (products.length !== productIds.length) return reply.code(400).send({ error: "product_not_found" });
+      const invoiceBusinessDate = body.businessDate ?? cashSession.businessDate;
+      const issuedAt = zonedToUtc(`${invoiceBusinessDate}T12:00:00`, branch.timezone);
 
       const serviceById = new Map(services.map((service) => [service.id, service]));
       const productById = new Map(products.map((product) => [product.id, product]));
@@ -508,7 +515,7 @@ export default async function posRoutes(app: FastifyInstance) {
               totalMinor: totals.totalMinor,
               paidMinor,
               partySize: Math.max(1, companionIds.length + (body.customerId ? 1 : 0)),
-              issuedAt: new Date(),
+              issuedAt,
               items: {
                 create: computed.map((c) => ({
                   kind: c.input.kind,

@@ -27,13 +27,13 @@ export default async function reportRoutes(app: FastifyInstance) {
     if (!branch) return reply.code(404).send({ error: "branch_not_found" });
     const [customers, invoices, appointments, historyEntries] = await Promise.all([
       prisma.customer.findMany({ where: { branchId, deletedAt: null }, orderBy: { name: "asc" }, take: 5000, select: { id: true, name: true, phone: true, createdAt: true } }),
-      prisma.invoice.findMany({ where: { branchId, customerId: { not: null }, status: { not: "VOID" }, createdAt: { lt: parsed.data.to } }, select: { customerId: true, appointmentId: true, createdAt: true, totalMinor: true } }),
+      prisma.invoice.findMany({ where: { branchId, customerId: { not: null }, status: { not: "VOID" }, OR: [{ issuedAt: { lt: parsed.data.to } }, { issuedAt: null, createdAt: { lt: parsed.data.to } }] }, select: { customerId: true, appointmentId: true, issuedAt: true, createdAt: true, totalMinor: true } }),
       prisma.appointment.findMany({ where: { branchId, customerId: { not: null }, status: "COMPLETED", startAt: { lt: parsed.data.to }, deletedAt: null }, select: { customerId: true, id: true, startAt: true } }),
       prisma.customerHistoryEntry.findMany({ where: { customer: { branchId, deletedAt: null }, visitedAt: { lt: parsed.data.to } }, select: { customerId: true, visitedAt: true, amountMinor: true, source: true } }),
     ]);
     const invoicedAppointmentIds = new Set(invoices.flatMap((invoice) => invoice.appointmentId ? [invoice.appointmentId] : []));
     const events = addHistoricalVisitEvents([
-      ...invoices.flatMap((invoice) => invoice.customerId ? [{ customerId: invoice.customerId, occurredAt: invoice.createdAt, revenueMinor: invoice.totalMinor, source: "invoice" as const }] : []),
+      ...invoices.flatMap((invoice) => invoice.customerId ? [{ customerId: invoice.customerId, occurredAt: invoiceDate(invoice), revenueMinor: invoice.totalMinor, source: "invoice" as const }] : []),
       ...appointments.flatMap((appointment) => appointment.customerId && !invoicedAppointmentIds.has(appointment.id) ? [{ customerId: appointment.customerId, occurredAt: appointment.startAt, revenueMinor: 0, source: "appointment" as const }] : []),
     ], historyEntries, branch.timezone);
     const now = new Date();
@@ -66,8 +66,8 @@ export default async function reportRoutes(app: FastifyInstance) {
       prisma.appointment.count({ where: { ...branchWhere, startAt: { gte: start, lt: end }, deletedAt: null } }),
       prisma.appointment.count({ where: { ...branchWhere, isWalkIn: true, startAt: { gte: start, lt: end } } }),
       prisma.invoice.findMany({
-        where: { ...branchWhere, createdAt: { gte: start, lt: end }, status: { not: "VOID" } },
-        select: { totalMinor: true, paidMinor: true },
+        where: { ...branchWhere, OR: [{ issuedAt: { gte: start, lt: end } }, { issuedAt: null, createdAt: { gte: start, lt: end } }], status: { not: "VOID" } },
+        select: { totalMinor: true, paidMinor: true, issuedAt: true, createdAt: true },
       }),
       prisma.product.findMany({ where: { ...branchWhere, deletedAt: null } }),
       prisma.customer.count({ where: { ...branchWhere, createdAt: { gte: start, lt: end }, deletedAt: null } }),
@@ -98,7 +98,7 @@ export default async function reportRoutes(app: FastifyInstance) {
     const invoices = await prisma.invoice.findMany({
       where: {
         ...branchWhere,
-        createdAt: { gte, lt },
+        OR: [{ issuedAt: { gte, lt } }, { issuedAt: null, createdAt: { gte, lt } }],
         status: { not: "VOID" },
         ...(staffId || serviceId ? { items: { some: { ...(staffId ? { staffId } : {}), ...(serviceId ? { serviceId } : {}) } } } : {}),
       },
@@ -116,7 +116,7 @@ export default async function reportRoutes(app: FastifyInstance) {
           where: { branchId, businessDate: { gte: fromKey, lt: toKey }, reviewRequired: false, totalSalesMinor: { not: null } },
           select: { businessDate: true, totalSalesMinor: true, reviewRequired: true },
         });
-        const liveDates = new Set(invoices.map((invoice) => dateKey(invoice.createdAt, branch.timezone)));
+        const liveDates = new Set(invoices.map((invoice) => invoiceDateKey(invoice, branch.timezone)));
         historicalSalesMinor = historicalSalesFallback(historical, liveDates).totalMinor;
       }
     }
@@ -208,8 +208,8 @@ export default async function reportRoutes(app: FastifyInstance) {
 
     const [invoices, customers, inactiveCustomers, inactiveTotal, neverVisited, historicalDaily, selectedAppointments, selectedNewCustomers] = await Promise.all([
       prisma.invoice.findMany({
-        where: { branchId, status: { not: "VOID" }, createdAt: { gte: rangeStart, lt: rangeEnd } },
-        select: { id: true, totalMinor: true, paidMinor: true, createdAt: true },
+        where: { branchId, status: { not: "VOID" }, OR: [{ issuedAt: { gte: rangeStart, lt: rangeEnd } }, { issuedAt: null, createdAt: { gte: rangeStart, lt: rangeEnd } }] },
+        select: { id: true, totalMinor: true, paidMinor: true, issuedAt: true, createdAt: true },
       }),
       prisma.customer.findMany({
         where: { branchId, deletedAt: null },
@@ -241,14 +241,14 @@ export default async function reportRoutes(app: FastifyInstance) {
     for (const key of rolling15Keys) if (!dailyMap.has(key)) dailyMap.set(key, { salesMinor: 0, collectedMinor: 0, bills: 0 });
     for (const key of selectedKeys) if (!dailyMap.has(key)) dailyMap.set(key, { salesMinor: 0, collectedMinor: 0, bills: 0 });
     for (const invoice of invoices) {
-      const key = dateKey(invoice.createdAt, branch.timezone);
+      const key = invoiceDateKey(invoice, branch.timezone);
       const row = dailyMap.get(key) ?? { salesMinor: 0, collectedMinor: 0, bills: 0 };
       row.salesMinor += invoice.totalMinor;
       row.collectedMinor += invoice.paidMinor;
       row.bills += 1;
       dailyMap.set(key, row);
     }
-    const liveDates = new Set(invoices.map((invoice) => dateKey(invoice.createdAt, branch.timezone)));
+    const liveDates = new Set(invoices.map((invoice) => invoiceDateKey(invoice, branch.timezone)));
     const historicalFallback = historicalSalesFallback(historicalDaily, liveDates);
     for (const [key, salesMinor] of historicalFallback.byDate) {
       const row = dailyMap.get(key) ?? { salesMinor: 0, collectedMinor: 0, bills: 0 };
@@ -258,7 +258,7 @@ export default async function reportRoutes(app: FastifyInstance) {
     const totalFor = (keys: string[]) => keys.reduce((sum, key) => sum + (dailyMap.get(key)?.salesMinor ?? 0), 0);
     const monthKeys = [...dailyMap.keys()].filter((key) => key >= monthStartKey && key <= todayKey).sort();
     const monthInvoices = invoices.filter((invoice) => {
-      const key = dateKey(invoice.createdAt, branch.timezone);
+      const key = invoiceDateKey(invoice, branch.timezone);
       return key >= monthStartKey && key <= todayKey;
     });
     const ticketValues = monthInvoices.map((invoice) => invoice.totalMinor).filter((value) => value > 0);
@@ -268,7 +268,7 @@ export default async function reportRoutes(app: FastifyInstance) {
     }, { date: monthStartKey, salesMinor: 0 });
     const repeatCustomers = customers.filter((customer) => customer.visitCount >= DEFAULT_SEGMENT_CONFIG.repeatMinVisits).length;
     const selectedInvoices = invoices.filter((invoice) => {
-      const key = dateKey(invoice.createdAt, branch.timezone);
+      const key = invoiceDateKey(invoice, branch.timezone);
       return key >= selectedFromKey && key <= selectedToKey;
     });
     const selectedTicketValues = selectedInvoices.map((invoice) => invoice.totalMinor).filter((value) => value > 0);
@@ -334,6 +334,14 @@ function dateKey(date: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
   const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${value.year}-${value.month}-${value.day}`;
+}
+
+function invoiceDate(invoice: { issuedAt?: Date | null; createdAt: Date }) {
+  return invoice.issuedAt ?? invoice.createdAt;
+}
+
+function invoiceDateKey(invoice: { issuedAt?: Date | null; createdAt: Date }, timeZone: string) {
+  return dateKey(invoiceDate(invoice), timeZone);
 }
 
 function calendarKeys(todayKey: string, count: number, offsetDays = 0) {

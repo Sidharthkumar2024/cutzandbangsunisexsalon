@@ -3385,6 +3385,7 @@ function POS({
   const [receiptWhatsappChannel, setReceiptWhatsappChannel] = useState<
     "OFF" | "WHATSAPP_OFFICIAL" | "WHATSAPP_UNOFFICIAL"
   >("OFF");
+  const [billDate, setBillDate] = useState(data.currentCash?.businessDate ?? todayInputDate());
   const [deliveryMessage, setDeliveryMessage] = useState("");
   const [sentDeliveryChannels, setSentDeliveryChannels] = useState<
     Partial<Record<InvoiceWhatsAppChannel | "EMAIL", boolean>>
@@ -3611,6 +3612,10 @@ function POS({
       ? `WhatsApp unavailable: ${postPaymentWhatsappBlockedReason}`
       : `Ready to send ${invoice || "this invoice"} to ${selectedCustomer?.phone}. Delivery runs in the background; no WhatsApp window will open here.`);
 
+  useEffect(() => {
+    if (!paid) setBillDate(data.currentCash?.businessDate ?? todayInputDate());
+  }, [data.currentCash?.businessDate, paid]);
+
   const selectCustomer = (nextCustomerId: string) => {
     onCustomerIdChange(nextCustomerId);
     setCustomerDetail(null);
@@ -3776,6 +3781,7 @@ function POS({
         packageRedemptions: packageRedemptions.map(({ customerServicePackageId, serviceId, qty }) => ({ customerServicePackageId, serviceId, qty })),
         couponCode: normalizedCouponCode || undefined,
         loyaltyPointsToRedeem: effectiveLoyaltyPoints,
+        businessDate: billDate || data.currentCash?.businessDate || todayInputDate(),
       });
       setInvoice(result.number);
       setInvoiceId(result.id);
@@ -4065,6 +4071,7 @@ function POS({
     <div className="pos-workspace">
       <div className="pos-day-strip">
         <span><small>Business date</small><strong>{data.currentCash.businessDate}</strong></span>
+        <label><small>Bill date</small><input type="date" max={todayInputDate()} value={billDate} onChange={(event) => setBillDate(event.target.value || data.currentCash?.businessDate || todayInputDate())} /></label>
         <span><small>Opened</small><strong>{new Date(data.currentCash.openedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</strong></span>
         <span><small>Opening drawer</small><strong>{money(data.currentCash.openingCashMinor)}</strong></span>
         <span><small>Cash sales</small><strong>{money(data.currentCash.cashSalesMinor ?? 0)}</strong></span>
@@ -4493,6 +4500,7 @@ function POS({
               <div role="radiogroup" aria-label="WhatsApp receipt channel">
                 {([
                   ["OFF", "Off"],
+                  ["WHATSAPP_UNOFFICIAL", "QR"],
                   ["WHATSAPP_OFFICIAL", "Official"],
                 ] as const).map(([channel, label]) => (
                   <button
@@ -4537,6 +4545,7 @@ function POS({
                 Email invoice
               </button>
               {([
+                ["WHATSAPP_UNOFFICIAL", "QR WhatsApp"],
                 ["WHATSAPP_OFFICIAL", "Official WhatsApp"],
               ] as const).map(([channel, label]) => (
                 <button
@@ -4579,6 +4588,7 @@ function POS({
                 setRewardMessage("");
                 setReceiptEmailEnabled(false);
                 setReceiptWhatsappChannel("OFF");
+                setBillDate(data.currentCash?.businessDate ?? todayInputDate());
                 setWhatsappActionFeedback(null);
                 setSplitCashAmount(0);
                 setSplitUpiAmount(0);
@@ -8459,6 +8469,7 @@ function Invoices({
     totalMinor: invoice.totalMinor,
     paidMinor: invoice.paidMinor,
     createdAt: invoice.createdAt,
+    issuedAt: invoice.issuedAt ?? null,
     pdfReady: Boolean(invoice.pdfUrl),
     downloadPath: `/api/v1/invoices/${invoice.id}/pdf?download=1`,
     customer: invoice.customer,
@@ -8552,11 +8563,18 @@ function Invoices({
       setDeliveryStatus({ invoiceId: invoice.id, kind: "success", text });
     } catch (cause) {
       const raw = cause instanceof Error ? cause.message : "Invoice delivery failed.";
-      const text = raw.includes("wa_official_not_configured")
-        ? "Official WhatsApp is not configured yet. Add the Meta token, phone-number ID and public invoice storage in Settings."
-        : raw.includes("invoice_public_url_unavailable") || raw.includes("invoice_media_url_not_public_https")
-          ? "Official WhatsApp needs a public HTTPS invoice PDF URL. Configure Cloudinary/S3 storage."
-          : prettyStatus(raw);
+      let text = prettyStatus(raw);
+      if (raw.includes("wa_official_not_configured")) {
+        text = "Official WhatsApp is not configured yet. Add the Meta token, phone-number ID and public invoice storage in Settings.";
+      } else if (raw.includes("wa_unofficial_not_configured")) {
+        text = "QR WhatsApp is not configured yet. Add Evolution/unofficial API settings and connect the QR session in Settings.";
+      } else if (raw.includes("wa_unofficial_not_connected")) {
+        text = "QR WhatsApp is not connected. Open Settings → Unofficial WhatsApp and scan or refresh the QR.";
+      } else if (raw.includes("invoice_pdf_too_large_for_inline_whatsapp")) {
+        text = "Invoice PDF is too large for QR WhatsApp inline sending. Open or download the PDF and send manually.";
+      } else if (raw.includes("invoice_public_url_unavailable") || raw.includes("invoice_media_url_not_public_https")) {
+        text = "Official WhatsApp needs a public HTTPS invoice PDF URL. Configure Cloudinary/S3 storage.";
+      }
       setMessage(text);
       setDeliveryStatus({ invoiceId: invoice.id, kind: "error", text });
     } finally {
@@ -8609,6 +8627,7 @@ function Invoices({
                   <button disabled={busyId === invoice.id} onClick={() => void openPdf(invoice, false)}>Open PDF</button>
                   <button disabled={busyId === invoice.id} onClick={() => void openPdf(invoice, true)}>Download</button>
                   <button disabled={busyId === invoice.id || !customer?.email} title={customer?.email ? `Send to ${customer.email}` : "Customer email is missing"} onClick={() => void deliver(invoice, "EMAIL")}>Email</button>
+                  <button disabled={busyId === invoice.id || !customer?.phone} title={customer?.phone ? `Send by connected QR to ${customer.phone}` : "Customer phone is missing"} onClick={() => void deliver(invoice, "WHATSAPP_UNOFFICIAL")}>QR WA</button>
                   <button disabled={busyId === invoice.id || !customer?.phone} title={customer?.phone ? `Send to ${customer.phone}` : "Customer phone is missing"} onClick={() => void deliver(invoice, "WHATSAPP_OFFICIAL")}>Official WA</button>
                   {deliveryStatus?.invoiceId === invoice.id && (
                     <p className={`invoice-row-feedback ${deliveryStatus.kind}`} role="status">{deliveryStatus.text}</p>

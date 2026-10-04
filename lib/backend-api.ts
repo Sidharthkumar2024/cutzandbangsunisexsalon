@@ -739,6 +739,7 @@ export type BackendInvoice = {
   paidMinor: number;
   pdfUrl?: string | null;
   createdAt: string;
+  issuedAt?: string | null;
   customer?: {
     id: string;
     name: string;
