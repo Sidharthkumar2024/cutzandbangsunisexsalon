@@ -5,6 +5,7 @@ import { authorize } from "../../plugins/auth.js";
 import { audit } from "../../lib/audit.js";
 import { parseCsv } from "../../lib/csv.js";
 import { zonedToUtc } from "../../lib/tz.js";
+import { drawerInvoiceRange } from "./drawer-date.js";
 import { assertHistoricalCsvRowCounts, assertHistoricalImportSize, expenseImportLineKey, normalizeBusinessDate, parseHistoricalCsv, parseHistoricalCsvPair } from "./historical-import.js";
 
 const OPERATIONS = ["OWNER", "ADMIN", "MANAGER", "RECEPTION"] as const;
@@ -31,13 +32,14 @@ function businessDate(date: Date, timeZone: string) {
   }).format(date);
 }
 
-async function cashTotals(session: { id: string; branchId: string; openedAt: Date; openingCashMinor: number }) {
+async function cashTotals(session: { id: string; branchId: string; businessDate: string; openedAt: Date; openingCashMinor: number }) {
+  const branch = await prisma.branch.findUniqueOrThrow({ where: { id: session.branchId }, select: { timezone: true } });
   const [payments, expenses] = await Promise.all([
     prisma.payment.groupBy({
       by: ["method"],
       where: {
         createdAt: { gte: session.openedAt },
-        invoice: { branchId: session.branchId, status: { not: "VOID" } },
+        invoice: { branchId: session.branchId, status: { not: "VOID" }, issuedAt: drawerInvoiceRange(session.businessDate, branch.timezone) },
       },
       _sum: { amountMinor: true },
     }),

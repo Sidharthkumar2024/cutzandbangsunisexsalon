@@ -4074,7 +4074,7 @@ function POS({
     <div className="pos-workspace">
       <div className="pos-day-strip">
         <span><small>Business date</small><strong>{data.currentCash.businessDate}</strong></span>
-        <label><small>Bill date</small><input type="date" max={todayInputDate()} value={billDate} onChange={(event) => setBillDate(event.target.value || data.currentCash?.businessDate || todayInputDate())} /></label>
+        <label><small>Invoice date (past dates allowed)</small><input type="date" max={todayInputDate()} value={billDate} onChange={(event) => setBillDate(event.target.value || data.currentCash?.businessDate || todayInputDate())} /><small>{billDate !== data.currentCash.businessDate ? "Past invoice: excluded from this drawer closing" : "Included in this business day's drawer"}</small></label>
         <span><small>Opened</small><strong>{new Date(data.currentCash.openedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</strong></span>
         <span><small>Opening drawer</small><strong>{money(data.currentCash.openingCashMinor)}</strong></span>
         <span><small>Cash sales</small><strong>{money(data.currentCash.cashSalesMinor ?? 0)}</strong></span>
