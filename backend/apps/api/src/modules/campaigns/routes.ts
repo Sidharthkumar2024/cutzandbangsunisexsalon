@@ -472,6 +472,9 @@ export default async function campaignRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const existing = await prisma.campaign.findUnique({ where: { id } });
     if (!existing) return reply.code(404).send({ error: "not_found" });
+    if (String(existing.channel) !== "WHATSAPP_OFFICIAL") {
+      return reply.code(409).send({ error: "campaign_requires_official_whatsapp" });
+    }
     if (existing.status !== "PENDING_APPROVAL") return reply.code(409).send({ error: "not_pending_approval" });
     const providerContext = await applyProviderSettings(existing.branchId);
     const unofficialMessaging = providerContext.whatsapp("WHATSAPP_UNOFFICIAL");
@@ -533,6 +536,9 @@ export default async function campaignRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const existing = await prisma.campaign.findUnique({ where: { id } });
     if (!existing) return reply.code(404).send({ error: "not_found" });
+    if (String(existing.channel) !== "WHATSAPP_OFFICIAL") {
+      return reply.code(409).send({ error: "campaign_requires_official_whatsapp" });
+    }
     const failedRecipients = await prisma.campaignRecipient.findMany({
       where: { campaignId: id, status: "failed" },
       select: { id: true },

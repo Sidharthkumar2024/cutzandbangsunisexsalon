@@ -151,7 +151,11 @@ function mergeStoredWithEnv(stored: StoredProviderSettings): StoredProviderSetti
     whatsappOfficial: {
       ...envOfficial,
       ...stored.whatsappOfficial,
-      enabled: envOfficial.enabled || (stored.whatsappOfficial?.enabled ?? false),
+      // WA_OFFICIAL_ENABLED=false is an explicit operator kill switch. It
+      // overrides any previously saved UI toggle without deleting credentials.
+      enabled: process.env.WA_OFFICIAL_ENABLED?.trim().toLowerCase() === "false"
+        ? false
+        : envOfficial.enabled || (stored.whatsappOfficial?.enabled ?? false),
       phoneId: nonEmpty(stored.whatsappOfficial?.phoneId) ?? envOfficial.phoneId,
       wabaId: nonEmpty(stored.whatsappOfficial?.wabaId) ?? envOfficial.wabaId,
       graphVersion: nonEmpty(stored.whatsappOfficial?.graphVersion) ?? envOfficial.graphVersion,

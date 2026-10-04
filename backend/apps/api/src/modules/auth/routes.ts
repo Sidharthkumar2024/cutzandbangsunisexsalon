@@ -49,7 +49,9 @@ async function sendCustomerLoginOtp(input: { branchId: string; phone: string; na
     "Valid for 5 minutes.",
     "If you did not request this, ignore this message.",
   ].join("\n");
-  const channels = ["WHATSAPP_UNOFFICIAL", "WHATSAPP_OFFICIAL"] as const;
+  // This installation is configured for QR-paired Evolution only. Do not
+  // silently fall back to Meta while Official WhatsApp is intentionally off.
+  const channels = ["WHATSAPP_UNOFFICIAL"] as const;
   let lastError = "whatsapp_otp_unavailable";
   for (const channel of channels) {
     const provider = context.whatsapp(channel);

@@ -235,10 +235,14 @@ new Worker<CampaignJob>(
     const providerContext = await applyStoredProviderSettings(campaign.branchId);
     const emailProvider = providerContext.email();
     const officialMessaging = providerContext.whatsapp("WHATSAPP_OFFICIAL");
-    const unofficialMessaging = providerContext.whatsapp("WHATSAPP_UNOFFICIAL");
 
     const recipient = await prisma.campaignRecipient.findUnique({ where: { id: recipientId } });
     if (!recipient || recipient.campaignId !== campaignId || recipient.status !== "queued") return;
+    if (campaign.channel === "WHATSAPP_UNOFFICIAL") {
+      await mark(recipient.id, "failed", "unofficial_whatsapp_campaigns_disabled");
+      await finishCampaignIfComplete(campaignId);
+      return;
+    }
     const customer = recipient.customerId
       ? await prisma.customer.findUnique({ where: { id: recipient.customerId } })
       : null;
@@ -269,26 +273,21 @@ new Worker<CampaignJob>(
         const result = await emailProvider.send({ to: recipientEmail, subject: campaign.name, html: `${image}<p>${content}</p>` });
         if (result.status === "failed") throw new Error(result.error ?? "email_send_failed");
         externalId = result.externalId || undefined;
-      } else if (["WHATSAPP_OFFICIAL", "WHATSAPP_UNOFFICIAL"].includes(campaign.channel) && recipientPhone && (!customer || customer.waConsent)) {
-        const body = campaign.channel === "WHATSAPP_UNOFFICIAL" && !/reply\s+stop|बंद/i.test(content)
-          ? `${content}\n\nReply STOP to opt out.`
-          : content;
-        const messaging = campaign.channel === "WHATSAPP_UNOFFICIAL" ? unofficialMessaging : officialMessaging;
+      } else if (campaign.channel === "WHATSAPP_OFFICIAL" && recipientPhone && (!customer || customer.waConsent)) {
+        const messaging = officialMessaging;
         const health = await messaging.health?.();
         if (health && (!health.configured || !health.connected)) {
           throw new Error(health.detail ?? `${campaign.channel.toLowerCase()}_not_connected`);
         }
-        const templateVariableCount = campaign.channel === "WHATSAPP_OFFICIAL"
-          ? Math.max(0, ...Array.from(campaign.content.matchAll(/\{\{(\d+)\}\}/gu), (match) => Number(match[1] ?? 0)))
-          : 0;
+        const templateVariableCount = Math.max(0, ...Array.from(campaign.content.matchAll(/\{\{(\d+)\}\}/gu), (match) => Number(match[1] ?? 0)));
         const templateValues = [recipientName, String(daysSinceVisit)];
         const variables = templateVariableCount
           ? Object.fromEntries(Array.from({ length: templateVariableCount }, (_, index) => [String(index + 1), templateValues[index] ?? "-"]))
           : undefined;
         const result = await messaging.send({
           to: recipientPhone,
-          body,
-          templateName: campaign.channel === "WHATSAPP_OFFICIAL" ? campaign.templateName ?? undefined : undefined,
+          body: content,
+          templateName: campaign.templateName ?? undefined,
           templateLanguage: campaign.templateLanguage ?? undefined,
           variables,
           mediaUrl,

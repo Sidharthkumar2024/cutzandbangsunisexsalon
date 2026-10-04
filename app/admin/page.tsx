@@ -9236,7 +9236,7 @@ function Settings({
               <div className="setting-row"><div><strong>Auto WhatsApp</strong><small>Send to opted-in customers with a phone number</small></div><button type="button" aria-label="Toggle automatic invoice WhatsApp" className={`toggle ${autoInvoiceWhatsapp ? "active" : ""}`} onClick={() => setAutoInvoiceWhatsapp((current) => !current)}><i /></button></div>
               <div className="setting-row"><div><strong>Attach invoice PDF</strong><small>Include the stored PDF with automated delivery</small></div><button type="button" aria-label="Toggle invoice PDF attachment" className={`toggle ${invoiceAttachPdf ? "active" : ""}`} onClick={() => setInvoiceAttachPdf((current) => !current)}><i /></button></div>
             </div>
-            <label>WhatsApp provider<input value="Official Meta Cloud API" disabled readOnly /></label>
+            <label>WhatsApp provider<input value="Evolution API QR · transactional only" disabled readOnly /></label>
             <label>Email subject<input value={invoiceEmailSubject} onChange={(event) => setInvoiceEmailSubject(event.target.value)} placeholder="Your invoice {{invoiceNumber}}" /></label>
             <label>Email message<textarea rows={4} value={invoiceEmailBody} onChange={(event) => setInvoiceEmailBody(event.target.value)} /></label>
             <label>WhatsApp message<textarea rows={4} value={invoiceWhatsappBody} onChange={(event) => setInvoiceWhatsappBody(event.target.value)} /></label>
@@ -9276,7 +9276,7 @@ function Settings({
         <div className="card-head"><div><p className="eyebrow">Messaging credentials</p><h2>Official WhatsApp setup</h2><p>All inbox, receipt and campaign messaging uses the Meta Cloud API.</p></div></div>
         <div className="provider-credential-grid">
           <section>
-            <header><div><strong>Official Meta Cloud API</strong><small>Recommended for production messaging</small></div><button type="button" className={`toggle ${providerConfig.whatsappOfficial.enabled ? "active" : ""}`} onClick={() => setProviderConfig((current) => ({ ...current, whatsappOfficial: { ...current.whatsappOfficial, enabled: !current.whatsappOfficial.enabled } }))}><i /></button></header>
+            <header><div><strong>Official Meta Cloud API</strong><small>Temporarily paused. Existing credentials are retained.</small></div><button type="button" aria-label="Official Meta temporarily paused" className={`toggle ${providerConfig.whatsappOfficial.enabled ? "active" : ""}`} disabled><i /></button></header>
             <div className="provider-config-form">
               <label>Phone number ID<input value={providerConfig.whatsappOfficial.phoneId} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappOfficial: { ...current.whatsappOfficial, phoneId: event.target.value } }))} /></label>
               <label>WhatsApp business ID<input value={providerConfig.whatsappOfficial.wabaId} onChange={(event) => setProviderConfig((current) => ({ ...current, whatsappOfficial: { ...current.whatsappOfficial, wabaId: event.target.value } }))} /></label>
@@ -9297,24 +9297,25 @@ function Settings({
         <button className="button admin-primary" disabled={busy || !token} onClick={() => void saveProviders()}>{busy ? "Saving…" : "Save & apply provider credentials"}</button>
       </article>
       <article className="admin-card whatsapp-settings">
-        <div className="card-head"><div><p className="eyebrow">Provider adapter</p><h2>Official WhatsApp integration</h2><p>Meta Cloud API is the only messaging channel exposed in the admin panel.</p></div></div>
+        <div className="card-head"><div><p className="eyebrow">Provider adapter</p><h2>WhatsApp integrations</h2><p>Official Meta is paused. QR-paired Evolution is enabled for transactional invoices and OTP only; campaigns never use it.</p></div></div>
         <div className="whatsapp-provider-grid">
-          {(["official"] as const).map((key) => {
-            const item = status?.official;
-            return (
-              <section key={key} className="provider-card">
-                <header><div><strong>Official Meta Cloud API</strong><small>{item?.detail ?? (integrationLoading ? "Checking live backend…" : integrationError || "Status unavailable — run check again")}</small></div><span className={item?.connected ? "connected" : "offline"}>{item?.connected ? "Connected" : item?.configured ? "Configured" : "Needs setup"}</span></header>
-                <div className="provider-actions">
-                  <button type="button" className={`toggle ${item?.active ? "active" : ""}`} disabled={busy || !token} onClick={() => void toggleChannel("WHATSAPP_OFFICIAL", !item?.active)}><i /></button>
-                  <button disabled={busy || !token} onClick={() => void syncTemplates()}>Sync templates</button>
-                  <button disabled={busy || !token || !testTo || !testMessage} onClick={() => void testProvider("WHATSAPP_OFFICIAL")}>Send test</button>
-                </div>
-              </section>
-            );
-          })}
+          <section className="provider-card">
+            <header><div><strong>Official Meta Cloud API</strong><small>Temporarily paused by server configuration. Credentials are retained and can be re-enabled later.</small></div><span className="offline">Paused</span></header>
+            <div className="provider-actions"><button type="button" className="toggle" disabled aria-label="Official Meta is paused"><i /></button></div>
+          </section>
+          <section className="provider-card">
+            <header><div><strong>Evolution API · QR login</strong><small>{status?.unofficial.detail ?? (integrationLoading ? "Checking live backend…" : integrationError || "Status unavailable — refresh to check")}</small></div><span className={status?.unofficial.connected ? "connected" : "offline"}>{status?.unofficial.connected ? "Connected" : status?.unofficial.configured ? prettyStatus(status.unofficial.status ?? "Waiting for QR") : "Needs setup"}</span></header>
+            <div className="provider-actions">
+              <button disabled={busy || !token} onClick={() => void refreshWahaStatus()}>Refresh QR / status</button>
+              <button disabled={busy || !token || !status?.unofficial.configured} onClick={() => void controlWaha("restart")}>Restart session</button>
+              <button disabled={busy || !token || !status?.unofficial.configured || status.unofficial.connected} onClick={() => void controlWaha("create")}>Create fresh QR</button>
+              <button disabled={busy || !token || !status?.unofficial.configured || !status.unofficial.connected} onClick={() => void controlWaha("logout")}>Disconnect</button>
+            </div>
+            {status?.unofficial.qrDataUrl && !status.unofficial.connected && <div className="meta-setup-panel"><strong>Scan with WhatsApp → Linked devices</strong><img src={status.unofficial.qrDataUrl} alt="Evolution WhatsApp login QR code" width={260} height={260} style={{ width: "min(260px, 100%)", height: "auto", imageRendering: "pixelated" }} /><small>QR/status refreshes automatically every 12 seconds. Scan the currently visible code.</small></div>}
+            <div className="whatsapp-test-row"><input value={testTo} onChange={(event) => setTestTo(event.target.value)} placeholder="Test recipient with country code" /><input value={testMessage} onChange={(event) => setTestMessage(event.target.value)} placeholder="Transactional test message" /><button disabled={busy || !token || !testTo || !testMessage || !status?.unofficial.connected} onClick={() => void testProvider("WHATSAPP_UNOFFICIAL")}>Send test</button></div>
+          </section>
         </div>
-        <div className="whatsapp-test-row"><input value={testTo} onChange={(event) => setTestTo(event.target.value)} placeholder="Recipient with country code" /><input value={testMessage} onChange={(event) => setTestMessage(event.target.value)} placeholder="Test message" /></div>
-        <small>{status ? "Live official provider status loaded" : "Official provider status not loaded"} · credentials remain server-side.</small>
+        <small>{status ? "Live provider status loaded" : "Provider status not loaded"} · credentials remain server-side · no campaign uses Evolution.</small>
       </article>
     </div>
   );
