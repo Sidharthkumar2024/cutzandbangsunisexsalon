@@ -79,54 +79,24 @@ services:
     volumes:
       - sitecontent:/app/.storage
 
-  evolution-db:
-    image: postgres:16-alpine
+  waha:
+    image: devlikeapro/waha:2026.6.1
     profiles: ["unofficial-wa"]
     restart: unless-stopped
     environment:
-      POSTGRES_USER: evolution
-      POSTGRES_PASSWORD: ${EVOLUTION_DB_PASSWORD}
-      POSTGRES_DB: evolution
+      WAHA_API_KEY: ${WAHA_API_KEY:?WAHA_API_KEY must be set}
+      WHATSAPP_DEFAULT_ENGINE: WEBJS
+      WAHA_DASHBOARD_ENABLED: "false"
+      WHATSAPP_SWAGGER_ENABLED: "false"
+    expose: ["3000"]
     volumes:
-      - evolution_pgdata:/var/lib/postgresql/data
+      - waha_sessions:/app/.sessions
+    shm_size: 1gb
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U evolution -d evolution"]
-      interval: 10s
-      timeout: 5s
-      retries: 8
-
-  evolution:
-    image: evoapicloud/evolution-api:latest
-    profiles: ["unofficial-wa"]
-    restart: unless-stopped
-    environment:
-      SERVER_PORT: 8080
-      SERVER_URL: http://evolution:8080
-      DATABASE_PROVIDER: postgresql
-      DATABASE_CONNECTION_URI: postgresql://evolution:${EVOLUTION_DB_PASSWORD}@evolution-db:5432/evolution
-      CACHE_REDIS_ENABLED: "true"
-      CACHE_REDIS_URI: redis://redis:6379/1
-      CACHE_REDIS_PREFIX_KEY: cutz-evolution
-      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
-      WEBHOOK_GLOBAL_ENABLED: "true"
-      WEBHOOK_GLOBAL_URL: ${WA_UNOFFICIAL_CALLBACK_URL}
-      WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: "false"
-      WEBHOOK_EVENTS_CONNECTION_UPDATE: "true"
-      WEBHOOK_EVENTS_MESSAGES_UPSERT: "true"
-      WEBHOOK_EVENTS_SEND_MESSAGE: "true"
-    expose: ["8080"]
-    depends_on:
-      evolution-db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - evolution_instances:/evolution/instances
-    healthcheck:
-      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8080/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/api/server/status',{headers:{'X-Api-Key':process.env.WAHA_API_KEY}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 15s
       timeout: 5s
-      retries: 8
+      retries: 12
 
   proxy:
     image: caddy:2-alpine
@@ -152,8 +122,7 @@ services:
 volumes:
   pgdata:
   redisdata:
-  evolution_pgdata:
-  evolution_instances:
+  waha_sessions:
   caddydata:
   caddyconfig:
   media:

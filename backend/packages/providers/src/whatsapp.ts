@@ -7,14 +7,14 @@ import type {
   WhatsAppSessionAction,
   WhatsAppSessionState,
 } from "@cutz/types";
-import { validateEvolutionBaseUrl } from "./waha-url.js";
+import { validateWahaBaseUrl } from "./waha-url.js";
 
 const digits = (value: string) => value.replace(/\D/g, "");
 
 const recipient = (value: string) => {
   let normalized = digits(value);
   // This salon operates in India and historical CRM rows can contain a local
-  // 10-digit mobile. Evolution/Meta both require an international recipient.
+  // 10-digit mobile. WAHA/Meta both require an international recipient.
   if (/^[6-9]\d{9}$/.test(normalized)) normalized = `91${normalized}`;
   return /^\d{8,15}$/.test(normalized) ? normalized : null;
 };
@@ -28,8 +28,8 @@ const validMediaUrl = (value: string) => {
   }
 };
 
-/** Keep JSON/base64 requests bounded before they reach the local Evolution API. */
-export const EVOLUTION_INLINE_MEDIA_MAX_BYTES = 8 * 1024 * 1024;
+/** Keep JSON/base64 requests bounded before they reach the local WAHA API. */
+export const WAHA_INLINE_MEDIA_MAX_BYTES = 8 * 1024 * 1024;
 
 function inlinePdfError(msg: OutboundMessage) {
   if (!msg.mediaData) return null;
@@ -37,13 +37,13 @@ function inlinePdfError(msg: OutboundMessage) {
     return "whatsapp_inline_media_unsupported";
   }
   const data = msg.mediaData.trim();
-  const maxEncodedLength = 4 * Math.ceil(EVOLUTION_INLINE_MEDIA_MAX_BYTES / 3);
+  const maxEncodedLength = 4 * Math.ceil(WAHA_INLINE_MEDIA_MAX_BYTES / 3);
   if (data.length > maxEncodedLength) return "whatsapp_media_too_large";
   if (!data || data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
     return "whatsapp_media_data_invalid";
   }
   const decoded = Buffer.from(data, "base64");
-  if (!decoded.length || decoded.length > EVOLUTION_INLINE_MEDIA_MAX_BYTES) {
+  if (!decoded.length || decoded.length > WAHA_INLINE_MEDIA_MAX_BYTES) {
     return decoded.length ? "whatsapp_media_too_large" : "whatsapp_media_data_invalid";
   }
   if (decoded.toString("base64") !== data) return "whatsapp_media_data_invalid";
@@ -345,7 +345,7 @@ export class WhatsAppOfficialProvider implements MessagingProvider {
   }
 }
 
-/** Adapter for a self-hosted Evolution API instance. The browser never receives its API key. */
+/** Adapter for a self-hosted WAHA instance. The browser never receives its API key. */
 export class WhatsAppUnofficialProvider implements MessagingProvider {
   readonly channel = "WHATSAPP_UNOFFICIAL" as const;
   private baseUrl: string;
@@ -357,24 +357,24 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
 
   constructor(config?: WhatsAppUnofficialConfig) {
     const enabled = config?.enabled !== false;
-    const configuredBaseUrl = enabled ? config?.baseUrl ?? process.env.EVOLUTION_API_URL ?? "" : "";
-    const validatedBaseUrl = configuredBaseUrl ? validateEvolutionBaseUrl(configuredBaseUrl) : undefined;
+    const configuredBaseUrl = enabled ? config?.baseUrl ?? process.env.WA_UNOFFICIAL_URL ?? "" : "";
+    const validatedBaseUrl = configuredBaseUrl ? validateWahaBaseUrl(configuredBaseUrl) : undefined;
     this.baseUrl = validatedBaseUrl?.ok ? validatedBaseUrl.url : "";
     this.configError = validatedBaseUrl && !validatedBaseUrl.ok ? validatedBaseUrl.error : undefined;
-    this.apiKey = enabled ? config?.apiKey ?? process.env.EVOLUTION_API_KEY ?? "" : "";
+    this.apiKey = enabled ? config?.apiKey ?? process.env.WAHA_API_KEY ?? "" : "";
     this.webhookSecret = enabled ? config?.webhookSecret ?? process.env.WA_UNOFFICIAL_WEBHOOK_SECRET ?? "" : "";
-    this.session = enabled ? config?.session ?? process.env.EVOLUTION_INSTANCE ?? "cutz-bangs-main" : "";
+    this.session = enabled ? config?.session ?? process.env.WAHA_SESSION ?? "cutz-bangs-main" : "";
     this.callbackUrl = enabled ? config?.callbackUrl ?? process.env.WA_UNOFFICIAL_CALLBACK_URL ?? "" : "";
   }
 
   private headers(accept = "application/json") {
-    return { "Content-Type": "application/json", Accept: accept, apikey: this.apiKey };
+    return { "Content-Type": "application/json", Accept: accept, "X-Api-Key": this.apiKey };
   }
 
   private async json(path: string, init: RequestInit = {}) {
     if (!this.baseUrl) throw new Error(this.configError ?? "wa_unofficial_not_configured");
     const target = new URL(path, `${this.baseUrl}/`);
-    if (target.origin !== this.baseUrl) throw new Error("evolution_request_origin_mismatch");
+    if (target.origin !== this.baseUrl) throw new Error("waha_request_origin_mismatch");
     const response = await fetch(target, {
       ...init,
       headers: { ...this.headers(), ...(init.headers ?? {}) },
@@ -383,28 +383,10 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      // Evolution variants don't consistently put a failed-request reason in
-      // `message`; some return `error`, a nested response, or a plain body.
-      // Preserve a bounded, non-secret diagnostic so delivery failures can be
-      // acted on from the campaign/inbox UI instead of becoming `evolution_400`.
-      const responseData = typeof data === "object" && data ? data as Record<string, unknown> : {};
-      const nested = responseData.response && typeof responseData.response === "object"
-        ? responseData.response as Record<string, unknown>
-        : {};
-      const reason = responseData.message ?? responseData.error ?? responseData.detail
-        ?? nested.message ?? nested.error;
-      const detail = reason === undefined || reason === null || reason === ""
-        ? `evolution_${response.status}`
-        : `evolution_${response.status}:${typeof reason === "string" ? reason : JSON.stringify(reason)}`;
+      const detail = typeof data === "object" && data && "message" in data
+        ? String((data as { message: unknown }).message)
+        : `waha_${response.status}`;
       throw new Error(detail.slice(0, 500));
-    }
-    // Evolution's instance controller returns HTTP 200 for some failed
-    // lifecycle requests (notably restart on a closed Baileys session).  Do
-    // not make the Settings button appear successful when the connector has
-    // actually rejected the request.
-    if (data && typeof data === "object" && (data as { error?: unknown }).error === true) {
-      const message = (data as { message?: unknown }).message;
-      throw new Error(`evolution_action_failed:${typeof message === "string" ? message : "unknown"}`);
     }
     return data;
   }
@@ -440,33 +422,37 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
     const dataError = inlinePdfError(msg);
     if (dataError) return { externalId: "", status: "failed", error: dataError };
     try {
-      let endpoint = `/message/sendText/${encodeURIComponent(this.session)}`;
-      let payload: Record<string, unknown> = { number: to, text: msg.body ?? "", linkPreview: true };
+      const chatId = `${to}@c.us`;
+      let endpoint = "/api/sendText";
+      let payload: Record<string, unknown> = { session: this.session, chatId, text: msg.body ?? "" };
       if (msg.location) {
-        // Evolution's documented location message is not guaranteed across all
-        // engines, so preserve the location as an explicit Maps link.
-        payload = { number: to, text: `${msg.body ? `${msg.body}\n` : ""}https://maps.google.com/?q=${msg.location.latitude},${msg.location.longitude}` };
+        endpoint = "/api/sendLocation";
+        payload = { session: this.session, chatId, ...msg.location };
       } else if ((msg.mediaUrl || msg.mediaData) && msg.mediaType) {
-        endpoint = `/message/sendMedia/${encodeURIComponent(this.session)}`;
-        // Evolution v2 expects a plain base64 document body (rather than a
-        // data URI) and relies on mimetype to construct the outgoing media.
-        // A data URI is accepted by some older connectors, but v2.3 rejects
-        // it with an opaque 400 for PDF invoices.
-        const inlineMedia = msg.mediaData?.trim().replace(/^data:[^;,]+;base64,/i, "");
+        const route = { image: "sendImage", document: "sendFile", video: "sendVideo", audio: "sendVoice" }[msg.mediaType];
+        endpoint = `/api/${route}`;
         payload = {
-          number: to,
-          mediatype: msg.mediaType,
-          media: inlineMedia || msg.mediaUrl,
-          ...(msg.mediaMimeType ? { mimetype: msg.mediaMimeType } : {}),
-          ...(msg.mediaType === "document" ? { fileName: safePdfFilename(msg.mediaFilename) } : {}),
+          session: this.session,
+          chatId,
+          file: msg.mediaData
+            ? {
+                data: msg.mediaData.trim(),
+                mimetype: msg.mediaMimeType,
+                filename: safePdfFilename(msg.mediaFilename),
+              }
+            : {
+                url: msg.mediaUrl,
+                filename: msg.mediaType === "document" ? safePdfFilename(msg.mediaFilename) : undefined,
+              },
           ...(msg.body ? { caption: msg.body } : {}),
         };
       }
       const data = (await this.json(endpoint, { method: "POST", body: JSON.stringify(payload) })) as {
+        id?: string;
         key?: { id?: string };
-        message?: { key?: { id?: string } };
       };
-      return { externalId: data.key?.id ?? data.message?.key?.id ?? "", status: "sent" };
+      const externalId = data.id ?? data.key?.id;
+      return externalId ? { externalId, status: "sent" } : { externalId: "", status: "failed", error: "waha_invalid_response" };
     } catch (error) {
       return { externalId: "", status: "failed", error: error instanceof Error ? error.message : "connector_unavailable" };
     }
@@ -477,122 +463,71 @@ export class WhatsAppUnofficialProvider implements MessagingProvider {
       if (this.configError) {
         return { configured: true, connected: false, status: "INVALID_CONFIG", detail: this.configError };
       }
-      return { configured: false, connected: false, status: "NOT_CONFIGURED", detail: "Add the Evolution API URL, API key and instance name." };
+      return { configured: false, connected: false, status: "NOT_CONFIGURED", detail: "Add the WAHA URL, API key and session name." };
     }
     try {
-      const data = (await this.json(`/instance/connectionState/${encodeURIComponent(this.session)}`)) as {
-        instance?: { state?: string; instanceName?: string };
+      const data = (await this.json(`/api/sessions/${encodeURIComponent(this.session)}`)) as {
+        status?: string;
+        me?: { id?: string; pushName?: string };
       };
-      const status = data.instance?.state === "open" ? "WORKING" : data.instance?.state === "connecting" ? "CONNECTING" : "SCAN_QR_CODE";
+      const status = data.status ?? "UNKNOWN";
       let qrDataUrl: string | undefined;
-      // Evolution reports `connecting` for the entire QR scan window.  The
-      // previous implementation only asked for a QR after it changed to a
-      // different state, leaving the admin panel blank while it said
-      // CONNECTING.  Fetch it whenever the instance is not open.
-      if (status !== "WORKING") {
-        const qr = (await this.json(`/instance/connect/${encodeURIComponent(this.session)}`)) as {
-          base64?: string;
-          code?: string;
-          qrcode?: { base64?: string; code?: string };
-        };
-        const payload = qr.base64 ?? qr.code ?? qr.qrcode?.base64 ?? qr.qrcode?.code;
-        if (payload) qrDataUrl = payload.startsWith("data:") ? payload : `data:image/png;base64,${payload}`;
+      if (status === "SCAN_QR_CODE") {
+        const qr = (await this.json(`/api/${encodeURIComponent(this.session)}/auth/qr`, {
+          headers: { Accept: "application/json" },
+        })) as { mimetype?: string; data?: string };
+        if (qr.data) qrDataUrl = `data:${qr.mimetype ?? "image/png"};base64,${qr.data}`;
       }
       return {
         configured: true,
         connected: status === "WORKING",
         status,
-        detail: status === "WORKING" ? "Evolution instance connected" : `Evolution instance: ${status}`,
+        detail: status === "WORKING" ? "WAHA session connected" : `WAHA session: ${status}`,
         session: this.session,
+        accountName: data.me?.pushName,
+        accountNumber: data.me?.id?.split("@")[0],
         qrDataUrl,
       };
     } catch (error) {
-      return { configured: true, connected: false, status: "UNAVAILABLE", session: this.session, detail: error instanceof Error ? error.message : "Evolution API unavailable" };
+      return { configured: true, connected: false, status: "UNAVAILABLE", session: this.session, detail: error instanceof Error ? error.message : "WAHA unavailable" };
     }
   }
 
   async sessionAction(action: WhatsAppSessionAction): Promise<WhatsAppSessionState> {
     if (!this.baseUrl || !this.apiKey || !this.session) throw new Error(this.configError ?? "wa_unofficial_not_configured");
-    // A QR becomes invalid as soon as WhatsApp/Evolution rotates the pending
-    // pairing attempt.  Restarting a connecting Baileys socket does not always
-    // clear that stale attempt.  Reset explicitly removes only the connector
-    // instance (never salon data), creates it again, and then requests one
-    // freshly-issued QR.
     if (action === "reset") {
-      try {
-        await this.json(`/instance/delete/${encodeURIComponent(this.session)}`, { method: "DELETE" });
-      } catch (error) {
-        if (!(error instanceof Error) || !/^evolution_(?:400|404)\b/.test(error.message)) throw error;
-        // Some Evolution releases return 400 from instance/delete when a
-        // connected Baileys session is still tearing down.  Logging out the
-        // same instance is the supported, non-destructive fallback: it drops
-        // only the WhatsApp pairing and lets /instance/connect issue a new QR.
-        // Never mask a different provider failure here.
-        if (/^evolution_400\b/.test(error.message)) {
-          await this.json(`/instance/logout/${encodeURIComponent(this.session)}`, { method: "DELETE", body: "{}" });
-          return this.health();
-        }
-      }
-      await this.json("/instance/create", {
-        method: "POST",
-        body: JSON.stringify({ instanceName: this.session, qrcode: true, integration: "WHATSAPP-BAILEYS" }),
-      });
-    } else {
-      const isLogout = action === "logout" || action === "stop";
-      if (action === "create") {
-        const config: Record<string, unknown> = { instanceName: this.session, qrcode: true, integration: "WHATSAPP-BAILEYS" };
-        try {
-          await this.json("/instance/create", {
-            method: "POST",
-            body: JSON.stringify(config),
-          });
-        } catch (error) {
-          if (!(error instanceof Error) || !/already|exist|422/i.test(error.message)) throw error;
-          // An existing instance exposes a fresh QR through connect.
-          return this.health();
-        }
-      } else {
-        // Evolution exposes restart and logout (rather than WAHA's start/stop).
-        const route = isLogout ? "logout" : "restart";
-        try {
-          await this.json(`/instance/${route}/${encodeURIComponent(this.session)}`, { method: isLogout ? "DELETE" : "POST", body: "{}" });
-        } catch (error) {
-          // Some Evolution builds intentionally omit the restart endpoint.  A
-          // connected instance is already usable, so do not prevent webhook
-          // repair (or show an opaque 404) merely because a restart is absent.
-          if (isLogout || !(error instanceof Error) || !/^evolution_404\b/.test(error.message)) throw error;
-        }
-      }
+      await this.json(`/api/sessions/${encodeURIComponent(this.session)}/logout`, { method: "POST", body: "{}" });
+      await this.json(`/api/sessions/${encodeURIComponent(this.session)}/start`, { method: "POST", body: "{}" });
+      return this.health();
     }
-    const isLogout = action === "logout" || action === "stop";
-    // Evolution does not inherit an application callback simply because an
-    // instance is connected. Configure the per-instance webhook whenever the
-    // session is created or restarted so inbound WhatsApp replies reach the
-    // salon inbox as well as outbound sends.
-    if (!isLogout && this.callbackUrl && this.webhookSecret) {
-      const payload = JSON.stringify({
-        // Evolution v2 validates the webhook configuration under the
-        // `webhook` key. Sending the old flat WAHA-shaped payload results in
-        // HTTP 400 and silently leaves the unauthenticated global webhook in
-        // place, so inbox events are rejected by our API as 401.
-        webhook: {
-          enabled: true,
+    if (action === "create") {
+      const config: Record<string, unknown> = {
+        metadata: { "app.name": "Cutz & Bangs", "app.session": this.session },
+        client: { deviceName: "Cutz & Bangs", browserName: "Chrome" },
+      };
+      if (this.callbackUrl && this.webhookSecret) {
+        config.webhooks = [{
           url: this.callbackUrl,
-          byEvents: false,
-          base64: false,
-          events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "SEND_MESSAGE", "CONNECTION_UPDATE"],
-          headers: { "x-internal-secret": this.webhookSecret },
-        },
-      });
-      try {
-        await this.json(`/event/webhook/set/${encodeURIComponent(this.session)}`, { method: "POST", body: payload });
-      } catch (error) {
-        // Evolution v1 mounts webhooks at /webhook while v2 mounts them at
-        // /event/webhook.  Support both so an image upgrade does not break
-        // inbox delivery or the Settings restart action.
-        if (!(error instanceof Error) || !/^evolution_404\b/.test(error.message)) throw error;
-        await this.json(`/webhook/set/${encodeURIComponent(this.session)}`, { method: "POST", body: payload });
+          events: ["message", "message.ack", "session.status"],
+          customHeaders: [{ name: "X-Internal-Secret", value: this.webhookSecret }],
+          retries: { policy: "constant", delaySeconds: 5, attempts: 10 },
+        }];
       }
+      try {
+        await this.json("/api/sessions", {
+          method: "POST",
+          body: JSON.stringify({ name: this.session, start: true, config }),
+        });
+      } catch (error) {
+        if (!(error instanceof Error) || !/already|exist|422/i.test(error.message)) throw error;
+        // An existing SCAN_QR_CODE session already exposes a fresh QR through
+        // the read-only auth/qr endpoint. Restarting here makes some WAHA/WebJS
+        // releases call a removed refreshQR command and leaves the UI looking
+        // broken even though a valid QR is available.
+        return this.health();
+      }
+    } else {
+      await this.json(`/api/sessions/${encodeURIComponent(this.session)}/${action}`, { method: "POST", body: "{}" });
     }
     return this.health();
   }

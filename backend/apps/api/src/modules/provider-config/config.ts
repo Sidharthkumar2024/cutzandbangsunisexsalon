@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@cutz/db";
-import { providers, decryptSecret, encryptSecret, normalizeEvolutionBaseUrl, type ProviderRuntimeConfig } from "@cutz/providers";
+import { providers, decryptSecret, encryptSecret, normalizeWahaBaseUrl, type ProviderRuntimeConfig } from "@cutz/providers";
 import {
   matchOfficialVerificationBranch,
   matchOfficialWebhookBranch,
@@ -96,7 +96,7 @@ async function storedSettings(branchId: string): Promise<StoredProviderSettings>
 function envProviderSettings(): StoredProviderSettings {
   const smtpConfigured = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && (process.env.SMTP_PASS || process.env.EMAIL_FROM));
   const officialConfigured = Boolean(process.env.WA_OFFICIAL_TOKEN && process.env.WA_OFFICIAL_PHONE_ID);
-  const unofficialConfigured = Boolean(process.env.EVOLUTION_API_URL && process.env.EVOLUTION_API_KEY && process.env.EVOLUTION_INSTANCE);
+  const unofficialConfigured = Boolean(process.env.WA_UNOFFICIAL_URL && process.env.WAHA_API_KEY && process.env.WAHA_SESSION);
   return {
     smtp: {
       enabled: envFlag(process.env.SMTP_ENABLED, smtpConfigured),
@@ -118,9 +118,9 @@ function envProviderSettings(): StoredProviderSettings {
     },
     whatsappUnofficial: {
       enabled: envFlag(process.env.WA_UNOFFICIAL_ENABLED, unofficialConfigured),
-      baseUrl: process.env.EVOLUTION_API_URL ?? "",
+      baseUrl: process.env.WA_UNOFFICIAL_URL ?? "",
       callbackUrl: process.env.WA_UNOFFICIAL_CALLBACK_URL ?? "",
-      session: process.env.EVOLUTION_INSTANCE ?? "cutz-bangs-main",
+      session: process.env.WAHA_SESSION ?? "cutz-bangs-main",
       intervalSeconds: Number(process.env.WA_UNOFFICIAL_INTERVAL_SECONDS ?? 720),
       dailyCap: safeUnofficialDailyCap(process.env.WA_UNOFFICIAL_DAILY_CAP ?? 60),
       windowStartHour: safeUnofficialHour(process.env.WA_UNOFFICIAL_WINDOW_START_HOUR ?? 10, 10),
@@ -215,8 +215,8 @@ async function configuredWebhookBranches(): Promise<WebhookProviderBranch[]> {
         verifyToken: process.env.WA_WEBHOOK_VERIFY_TOKEN,
       },
       whatsappUnofficial: {
-        enabled: Boolean(process.env.EVOLUTION_API_URL && process.env.EVOLUTION_INSTANCE),
-        session: process.env.EVOLUTION_INSTANCE ?? "",
+        enabled: Boolean(process.env.WA_UNOFFICIAL_URL && process.env.WAHA_SESSION),
+        session: process.env.WAHA_SESSION ?? "",
       },
     });
   }
@@ -260,7 +260,7 @@ function runtimeConfig(stored: StoredProviderSettings): ProviderRuntimeConfig {
           // The VPS-managed connector key is the authoritative credential.
           // A previously saved panel key can survive a connector-key rotation
           // and then turn every QR action into a misleading 403.
-          apiKey: process.env.EVOLUTION_API_KEY ?? decryptSecret(stored.whatsappUnofficial.apiKeyEncrypted ?? stored.whatsappUnofficial.secretEncrypted),
+          apiKey: process.env.WAHA_API_KEY ?? decryptSecret(stored.whatsappUnofficial.apiKeyEncrypted ?? stored.whatsappUnofficial.secretEncrypted),
           webhookSecret: decryptSecret(stored.whatsappUnofficial.webhookSecretEncrypted),
           callbackUrl: stored.whatsappUnofficial.callbackUrl || process.env.WA_UNOFFICIAL_CALLBACK_URL,
         }
@@ -303,12 +303,12 @@ export async function publicProviderSettings(branchId = "main") {
       enabled: stored.whatsappUnofficial?.enabled ?? false,
       baseUrl: stored.whatsappUnofficial?.baseUrl ?? "",
       callbackUrl: stored.whatsappUnofficial?.callbackUrl ?? process.env.WA_UNOFFICIAL_CALLBACK_URL ?? "",
-      session: stored.whatsappUnofficial?.session ?? process.env.EVOLUTION_INSTANCE ?? "cutz-bangs-main",
+      session: stored.whatsappUnofficial?.session ?? process.env.WAHA_SESSION ?? "cutz-bangs-main",
       intervalSeconds: stored.whatsappUnofficial?.intervalSeconds ?? 90,
       dailyCap: safeUnofficialDailyCap(stored.whatsappUnofficial?.dailyCap ?? 75),
       windowStartHour: safeUnofficialHour(stored.whatsappUnofficial?.windowStartHour ?? 0, 0),
       windowEndHour: safeUnofficialHour(stored.whatsappUnofficial?.windowEndHour ?? 23, 23),
-      hasApiKey: Boolean(stored.whatsappUnofficial?.apiKeyEncrypted || stored.whatsappUnofficial?.secretEncrypted || process.env.EVOLUTION_API_KEY),
+      hasApiKey: Boolean(stored.whatsappUnofficial?.apiKeyEncrypted || stored.whatsappUnofficial?.secretEncrypted || process.env.WAHA_API_KEY),
       hasWebhookSecret: Boolean(stored.whatsappUnofficial?.webhookSecretEncrypted || process.env.WA_UNOFFICIAL_WEBHOOK_SECRET),
     },
   };
@@ -330,15 +330,15 @@ export async function saveProviderSettings(branchId: string, input: ProviderSett
     if (!input.whatsappUnofficial.baseUrl) throw new ProviderConfigError("whatsapp_unofficial_url_required");
     if (!input.whatsappUnofficial.callbackUrl) throw new ProviderConfigError("whatsapp_unofficial_callback_url_required");
     if (!input.whatsappUnofficial.session) throw new ProviderConfigError("whatsapp_unofficial_session_required");
-    if (!input.whatsappUnofficial.apiKey && !current.whatsappUnofficial?.apiKeyEncrypted && !current.whatsappUnofficial?.secretEncrypted && !process.env.EVOLUTION_API_KEY) throw new ProviderConfigError("evolution_api_key_required");
+    if (!input.whatsappUnofficial.apiKey && !current.whatsappUnofficial?.apiKeyEncrypted && !current.whatsappUnofficial?.secretEncrypted && !process.env.WAHA_API_KEY) throw new ProviderConfigError("waha_api_key_required");
     if (!input.whatsappUnofficial.webhookSecret && !current.whatsappUnofficial?.webhookSecretEncrypted && !process.env.WA_UNOFFICIAL_WEBHOOK_SECRET) throw new ProviderConfigError("waha_webhook_secret_required");
   }
   let normalizedWahaBaseUrl = input.whatsappUnofficial.baseUrl;
   if (input.whatsappUnofficial.baseUrl) {
     try {
-      normalizedWahaBaseUrl = normalizeEvolutionBaseUrl(input.whatsappUnofficial.baseUrl);
+      normalizedWahaBaseUrl = normalizeWahaBaseUrl(input.whatsappUnofficial.baseUrl);
     } catch (error) {
-      throw new ProviderConfigError(error instanceof Error ? error.message : "evolution_base_url_invalid");
+      throw new ProviderConfigError(error instanceof Error ? error.message : "waha_base_url_invalid");
     }
   }
   const next: StoredProviderSettings = {

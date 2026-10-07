@@ -539,7 +539,7 @@ async function applyStoredProviderSettings(branchId: string) {
   const value = (row?.value ?? {}) as StoredProviders;
   const smtpConfigured = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && (process.env.SMTP_PASS || process.env.EMAIL_FROM));
   const officialConfigured = Boolean(process.env.WA_OFFICIAL_TOKEN && process.env.WA_OFFICIAL_PHONE_ID);
-  const unofficialConfigured = Boolean(process.env.EVOLUTION_API_URL && process.env.EVOLUTION_API_KEY && process.env.EVOLUTION_INSTANCE);
+  const unofficialConfigured = Boolean(process.env.WA_UNOFFICIAL_URL && process.env.WAHA_API_KEY && process.env.WAHA_SESSION);
   const storedSmtp = value.smtp;
   const storedOfficial = value.whatsappOfficial;
   const storedUnofficial = value.whatsappUnofficial;
@@ -564,12 +564,12 @@ async function applyStoredProviderSettings(branchId: string) {
     whatsappUnofficial: storedUnofficial || unofficialConfigured
       ? {
           enabled: envFlag(process.env.WA_UNOFFICIAL_ENABLED, unofficialConfigured) || (storedUnofficial?.enabled ?? false),
-          baseUrl: nonEmpty(storedUnofficial?.baseUrl) ?? process.env.EVOLUTION_API_URL ?? "",
+          baseUrl: nonEmpty(storedUnofficial?.baseUrl) ?? process.env.WA_UNOFFICIAL_URL ?? "",
           callbackUrl: nonEmpty(storedUnofficial?.callbackUrl) ?? process.env.WA_UNOFFICIAL_CALLBACK_URL ?? "",
-          session: nonEmpty(storedUnofficial?.session) ?? process.env.EVOLUTION_INSTANCE ?? "cutz-bangs-main",
+          session: nonEmpty(storedUnofficial?.session) ?? process.env.WAHA_SESSION ?? "cutz-bangs-main",
           // Prefer the runtime connector credential after a VPS key rotation;
           // the encrypted settings value remains a fallback for local setups.
-          apiKey: process.env.EVOLUTION_API_KEY ?? decryptSecret(storedUnofficial?.apiKeyEncrypted ?? storedUnofficial?.secretEncrypted),
+          apiKey: process.env.WAHA_API_KEY ?? decryptSecret(storedUnofficial?.apiKeyEncrypted ?? storedUnofficial?.secretEncrypted),
           webhookSecret: decryptSecret(storedUnofficial?.webhookSecretEncrypted) ?? process.env.WA_UNOFFICIAL_WEBHOOK_SECRET,
         }
       : undefined,

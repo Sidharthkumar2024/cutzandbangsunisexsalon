@@ -2,7 +2,7 @@
 // Swap an implementation here without touching call sites.
 
 import { SmtpEmailProvider } from "./email.js";
-import { EVOLUTION_INLINE_MEDIA_MAX_BYTES, WhatsAppOfficialProvider, WhatsAppUnofficialProvider } from "./whatsapp.js";
+import { WAHA_INLINE_MEDIA_MAX_BYTES, WhatsAppOfficialProvider, WhatsAppUnofficialProvider } from "./whatsapp.js";
 import { S3StorageProvider, LocalStorageProvider, CloudinaryStorageProvider } from "./storage.js";
 import { AnthropicAIProvider } from "./ai.js";
 import { UpiPaymentProvider } from "./payment.js";
@@ -79,10 +79,10 @@ export {
   SmtpEmailProvider,
   WhatsAppOfficialProvider,
   WhatsAppUnofficialProvider,
-  EVOLUTION_INLINE_MEDIA_MAX_BYTES,
+  WAHA_INLINE_MEDIA_MAX_BYTES,
   CloudinaryStorageProvider,
 };
 export type { SmtpEmailConfig, WhatsAppOfficialConfig, WhatsAppUnofficialConfig };
-export { isRestrictedEvolutionHost, normalizeEvolutionBaseUrl, validateEvolutionBaseUrl } from "./waha-url.js";
+export { isRestrictedWahaHost, normalizeWahaBaseUrl, validateWahaBaseUrl } from "./waha-url.js";
 export { encryptSecret, decryptSecret } from "./secrets.js";
 export { salonEmailLayout, passwordResetEmail, staffInvitationEmail, appointmentEmail, invoiceEmail, appointmentWhatsAppText } from "./salon-templates.js";

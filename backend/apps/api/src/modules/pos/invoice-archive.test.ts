@@ -40,7 +40,7 @@ vi.mock("@cutz/db", () => ({
   },
 }));
 vi.mock("@cutz/providers", () => ({
-  EVOLUTION_INLINE_MEDIA_MAX_BYTES: 8 * 1024 * 1024,
+  WAHA_INLINE_MEDIA_MAX_BYTES: 8 * 1024 * 1024,
   providers: {
     storage: () => ({
       get: mocks.storageGet,
@@ -50,7 +50,7 @@ vi.mock("@cutz/providers", () => ({
     }),
   },
   invoiceEmail: vi.fn(() => "<p>invoice</p>"),
-  isRestrictedEvolutionHost: vi.fn(() => false),
+  isRestrictedWahaHost: vi.fn(() => false),
 }));
 vi.mock("@cutz/queue", () => ({ enqueueEmail: mocks.enqueueEmail }));
 vi.mock("../../lib/audit.js", () => ({ audit: mocks.audit }));
@@ -146,7 +146,7 @@ describe("invoice archive", () => {
   it("serves an archived PDF as an attachment without exposing the storage key", async () => {
     mocks.invoiceFindUnique.mockResolvedValue({
       id: "invoice-1",
-      pdfUrl: "invoices/v2/private.pdf",
+      pdfUrl: "invoices/v3/private.pdf",
       number: "CB-2026-000001",
       branchId: "dwarka",
     });
@@ -185,7 +185,7 @@ describe("invoice archive", () => {
         customer: { name: "Sidharth" },
         branch: { name: "Cutz & Bangs", address: "Dwarka", currency: "INR" },
       });
-    mocks.storagePut.mockResolvedValue("invoices/v2/CB-2026-000001.pdf");
+    mocks.storagePut.mockResolvedValue("invoices/v3/CB-2026-000001.pdf");
     mocks.invoiceUpdate.mockResolvedValue({ id: "invoice-1" });
     const app = await testApp();
 
@@ -195,13 +195,13 @@ describe("invoice archive", () => {
     expect(mocks.storageGet).not.toHaveBeenCalledWith("invoices/CB-2026-000001.pdf");
     expect(mocks.retireLegacyPublicObject).toHaveBeenCalledWith("invoices/CB-2026-000001.pdf");
     expect(mocks.storagePut).toHaveBeenCalledWith(
-      "invoices/v2/CB-2026-000001.pdf",
+      "invoices/v3/CB-2026-000001.pdf",
       expect.any(Buffer),
       "application/pdf",
     );
     expect(mocks.invoiceUpdate).toHaveBeenCalledWith({
       where: { id: "invoice-1" },
-      data: { pdfUrl: "invoices/v2/CB-2026-000001.pdf" },
+      data: { pdfUrl: "invoices/v3/CB-2026-000001.pdf" },
     });
     await app.close();
   });
@@ -210,7 +210,7 @@ describe("invoice archive", () => {
     mocks.invoiceFindUnique
       .mockResolvedValueOnce({
         id: "invoice-1",
-        pdfUrl: "invoices/v2/CB-2026-000001.pdf",
+        pdfUrl: "invoices/v3/CB-2026-000001.pdf",
         number: "CB-2026-000001",
         branchId: "dwarka",
         totalMinor: 118_000,
@@ -218,7 +218,7 @@ describe("invoice archive", () => {
       })
       .mockResolvedValueOnce({
         id: "invoice-1",
-        pdfUrl: "invoices/v2/CB-2026-000001.pdf",
+        pdfUrl: "invoices/v3/CB-2026-000001.pdf",
         number: "CB-2026-000001",
         issuedAt: new Date("2026-08-24T12:00:00.000Z"),
         createdAt: new Date("2026-08-24T12:00:00.000Z"),
@@ -232,7 +232,7 @@ describe("invoice archive", () => {
         branch: { name: "Cutz & Bangs", address: "Dwarka", currency: "INR" },
       });
     mocks.storageGet.mockResolvedValue(null);
-    mocks.storagePut.mockResolvedValue("invoices/v2/CB-2026-000001.pdf");
+    mocks.storagePut.mockResolvedValue("invoices/v3/CB-2026-000001.pdf");
     mocks.invoiceUpdate.mockResolvedValue({ id: "invoice-1" });
     const app = await testApp();
 
@@ -243,14 +243,14 @@ describe("invoice archive", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(mocks.storageGet).toHaveBeenCalledWith("invoices/v2/CB-2026-000001.pdf");
+    expect(mocks.storageGet).toHaveBeenCalledWith("invoices/v3/CB-2026-000001.pdf");
     expect(mocks.storagePut).toHaveBeenCalledWith(
-      "invoices/v2/CB-2026-000001.pdf",
+      "invoices/v3/CB-2026-000001.pdf",
       expect.any(Buffer),
       "application/pdf",
     );
     expect(mocks.enqueueEmail).toHaveBeenCalledWith(expect.objectContaining({
-      attachments: [{ filename: "CB-2026-000001.pdf", storageKey: "invoices/v2/CB-2026-000001.pdf" }],
+      attachments: [{ filename: "CB-2026-000001.pdf", storageKey: "invoices/v3/CB-2026-000001.pdf" }],
     }));
     await app.close();
   });
@@ -258,14 +258,14 @@ describe("invoice archive", () => {
   it("reports that local-only invoice media cannot be sent to official WhatsApp", async () => {
     mocks.invoiceFindUnique.mockResolvedValue({
       id: "invoice-1",
-      pdfUrl: "invoices/v2/CB-2026-000001.pdf",
+      pdfUrl: "invoices/v3/CB-2026-000001.pdf",
       number: "CB-2026-000001",
       branchId: "dwarka",
       totalMinor: 118_000,
       customer: { name: "Ishita Priya", email: null, phone: "+919876543210", waConsent: true },
     });
     mocks.storageGet.mockResolvedValue(Buffer.from("%PDF-private"));
-    mocks.storageSignedUrl.mockResolvedValue("local://invoices/v2/CB-2026-000001.pdf");
+    mocks.storageSignedUrl.mockResolvedValue("local://invoices/v3/CB-2026-000001.pdf");
     const app = await testApp();
 
     const response = await app.inject({
@@ -283,11 +283,11 @@ describe("invoice archive", () => {
     await app.close();
   });
 
-  it("sends a local invoice PDF inline to unofficial Evolution without exposing a file route", async () => {
+  it("sends a local invoice PDF inline to unofficial WAHA without exposing a file route", async () => {
     const pdf = Buffer.from("%PDF-private");
     mocks.invoiceFindUnique.mockResolvedValue({
       id: "invoice-1",
-      pdfUrl: "invoices/v2/CB-2026-000001.pdf",
+      pdfUrl: "invoices/v3/CB-2026-000001.pdf",
       number: "CB-2026-000001",
       branchId: "dwarka",
       totalMinor: 118_000,
@@ -320,7 +320,7 @@ describe("invoice archive", () => {
   it("reports an unconfigured official provider before attempting delivery", async () => {
     mocks.invoiceFindUnique.mockResolvedValue({
       id: "invoice-1",
-      pdfUrl: "invoices/v2/CB-2026-000001.pdf",
+      pdfUrl: "invoices/v3/CB-2026-000001.pdf",
       number: "CB-2026-000001",
       branchId: "dwarka",
       totalMinor: 118_000,
@@ -354,7 +354,7 @@ describe("invoice archive", () => {
   it("preserves actionable Meta rejection details in the invoice response", async () => {
     mocks.invoiceFindUnique.mockResolvedValue({
       id: "invoice-1",
-      pdfUrl: "invoices/v2/CB-2026-000001.pdf",
+      pdfUrl: "invoices/v3/CB-2026-000001.pdf",
       number: "CB-2026-000001",
       branchId: "dwarka",
       totalMinor: 118_000,
@@ -392,7 +392,7 @@ describe("invoice archive", () => {
   it("returns the provider message id when Meta accepts an invoice", async () => {
     mocks.invoiceFindUnique.mockResolvedValue({
       id: "invoice-1",
-      pdfUrl: "invoices/v2/CB-2026-000001.pdf",
+      pdfUrl: "invoices/v3/CB-2026-000001.pdf",
       number: "CB-2026-000001",
       branchId: "dwarka",
       totalMinor: 118_000,
@@ -433,7 +433,7 @@ describe("invoice archive", () => {
       status: "ISSUED",
       paidMinor: 0,
       totalMinor: 100_000,
-      pdfUrl: "invoices/v2/CB-2026-000001.pdf",
+      pdfUrl: "invoices/v3/CB-2026-000001.pdf",
     });
     mocks.txQueryRaw.mockResolvedValue([{ locked: true }]);
     mocks.txInvoiceFindUnique.mockResolvedValue({ paidMinor: 0, totalMinor: 100_000, status: "ISSUED" });

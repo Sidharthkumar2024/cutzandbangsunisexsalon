@@ -1,8 +1,8 @@
 import { isIP } from "node:net";
 
-const LOCAL_EVOLUTION_ORIGIN = "http://127.0.0.1:8080";
+const LOCAL_WAHA_ORIGIN = "http://127.0.0.1:3000";
 
-type EvolutionUrlValidation =
+type WahaUrlValidation =
   | { ok: true; url: string }
   | { ok: false; error: string };
 
@@ -32,7 +32,7 @@ function inIpv4Cidr(value: number, network: string, prefix: number) {
 }
 
 /** True for addresses that must never be reached unless their exact origin is trusted. */
-export function isRestrictedEvolutionHost(hostnameValue: string): boolean {
+export function isRestrictedWahaHost(hostnameValue: string): boolean {
   const hostname = hostnameValue.toLowerCase().replace(/^\[|\]$/gu, '').replace(/\.$/u, '');
   if (
     hostname === 'localhost'
@@ -71,14 +71,14 @@ export function isRestrictedEvolutionHost(hostnameValue: string): boolean {
     if (normalized === '::' || normalized === '::1' || normalized.startsWith('fe8') || normalized.startsWith('fe9') || normalized.startsWith('fea') || normalized.startsWith('feb')) return true;
     if (/^f[cd]/u.test(normalized) || normalized.startsWith('ff') || normalized.startsWith('2001:db8:') || normalized === 'fd00:ec2::254') return true;
     const mapped = normalized.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/u)?.[1];
-    return mapped ? isRestrictedEvolutionHost(mapped) : false;
+    return mapped ? isRestrictedWahaHost(mapped) : false;
   }
 
   return false;
 }
 
 function configuredAllowedOrigins(env: NodeJS.ProcessEnv) {
-  const raw = [LOCAL_EVOLUTION_ORIGIN, env.EVOLUTION_API_URL, ...(env.EVOLUTION_ALLOWED_ORIGINS ?? '').split(',')];
+  const raw = [LOCAL_WAHA_ORIGIN, env.WA_UNOFFICIAL_URL, ...(env.WAHA_ALLOWED_ORIGINS ?? '').split(',')];
   return new Set(raw.flatMap((entry) => {
     const url = entry?.trim() ? parseOrigin(entry.trim()) : undefined;
     return url ? [url.origin] : [];
@@ -86,26 +86,26 @@ function configuredAllowedOrigins(env: NodeJS.ProcessEnv) {
 }
 
 /**
- * Evolution API receives the API key on every request, so an origin is usable only when
+ * WAHA API receives the API key on every request, so an origin is usable only when
  * it is explicitly trusted. The local host endpoint is the sole built-in
  * development exception; deployments extend the exact-origin allowlist with
- * EVOLUTION_ALLOWED_ORIGINS (or their trusted EVOLUTION_API_URL).
+ * WAHA_ALLOWED_ORIGINS (or their trusted WA_UNOFFICIAL_URL).
  */
-export function validateEvolutionBaseUrl(value: string, env: NodeJS.ProcessEnv = process.env): EvolutionUrlValidation {
+export function validateWahaBaseUrl(value: string, env: NodeJS.ProcessEnv = process.env): WahaUrlValidation {
   const url = parseOrigin(value.trim());
-  if (!url) return { ok: false, error: 'evolution_base_url_invalid' };
+  if (!url) return { ok: false, error: 'waha_base_url_invalid' };
 
   const allowedOrigins = configuredAllowedOrigins(env);
   if (allowedOrigins.has(url.origin)) return { ok: true, url: url.origin };
 
-  if (isRestrictedEvolutionHost(url.hostname)) {
-    return { ok: false, error: 'evolution_base_url_private_address_not_allowlisted' };
+  if (isRestrictedWahaHost(url.hostname)) {
+    return { ok: false, error: 'waha_base_url_private_address_not_allowlisted' };
   }
-  return { ok: false, error: 'evolution_base_url_not_allowlisted' };
+  return { ok: false, error: 'waha_base_url_not_allowlisted' };
 }
 
-export function normalizeEvolutionBaseUrl(value: string, env: NodeJS.ProcessEnv = process.env) {
-  const result = validateEvolutionBaseUrl(value, env);
+export function normalizeWahaBaseUrl(value: string, env: NodeJS.ProcessEnv = process.env) {
+  const result = validateWahaBaseUrl(value, env);
   if (!result.ok) throw new Error(result.error);
   return result.url;
 }
