@@ -80,7 +80,7 @@ services:
       - sitecontent:/app/.storage
 
   waha:
-    image: devlikeapro/waha:2026.6.1
+    image: ${WAHA_IMAGE:-devlikeapro/waha:latest}
     profiles: ["unofficial-wa"]
     restart: unless-stopped
     environment:

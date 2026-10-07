@@ -8574,7 +8574,7 @@ function Invoices({
       if (raw.includes("wa_official_not_configured")) {
         text = "Official WhatsApp is not configured yet. Add the Meta token, phone-number ID and public invoice storage in Settings.";
       } else if (raw.includes("wa_unofficial_not_configured")) {
-        text = "QR WhatsApp is not configured yet. Add Evolution/unofficial API settings and connect the QR session in Settings.";
+        text = "QR WhatsApp is not configured yet. Add WAHA/unofficial API settings and connect the QR session in Settings.";
       } else if (raw.includes("wa_unofficial_not_connected")) {
         text = "QR WhatsApp is not connected. Open Settings → Unofficial WhatsApp and scan or refresh the QR.";
       } else if (raw.includes("invoice_pdf_too_large_for_inline_whatsapp")) {
@@ -9029,10 +9029,10 @@ function Settings({
     try {
       const next = await backendApi.controlWahaSession(token, action);
       setStatus((current) => current ? { ...current, unofficial: { ...current.unofficial, ...next } } : current);
-      setMessage(action === "create" || action === "reset" ? "Fresh Evolution QR created. Scan it immediately in WhatsApp → Linked devices." : `Evolution instance ${action} complete.`);
+      setMessage(action === "create" || action === "reset" ? "Fresh WAHA QR created. Scan it immediately in WhatsApp → Linked devices." : `WAHA instance ${action} complete.`);
       await loadIntegrations();
     } catch (cause) {
-      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Evolution instance action failed.");
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "WAHA instance action failed.");
     } finally {
       setBusy(false);
     }
@@ -9044,9 +9044,9 @@ function Settings({
     try {
       const next = await backendApi.whatsappStatus(token);
       setStatus(next);
-      setMessage(next.unofficial.connected ? "Evolution API is connected; QR stays hidden." : next.unofficial.qrDataUrl ? "Fresh QR loaded. Scan it in WhatsApp → Linked devices." : `Evolution status: ${prettyStatus(next.unofficial.status ?? "unavailable")}.`);
+      setMessage(next.unofficial.connected ? "WAHA API is connected; QR stays hidden." : next.unofficial.qrDataUrl ? "Fresh QR loaded. Scan it in WhatsApp → Linked devices." : `WAHA status: ${prettyStatus(next.unofficial.status ?? "unavailable")}.`);
     } catch (cause) {
-      const detail = cause instanceof Error ? prettyStatus(cause.message) : "Evolution status could not be loaded.";
+      const detail = cause instanceof Error ? prettyStatus(cause.message) : "WAHA status could not be loaded.";
       setIntegrationError(detail);
       setMessage(detail);
     } finally {
@@ -9059,10 +9059,10 @@ function Settings({
     setMessage("");
     try {
       const result = await backendApi.syncWahaContacts(token);
-      setMessage(`${result.fetched} Evolution contacts read, ${result.valid ?? Math.max(0, result.fetched - result.skipped)} usable numbers found. Nothing was added to Customers/CRM.`);
+      setMessage(`${result.fetched} WAHA contacts read, ${result.valid ?? Math.max(0, result.fetched - result.skipped)} usable numbers found. Nothing was added to Customers/CRM.`);
       onRefresh();
     } catch (cause) {
-      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "Evolution contact sync failed.");
+      setMessage(cause instanceof Error ? prettyStatus(cause.message) : "WAHA contact sync failed.");
     } finally {
       setBusy(false);
     }
@@ -9277,7 +9277,7 @@ function Settings({
               <div className="setting-row"><div><strong>Auto WhatsApp</strong><small>Send to opted-in customers with a phone number</small></div><button type="button" aria-label="Toggle automatic invoice WhatsApp" className={`toggle ${autoInvoiceWhatsapp ? "active" : ""}`} onClick={() => setAutoInvoiceWhatsapp((current) => !current)}><i /></button></div>
               <div className="setting-row"><div><strong>Attach invoice PDF</strong><small>Include the stored PDF with automated delivery</small></div><button type="button" aria-label="Toggle invoice PDF attachment" className={`toggle ${invoiceAttachPdf ? "active" : ""}`} onClick={() => setInvoiceAttachPdf((current) => !current)}><i /></button></div>
             </div>
-            <label>WhatsApp provider<input value="Evolution API QR · transactional only" disabled readOnly /></label>
+            <label>WhatsApp provider<input value="WAHA API QR · transactional only" disabled readOnly /></label>
             <label>Email subject<input value={invoiceEmailSubject} onChange={(event) => setInvoiceEmailSubject(event.target.value)} placeholder="Your invoice {{invoiceNumber}}" /></label>
             <label>Email message<textarea rows={4} value={invoiceEmailBody} onChange={(event) => setInvoiceEmailBody(event.target.value)} /></label>
             <label>WhatsApp message<textarea rows={4} value={invoiceWhatsappBody} onChange={(event) => setInvoiceWhatsappBody(event.target.value)} /></label>
@@ -9289,9 +9289,9 @@ function Settings({
               <div className="setting-row"><div><strong>Email</strong><small>Requires email consent</small></div><button type="button" aria-label="Toggle non-returning email" className={`toggle ${nonReturningEmail ? "active" : ""}`} onClick={() => setNonReturningEmail((current) => !current)}><i /></button></div>
               <div className="setting-row"><div><strong>WhatsApp</strong><small>Requires WhatsApp opt-in</small></div><button type="button" aria-label="Toggle non-returning WhatsApp" className={`toggle ${nonReturningWhatsapp ? "active" : ""}`} onClick={() => setNonReturningWhatsapp((current) => !current)}><i /></button></div>
             </div>
-            <label>WhatsApp provider<input value="Evolution API QR · transactional only" disabled readOnly /></label>
+            <label>WhatsApp provider<input value="WAHA API QR · transactional only" disabled readOnly /></label>
             <label>Follow-up message<textarea rows={7} value={nonReturningTemplate} onChange={(event) => setNonReturningTemplate(event.target.value)} /></label>
-            <p className="automation-safety-note">The backend checks recorded consent, phone/email availability and a 30-day duplicate window before queueing through the QR-paired Evolution API.</p>
+            <p className="automation-safety-note">The backend checks recorded consent, phone/email availability and a 30-day duplicate window before queueing through the QR-paired WAHA API.</p>
           </section>
         </div>
         <p className="template-variable-note"><strong>Template variables:</strong> <code>{"{{name}}"}</code> <code>{"{{invoiceNumber}}"}</code> <code>{"{{total}}"}</code> <code>{"{{customerPortalUrl}}"}</code> <code>{"{{googleReviewUrl}}"}</code> <code>{"{{days}}"}</code></p>
@@ -9338,25 +9338,25 @@ function Settings({
         <button className="button admin-primary" disabled={busy || !token} onClick={() => void saveProviders()}>{busy ? "Saving…" : "Save & apply provider credentials"}</button>
       </article>
       <article className="admin-card whatsapp-settings">
-        <div className="card-head"><div><p className="eyebrow">Provider adapter</p><h2>WhatsApp integrations</h2><p>Official Meta is paused. QR-paired Evolution is enabled for transactional invoices and OTP only; campaigns never use it.</p></div></div>
+        <div className="card-head"><div><p className="eyebrow">Provider adapter</p><h2>WhatsApp integrations</h2><p>Official Meta is paused. QR-paired WAHA is enabled for transactional invoices and OTP only; campaigns never use it.</p></div></div>
         <div className="whatsapp-provider-grid">
           <section className="provider-card">
             <header><div><strong>Official Meta Cloud API</strong><small>Temporarily paused by server configuration. Credentials are retained and can be re-enabled later.</small></div><span className="offline">Paused</span></header>
             <div className="provider-actions"><button type="button" className="toggle" disabled aria-label="Official Meta is paused"><i /></button></div>
           </section>
           <section className="provider-card">
-            <header><div><strong>Evolution API · QR login</strong><small>{status?.unofficial.detail ?? (integrationLoading ? "Checking live backend…" : integrationError || "Status unavailable — refresh to check")}</small></div><span className={status?.unofficial.connected ? "connected" : "offline"}>{status?.unofficial.connected ? "Connected" : status?.unofficial.configured ? prettyStatus(status.unofficial.status ?? "Waiting for QR") : "Needs setup"}</span></header>
+            <header><div><strong>WAHA API · QR login</strong><small>{status?.unofficial.detail ?? (integrationLoading ? "Checking live backend…" : integrationError || "Status unavailable — refresh to check")}</small></div><span className={status?.unofficial.connected ? "connected" : "offline"}>{status?.unofficial.connected ? "Connected" : status?.unofficial.configured ? prettyStatus(status.unofficial.status ?? "Waiting for QR") : "Needs setup"}</span></header>
             <div className="provider-actions">
               <button disabled={busy || !token} onClick={() => void refreshWahaStatus()}>Refresh QR / status</button>
               <button disabled={busy || !token || !status?.unofficial.configured} onClick={() => void controlWaha("restart")}>Restart session</button>
               <button disabled={busy || !token || !status?.unofficial.configured || status.unofficial.connected} onClick={() => void controlWaha("create")}>Create fresh QR</button>
               <button disabled={busy || !token || !status?.unofficial.configured || !status.unofficial.connected} onClick={() => void controlWaha("logout")}>Disconnect</button>
             </div>
-            {status?.unofficial.qrDataUrl && !status.unofficial.connected && <div className="meta-setup-panel"><strong>Scan with WhatsApp → Linked devices</strong><img src={status.unofficial.qrDataUrl} alt="Evolution WhatsApp login QR code" width={260} height={260} style={{ width: "min(260px, 100%)", height: "auto", imageRendering: "pixelated" }} /><small>QR/status refreshes automatically every 12 seconds. Scan the currently visible code.</small></div>}
+            {status?.unofficial.qrDataUrl && !status.unofficial.connected && <div className="meta-setup-panel"><strong>Scan with WhatsApp → Linked devices</strong><img src={status.unofficial.qrDataUrl} alt="WAHA WhatsApp login QR code" width={260} height={260} style={{ width: "min(260px, 100%)", height: "auto", imageRendering: "pixelated" }} /><small>QR/status refreshes automatically every 12 seconds. Scan the currently visible code.</small></div>}
             <div className="whatsapp-test-row"><input value={testTo} onChange={(event) => setTestTo(event.target.value)} placeholder="Test recipient with country code" /><input value={testMessage} onChange={(event) => setTestMessage(event.target.value)} placeholder="Transactional test message" /><button disabled={busy || !token || !testTo || !testMessage || !status?.unofficial.connected} onClick={() => void testProvider("WHATSAPP_UNOFFICIAL")}>Send test</button></div>
           </section>
         </div>
-        <small>{status ? "Live provider status loaded" : "Provider status not loaded"} · credentials remain server-side · no campaign uses Evolution.</small>
+        <small>{status ? "Live provider status loaded" : "Provider status not loaded"} · credentials remain server-side · no campaign uses WAHA.</small>
       </article>
     </div>
   );
